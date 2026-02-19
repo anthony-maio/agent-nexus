@@ -1,5 +1,43 @@
-# Local planning and developmenty files
+# Local planning and development files
 .local/
 # Files not intended for public repository
 .private/
-CLAUDE.MD
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+*.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker data (persisted volumes)
+data/
+qdrant_data/
+redis_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

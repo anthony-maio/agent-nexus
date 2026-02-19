@@ -1,0 +1,60 @@
+services:
+  nexus-bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bot
+    container_name: nexus-bot
+    restart: unless-stopped
+    env_file:
+      - ../config/.env
+    depends_on:
+      nexus-qdrant:
+        condition: service_healthy
+      nexus-redis:
+        condition: service_healthy
+    volumes:
+      - ../data:/app/data
+    networks:
+      - nexus-net
+    # For PiecesOS MCP on host machine
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  nexus-qdrant:
+    image: qdrant/qdrant:latest
+    container_name: nexus-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - nexus-net
+
+  nexus-redis:
+    image: redis:7-alpine
+    container_name: nexus-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - nexus-net
+
+volumes:
+  qdrant_data:
+  redis_data:
+
+networks:
+  nexus-net:
+    driver: bridge
