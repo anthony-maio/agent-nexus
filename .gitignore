@@ -1,0 +1,5 @@
+# Local planning and developmenty files
+.local/
+# Files not intended for public repository
+.private/
+CLAUDE.MD
