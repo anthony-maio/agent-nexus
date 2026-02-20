@@ -1,7 +1,7 @@
 # Agent Nexus -- Code Review
 
 **Date:** 2026-02-20
-**Scope:** Full codebase review (~1,600 lines nexus core, ~3,000+ lines continuity_core)
+**Scope:** Full codebase review (~5,500 lines across 79 Python files)
 
 ---
 
@@ -21,8 +21,8 @@ However, the review identified several issues across reliability, security, and 
 | Code Quality | **A-** | Strong typing, good documentation, consistent style |
 | Error Handling | **B-** | Inconsistent strategy; some paths silently swallow errors |
 | Async Safety | **C+** | Fire-and-forget tasks, missing timeouts, race conditions |
-| Security | **B** | Good secrets handling, but web setup and prompt injection risks |
-| Test Coverage | **C** | Tests exist but cover limited scenarios; no integration tests |
+| Security | **C+** | Web setup unauthenticated, no Discord permission checks, .env world-readable |
+| Test Coverage | **D** | Zero test files exist despite pytest configuration |
 | Documentation | **A** | Excellent docstrings, CLAUDE.md, and inline documentation |
 
 ---
@@ -194,11 +194,44 @@ USER nexus
 
 There is no `@commands.cooldown()` decorator on any command. A malicious user could spam `!ask` or `!think` to exhaust the OpenRouter API budget rapidly.
 
+### 17. No Discord permission checks on admin commands (commands/admin.py)
+
+Admin commands like `!autonomy`, `!crosstalk`, and `!curiosity` have no `@commands.has_permissions()` or role checks. Any Discord user in the server can switch autonomy to `autopilot`, disable safety controls, or trigger C2 operations.
+
+**Recommendation:** Add permission decorators:
+
+```python
+@commands.has_permissions(administrator=True)
+```
+
+### 18. Setup wizard writes .env with world-readable permissions (setup_web.py)
+
+`Path.write_text()` creates files with default `0o644` permissions. The `config/.env` file containing Discord tokens and API keys is readable by any user on the system.
+
+**Recommendation:** Set restrictive permissions:
+
+```python
+import os
+env_path.write_text(content)
+os.chmod(env_path, 0o600)
+```
+
+### 19. Setup wizard test endpoint leaks error context (setup_web.py)
+
+The `/test-openrouter` endpoint returns raw exception messages to the client:
+
+```python
+except Exception as e:
+    return web.json_response({"ok": False, "error": str(e)})
+```
+
+Error messages from failed API calls may contain partial credentials or internal server details.
+
 ---
 
 ## Code Quality Issues
 
-### 17. Token estimation is crude (memory/context.py)
+### 20. Token estimation is crude (memory/context.py)
 
 ```python
 entry_tokens = len(entry.content) // 4  # 1 token ~ 4 chars
@@ -206,15 +239,15 @@ entry_tokens = len(entry.content) // 4  # 1 token ~ 4 chars
 
 This ~4 chars/token heuristic can over/undercount by 30-50%, leading to token budget violations or wasted context window.
 
-### 18. Embedding provider defers validation (models/embeddings.py)
+### 21. Embedding provider defers validation (models/embeddings.py)
 
 Constructor logs a warning if a required client is `None`, but actual validation happens later at request time. This causes confusing error messages mid-request rather than at startup.
 
-### 19. `TYPE_CHECKING` not used for OrchestratorLoop's bot parameter (orchestrator/loop.py)
+### 22. `TYPE_CHECKING` not used for OrchestratorLoop's bot parameter (orchestrator/loop.py)
 
 The `bot` parameter is typed as `Any` despite a `TYPE_CHECKING` import block being present. This defeats type checking for the most important dependency.
 
-### 20. Inconsistent async patterns in MemoryStore (memory/store.py)
+### 23. Inconsistent async patterns in MemoryStore (memory/store.py)
 
 Methods are declared `async` but call synchronous Qdrant client methods without `await`. The `qdrant_client` Python library has both sync and async clients -- the code appears to use the synchronous `QdrantClient` inside async methods, which blocks the event loop.
 
@@ -228,14 +261,17 @@ await asyncio.get_event_loop().run_in_executor(None, self._client.upsert, ...)
 
 ## Test Coverage Gaps
 
-The test suite (`tests/`) covers basic scenarios but has notable gaps:
+**The `tests/` directory does not exist.** Despite `pyproject.toml` configuring `testpaths = ["tests"]` and listing `pytest` as a dev dependency, there are zero test files in the repository. This means ~5,500 lines of production code have no automated test coverage at all.
 
-- **No integration tests** for the full bot lifecycle (startup -> message -> response -> memory)
-- **No tests for error paths** (Qdrant down, OpenRouter rate-limited, Discord permissions)
-- **No tests for the orchestrator loop** (gather -> decide -> dispatch cycle)
-- **No tests for consensus protocol** (vote parsing, threshold logic, tie-breaking)
-- **No tests for concurrent message handling** (race conditions)
-- **No tests for the web setup wizard**
+Priority areas that need tests:
+
+- **OpenRouter client** -- retry logic, rate-limit handling, cost tracking, streaming
+- **Orchestrator loop** -- gather/decide/dispatch cycle, timeout behavior, error recovery
+- **Consensus protocol** -- vote parsing, threshold logic, tie-breaking
+- **Memory store** -- Qdrant operations, initialization guards, search filtering
+- **Configuration** -- pydantic validation, env var parsing, defaults
+- **Discord commands** -- input validation, permission checks, error handling
+- **Bot lifecycle** -- startup sequence, graceful shutdown, subsystem initialization
 
 ---
 
@@ -259,7 +295,10 @@ The Docker setup is functional but could be improved:
 3. Add `_client is None` guards in `MemoryStore`
 4. Bind web setup wizard to localhost or add authentication
 5. Add `@commands.cooldown()` to expensive Discord commands
-6. Run Docker container as non-root user
+6. Add `@commands.has_permissions()` to admin commands
+7. Run Docker container as non-root user
+8. Set `config/.env` file permissions to `0o600`
+9. Create a test suite (zero tests currently exist)
 
 ### Should Fix (reliability)
 
