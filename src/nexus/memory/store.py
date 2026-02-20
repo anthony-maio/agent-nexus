@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -32,17 +33,26 @@ class MemoryStore:
         self.dimensions = dimensions
         self._client: QdrantClient | None = None
 
+    def _ensure_client(self) -> QdrantClient:
+        """Return the Qdrant client, raising if not initialized."""
+        if self._client is None:
+            raise RuntimeError("MemoryStore not initialized. Call initialize() first.")
+        return self._client
+
     async def initialize(self) -> None:
         """Connect to Qdrant and ensure collection exists."""
         from qdrant_client import QdrantClient
         self._client = QdrantClient(url=self.url)
-        collections = [c.name for c in self._client.get_collections().collections]
+        loop = asyncio.get_running_loop()
+        collections = await loop.run_in_executor(
+            None, lambda: [c.name for c in self._client.get_collections().collections]
+        )
         if self.collection not in collections:
-            self._client.create_collection(
-                collection_name=self.collection,
-                vectors_config=VectorParams(
-                    size=self.dimensions,
-                    distance=Distance.COSINE,
+            await loop.run_in_executor(
+                None,
+                lambda: self._client.create_collection(
+                    collection_name=self.collection,
+                    vectors_config=VectorParams(size=self.dimensions, distance=Distance.COSINE),
                 ),
             )
             log.info(f"Created Qdrant collection: {self.collection} (dims={self.dimensions})")
@@ -58,6 +68,7 @@ class MemoryStore:
         metadata: dict | None = None,
     ) -> str:
         """Store a memory. Returns the memory ID."""
+        client = self._ensure_client()
         memory_id = str(uuid.uuid4())
         point = PointStruct(
             id=memory_id,
@@ -70,9 +81,9 @@ class MemoryStore:
                 **(metadata or {}),
             },
         )
-        self._client.upsert(
-            collection_name=self.collection,
-            points=[point],
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, lambda: client.upsert(collection_name=self.collection, points=[point])
         )
         return memory_id
 
@@ -83,17 +94,22 @@ class MemoryStore:
         source_filter: str | None = None,
     ) -> list[Memory]:
         """Search memories by vector similarity."""
+        client = self._ensure_client()
         search_filter = None
         if source_filter:
             search_filter = Filter(
                 must=[FieldCondition(key="source", match=MatchValue(value=source_filter))]
             )
-        results = self._client.query_points(
-            collection_name=self.collection,
-            query=query_vector,
-            limit=limit,
-            query_filter=search_filter,
-        ).points
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(
+            None,
+            lambda: client.query_points(
+                collection_name=self.collection,
+                query=query_vector,
+                limit=limit,
+                query_filter=search_filter,
+            ).points,
+        )
         memories = []
         for point in results:
             payload = point.payload
@@ -110,14 +126,19 @@ class MemoryStore:
 
     async def delete(self, memory_id: str) -> None:
         """Delete a memory by ID."""
-        self._client.delete(
-            collection_name=self.collection,
-            points_selector=[memory_id],
+        client = self._ensure_client()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, lambda: client.delete(collection_name=self.collection, points_selector=[memory_id])
         )
 
     async def count(self) -> int:
         """Get total number of memories."""
-        info = self._client.get_collection(self.collection)
+        client = self._ensure_client()
+        loop = asyncio.get_running_loop()
+        info = await loop.run_in_executor(
+            None, lambda: client.get_collection(self.collection)
+        )
         return info.points_count
 
     @property
