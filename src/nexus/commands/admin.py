@@ -2,10 +2,8 @@
 
 Provides Discord commands for inspecting and managing the running swarm:
 model listing (``!models``), cost tracking (``!costs``), configuration
-display (``!config``), and crosstalk toggling (``!crosstalk``).
-
-These commands are informational and do not modify swarm memory or
-conversation state.
+display (``!config``), crosstalk toggling (``!crosstalk``), autonomy mode
+(``!autonomy``), curiosity scan (``!curiosity``), and status (``!status``).
 
 Usage::
 
@@ -15,11 +13,13 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
 from discord.ext import commands
 
+from nexus.orchestrator.autonomy import AutonomyMode
 from nexus.personality.identities import get_identity
 
 log = logging.getLogger(__name__)
@@ -29,8 +29,8 @@ class AdminCommands(commands.Cog):
     """Admin and monitoring commands.
 
     This cog provides commands for operators to inspect swarm configuration,
-    review active models and their pricing, monitor session costs, and toggle
-    runtime behaviours like crosstalk.
+    review active models and their pricing, monitor session costs, toggle
+    runtime behaviours, manage autonomy mode, and trigger curiosity scans.
 
     Attributes:
         bot: The parent bot instance that owns the swarm infrastructure.
@@ -124,18 +124,23 @@ class AdminCommands(commands.Cog):
             inline=True,
         )
         embed.add_field(
-            name="Crosstalk Probability",
-            value=f"{settings.CROSSTALK_PROBABILITY:.0%}",
+            name="Autonomy Mode",
+            value=self.bot.autonomy_gate.mode.value,
             inline=True,
         )
         embed.add_field(
-            name="Consensus Threshold",
-            value=f"{settings.CONSENSUS_THRESHOLD:.0%}",
+            name="Crosstalk",
+            value="Enabled" if self.bot.crosstalk.is_enabled else "Disabled",
             inline=True,
         )
         embed.add_field(
             name="Pieces MCP",
             value="Enabled" if settings.PIECES_MCP_ENABLED else "Disabled",
+            inline=True,
+        )
+        embed.add_field(
+            name="C2",
+            value="Connected" if self.bot.c2.is_running else "Offline",
             inline=True,
         )
 
@@ -165,6 +170,109 @@ class AdminCommands(commands.Cog):
                 f"Crosstalk is {current}. "
                 f"Use `!crosstalk on` or `!crosstalk off`."
             )
+
+    # ------------------------------------------------------------------
+    # !autonomy -- set autonomy mode
+    # ------------------------------------------------------------------
+
+    @commands.command(name="autonomy")
+    async def set_autonomy(
+        self, ctx: commands.Context, mode: str = ""
+    ) -> None:
+        """Set the orchestrator autonomy mode.
+
+        Usage: !autonomy observe|escalate|autopilot
+        """
+        valid_modes = {m.value for m in AutonomyMode}
+        mode_lower = mode.lower()
+
+        if mode_lower in valid_modes:
+            self.bot.autonomy_gate.set_mode(mode_lower)
+
+            # Log mode change to C2
+            asyncio.create_task(self.bot._log_to_c2(
+                actor="human", intent="config",
+                inp=f"autonomy={mode_lower}",
+                tags=["autonomy", mode_lower],
+            ))
+
+            await ctx.send(f"Autonomy mode set to **{mode_lower}**.")
+        else:
+            current = self.bot.autonomy_gate.mode.value
+            await ctx.send(
+                f"Current mode: **{current}**\n"
+                f"Usage: `!autonomy observe|escalate|autopilot`\n"
+                f"- **observe**: All actions proposed in #human first\n"
+                f"- **escalate**: Low-risk auto-executes, high-risk asks\n"
+                f"- **autopilot**: Everything auto-executes"
+            )
+
+    # ------------------------------------------------------------------
+    # !curiosity -- trigger a C2 curiosity scan
+    # ------------------------------------------------------------------
+
+    @commands.command(name="curiosity")
+    async def curiosity_scan(self, ctx: commands.Context) -> None:
+        """Trigger a C2 curiosity scan and display results."""
+        if not self.bot.c2.is_running:
+            await ctx.send("C2 is not running. Curiosity scan unavailable.")
+            return
+
+        await ctx.send("Scanning for epistemic tensions...")
+
+        result = await self.bot.c2.curiosity()
+        if result is None:
+            await ctx.send("Curiosity scan returned no results.")
+            return
+
+        embed = discord.Embed(
+            title="Curiosity Scan Results",
+            color=0x9B59B6,
+        )
+        embed.add_field(
+            name="Stress Level",
+            value=f"{result.get('stress_level', 0):.3f}",
+            inline=True,
+        )
+        embed.add_field(
+            name="Suggested Action",
+            value=result.get("suggested_action", "none"),
+            inline=True,
+        )
+
+        contradictions = result.get("contradictions", [])
+        if contradictions:
+            lines = []
+            for c in contradictions[:3]:
+                lines.append(f"- {c.get('s1', '')[:60]} vs {c.get('s2', '')[:60]}")
+            embed.add_field(
+                name=f"Contradictions ({len(contradictions)})",
+                value="\n".join(lines),
+                inline=False,
+            )
+
+        tensions = result.get("deep_tensions", [])
+        if tensions:
+            lines = []
+            for t in tensions[:3]:
+                lines.append(f"- {t.get('s1', '')[:60]} vs {t.get('s2', '')[:60]}")
+            embed.add_field(
+                name=f"Deep Tensions ({len(tensions)})",
+                value="\n".join(lines),
+                inline=False,
+            )
+
+        questions = result.get("bridging_questions", [])
+        if questions:
+            lines = [f"- {q[:100]}" for q in questions[:3]]
+            embed.add_field(
+                name=f"Bridging Questions ({len(questions)})",
+                value="\n".join(lines),
+                inline=False,
+            )
+
+        await ctx.send(embed=embed)
+
 
 
 async def setup(bot: commands.Bot) -> None:

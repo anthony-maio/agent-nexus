@@ -13,6 +13,8 @@ Sources:
    :class:`~nexus.memory.store.MemoryStore`.
 3. **Activity stream** -- Real-time user activity from PiecesOS (when the
    integration is enabled).
+4. **C2 curiosity signals** -- Epistemic tensions, contradictions, and
+   bridging questions from Continuity Core (when C2 is running).
 
 Each source is gathered independently and wrapped in error handling so that
 a failure in one source does not prevent the others from contributing.
@@ -20,6 +22,7 @@ a failure in one source does not prevent the others from contributing.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -40,6 +43,7 @@ class StateGatherer:
     - ``recent_messages`` -- List of recent conversation message dicts.
     - ``memories`` -- List of semantically relevant memory dicts.
     - ``activity`` -- Raw PiecesOS activity string, or ``None``.
+    - ``curiosity`` -- C2 curiosity signals dict, or ``None``.
     - ``has_activity`` -- Boolean flag indicating whether *any* source
       produced data (used as a fast-path check by the orchestrator).
 
@@ -60,7 +64,7 @@ class StateGatherer:
         self.bot = bot
 
     async def gather(self) -> dict[str, Any]:
-        """Gather current state from all sources.
+        """Gather current state from all sources in parallel.
 
         Returns a state dict suitable for passing to the orchestrator's
         decision engine.  Individual source failures are logged as warnings
@@ -68,21 +72,24 @@ class StateGatherer:
 
         Returns:
             A dict with keys ``timestamp``, ``recent_messages``, ``memories``,
-            ``activity``, and ``has_activity``.
+            ``activity``, ``curiosity``, and ``has_activity``.
         """
         state: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "recent_messages": [],
             "memories": [],
             "activity": None,
+            "curiosity": None,
             "has_activity": False,
         }
 
-        # Gather all sources concurrently where possible.  Each gatherer
-        # is wrapped so that individual failures are isolated.
-        messages = await self._gather_conversation()
-        memories = await self._gather_memories()
-        activity = await self._gather_activity()
+        # Gather all sources concurrently.
+        messages, memories, activity, curiosity = await asyncio.gather(
+            self._gather_conversation(),
+            self._gather_memories(),
+            self._gather_activity(),
+            self._gather_curiosity(),
+        )
 
         if messages is not None:
             state["recent_messages"] = messages
@@ -90,18 +97,22 @@ class StateGatherer:
             state["memories"] = memories
         if activity is not None:
             state["activity"] = activity
+        if curiosity is not None:
+            state["curiosity"] = curiosity
 
         state["has_activity"] = bool(
             state["recent_messages"]
             or state["memories"]
             or state["activity"]
+            or state["curiosity"]
         )
 
         log.debug(
-            "State gathered: %d message(s), %d memory(ies), activity=%s.",
+            "State gathered: %d message(s), %d memory(ies), activity=%s, curiosity=%s.",
             len(state["recent_messages"]),
             len(state["memories"]),
             "yes" if state["activity"] else "no",
+            "yes" if state["curiosity"] else "no",
         )
         return state
 
@@ -197,6 +208,32 @@ class StateGatherer:
         except Exception:
             log.warning(
                 "Failed to gather PiecesOS activity.",
+                exc_info=True,
+            )
+            return None
+
+    async def _gather_curiosity(self) -> dict[str, Any] | None:
+        """Query C2 for epistemic tensions, contradictions, bridging questions.
+
+        C2 integration is optional.  When the C2 client is absent or not
+        running this method returns ``None`` silently.
+
+        Returns:
+            A dict with keys ``stress_level``, ``contradictions``,
+            ``deep_tensions``, ``bridging_questions``, and
+            ``suggested_action``, or ``None`` if C2 is unavailable.
+        """
+        try:
+            c2 = getattr(self.bot, "c2", None)
+            if c2 is None or not c2.is_running:
+                return None
+
+            result = await c2.curiosity()
+            return result if result else None
+
+        except Exception:
+            log.warning(
+                "Failed to gather C2 curiosity signals.",
                 exc_info=True,
             )
             return None

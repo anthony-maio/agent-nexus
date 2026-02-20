@@ -10,12 +10,15 @@ from discord.ext import commands
 
 from nexus.channels.router import ChannelRouter
 from nexus.config import get_settings
+from nexus.integrations.c2_client import C2Client
 from nexus.memory.context import ContextBuilder
 from nexus.memory.store import MemoryStore
 from nexus.models.embeddings import EmbeddingProvider
 from nexus.models.ollama import OllamaClient
 from nexus.models.openrouter import OpenRouterClient
 from nexus.models.registry import get_active_swarm, get_embedding, ModelSpec
+from nexus.orchestrator.activity import ActivityMonitor
+from nexus.orchestrator.autonomy import AutonomyGate, AutonomyMode
 from nexus.orchestrator.dispatch import TaskDispatcher
 from nexus.orchestrator.loop import OrchestratorLoop
 from nexus.orchestrator.state import StateGatherer
@@ -36,6 +39,9 @@ class NexusBot(commands.Bot):
     - 3-channel routing (human, nexus, memory)
     - Swarm conversation + crosstalk + consensus
     - Background orchestrator loop
+    - Continuity Core (C2) cognitive memory
+    - Activity monitor (Pieces polling)
+    - Autonomy gate (observe/escalate/autopilot)
     - PiecesOS integration (optional)
     """
 
@@ -97,6 +103,17 @@ class NexusBot(commands.Bot):
         self.dispatcher = TaskDispatcher(self)
         self.orchestrator = OrchestratorLoop(self, interval=settings.ORCHESTRATOR_INTERVAL)
 
+        # --- Continuity Core (C2) ---
+        self.c2 = C2Client()
+
+        # --- Autonomy Gate ---
+        self.autonomy_gate = AutonomyGate(AutonomyMode(settings.AUTONOMY_MODE))
+
+        # --- Activity Monitor ---
+        self.activity_monitor = ActivityMonitor(
+            self, poll_interval=settings.ACTIVITY_POLL_INTERVAL,
+        )
+
         # --- Integrations ---
         self.pieces = None
 
@@ -154,6 +171,13 @@ class NexusBot(commands.Bot):
                 log.info("PiecesOS not available")
                 self.pieces = None
 
+        # Start Continuity Core subprocess
+        c2_started = await self.c2.start()
+        if c2_started:
+            log.info("Continuity Core (C2) subprocess started")
+        else:
+            log.info("C2 not available - cognitive memory features disabled")
+
         # Build system prompts for all swarm models
         model_ids = list(self.swarm_models.keys())
         for model_id in model_ids:
@@ -162,6 +186,10 @@ class NexusBot(commands.Bot):
         # Start orchestrator
         await self.orchestrator.start()
 
+        # Start activity monitor (if Pieces is available)
+        if self.pieces is not None:
+            await self.activity_monitor.start()
+
         # Announce in #nexus
         from nexus.personality.identities import format_name
 
@@ -169,7 +197,12 @@ class NexusBot(commands.Bot):
         await self.router.nexus.send(
             f"**Agent Nexus online.** Swarm: {', '.join(model_names)}"
         )
-        log.info(f"Agent Nexus ready with {len(model_ids)} swarm models")
+        log.info(
+            "Agent Nexus ready with %d swarm models (autonomy=%s, c2=%s)",
+            len(model_ids),
+            self.autonomy_gate.mode.value,
+            "connected" if self.c2.is_running else "offline",
+        )
 
     async def on_message(self, message: discord.Message) -> None:
         """Handle incoming Discord messages."""
@@ -206,6 +239,12 @@ class NexusBot(commands.Bot):
         # Record human message in conversation
         await self.conversation.add_message("human", message.content, is_human=True)
 
+        # Log to C2
+        asyncio.create_task(self._log_to_c2(
+            actor="human", intent="message",
+            inp=message.content[:500], tags=["human", "input"],
+        ))
+
         model_ids = list(self.swarm_models.keys())
         if not model_ids:
             return
@@ -234,6 +273,12 @@ class NexusBot(commands.Bot):
             # Store primary response in memory (background)
             if self.memory_store.is_connected:
                 asyncio.create_task(self._store_in_memory(response.content, primary_model))
+
+            # Log model response to C2
+            asyncio.create_task(self._log_to_c2(
+                actor=primary_model, intent="response",
+                out=response.content[:500], tags=["swarm", "nexus"],
+            ))
 
             # --- Reaction round: sequential + organic, but non-blocking ---
             if self.crosstalk.is_enabled:
@@ -285,6 +330,12 @@ class NexusBot(commands.Bot):
                 if self.memory_store.is_connected:
                     asyncio.create_task(self._store_in_memory(reaction.content, reactor_id))
 
+                # Log reaction to C2
+                asyncio.create_task(self._log_to_c2(
+                    actor=reactor_id, intent="response",
+                    out=reaction.content[:500], tags=["swarm", "nexus"],
+                ))
+
             except asyncio.TimeoutError:
                 log.warning(f"Reaction from {reactor_id} timed out (30s)")
             except Exception as e:
@@ -302,6 +353,22 @@ class NexusBot(commands.Bot):
             )
         except Exception as e:
             log.warning(f"Failed to store response in memory: {e}")
+
+    async def _log_to_c2(
+        self,
+        actor: str,
+        intent: str,
+        inp: str = "",
+        out: str = "",
+        tags: list[str] | None = None,
+    ) -> None:
+        """Log an event to C2 if available.  Failures are silently ignored."""
+        if not self.c2.is_running:
+            return
+        try:
+            await self.c2.write_event(actor=actor, intent=intent, inp=inp, out=out, tags=tags)
+        except Exception:
+            pass
 
     def get_system_prompt(self, model_id: str) -> str:
         """Get the system prompt for a model."""
@@ -323,7 +390,9 @@ class NexusBot(commands.Bot):
     async def close(self) -> None:
         """Clean shutdown."""
         log.info("Shutting down Agent Nexus...")
+        await self.activity_monitor.stop()
         await self.orchestrator.stop()
+        await self.c2.stop()
         await self.openrouter.close()
         if self.ollama:
             await self.ollama.close()

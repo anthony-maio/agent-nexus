@@ -32,6 +32,12 @@ BANNER = r"""
 """
 
 # Swarm model choices: (id, display_name, cost_hint, is_default)
+AUTONOMY_CHOICES: list[tuple[str, str, str, bool]] = [
+    ("escalate", "Escalate (Recommended)", "Auto-execute low-risk; ask for high-risk", True),
+    ("observe", "Observe", "Always propose actions in #human first", False),
+    ("autopilot", "Autopilot", "Auto-execute everything (use with caution)", False),
+]
+
 SWARM_CHOICES: list[tuple[str, str, str, bool]] = [
     ("minimax/minimax-m2.5", "MiniMax M2.5", "Free - Programming #1, SWE-Bench 80.2%", True),
     ("z-ai/glm-5", "Z.ai GLM-5", "$0.30/$2.55 per M - Agentic planning, self-correction", True),
@@ -190,6 +196,9 @@ def write_env(config: dict[str, str]) -> None:
         f"SWARM_MODELS={config['SWARM_MODELS']}",
         f"EMBEDDING_MODEL={config['EMBEDDING_MODEL']}",
         "",
+        "# === ORCHESTRATOR ===",
+        f"AUTONOMY_MODE={config.get('AUTONOMY_MODE', 'escalate')}",
+        "",
     ])
 
     # Optional premium keys
@@ -314,7 +323,7 @@ def run_wizard() -> None:
 
     existing = load_existing_env()
     config: dict[str, str] = {}
-    total_steps = 7
+    total_steps = 8
 
     # Step 1: Discord Token
     print_step(1, total_steps, "Discord Bot Token")
@@ -371,8 +380,14 @@ def run_wizard() -> None:
     selected_embedding = prompt_choice("Embedding model", EMBEDDING_CHOICES, multi=False)
     config["EMBEDDING_MODEL"] = selected_embedding[0]
 
-    # Step 6: Optional Integrations
-    print_step(6, total_steps, "Optional Integrations")
+    # Step 6: Autonomy Mode
+    print_step(6, total_steps, "Autonomy Mode")
+    print(f"  {DIM}Controls how the orchestrator handles task dispatch.{RESET}")
+    selected_autonomy = prompt_choice("Autonomy mode", AUTONOMY_CHOICES, multi=False)
+    config["AUTONOMY_MODE"] = selected_autonomy[0]
+
+    # Step 7: Optional Integrations
+    print_step(7, total_steps, "Optional Integrations")
 
     # Ollama
     print(f"\n  {BOLD}Local Models (Ollama){RESET}")
@@ -394,8 +409,8 @@ def run_wizard() -> None:
         response = input(f"  PiecesOS MCP URL [{pieces_url}]: ").strip()
         config["PIECES_MCP_URL"] = response if response else pieces_url
 
-    # Step 7: Test & Write
-    print_step(7, total_steps, "Testing Connections")
+    # Step 8: Test & Write
+    print_step(8, total_steps, "Testing Connections")
     test_openrouter(config["OPENROUTER_API_KEY"])
     test_qdrant()
     if config.get("OLLAMA_ENABLED") == "true":
@@ -412,6 +427,7 @@ def run_wizard() -> None:
     print()
     print(f"  Swarm: {', '.join(s.split('/')[-1] for s in selected_swarm)}")
     print(f"  Embeddings: {config['EMBEDDING_MODEL'].split('/')[-1]}")
+    print(f"  Autonomy: {config.get('AUTONOMY_MODE', 'escalate')}")
     print()
     print(f"  {BOLD}Next steps:{RESET}")
     print(f"  1. Make sure Docker is running")

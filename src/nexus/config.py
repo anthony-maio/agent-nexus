@@ -163,6 +163,18 @@ class NexusSettings(BaseSettings):
         ge=10,
         description="Seconds between autonomous orchestrator cycles.",
     )
+    AUTONOMY_MODE: str = Field(
+        default="escalate",
+        description=(
+            "Autonomy mode: 'observe' (always ask), 'escalate' (auto for "
+            "low-risk, ask for high-risk), or 'autopilot' (auto-execute all)."
+        ),
+    )
+    ACTIVITY_POLL_INTERVAL: int = Field(
+        default=60,
+        ge=10,
+        description="Seconds between PiecesOS activity polls.",
+    )
     CROSSTALK_PROBABILITY: float = Field(
         default=0.3,
         ge=0.0,
