@@ -49,7 +49,7 @@ def main() -> None:
 
     if not has_config():
         log.warning("No configuration found (missing DISCORD_TOKEN / OPENROUTER_API_KEY).")
-        log.info("Starting web setup wizard on http://0.0.0.0:8090 ...")
+        log.info("Starting web setup wizard on http://127.0.0.1:8090 ...")
         log.info("Open your browser to complete first-time setup.")
         try:
             from nexus.setup_web import run_setup_server

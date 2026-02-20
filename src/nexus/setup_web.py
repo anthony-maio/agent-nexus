@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -349,7 +351,8 @@ async def handle_test_openrouter(request: web.Request) -> web.Response:
             count = len(data.get("data", []))
             return web.json_response({"ok": True, "models": count})
     except Exception as e:
-        return web.json_response({"ok": False, "error": str(e)})
+        log.warning("OpenRouter test failed: %s", e)
+        return web.json_response({"ok": False, "error": "Connection test failed. Check your API key."})
 
 
 async def handle_save(request: web.Request) -> web.Response:
@@ -415,6 +418,9 @@ async def handle_save(request: web.Request) -> web.Response:
         # Ensure config directory exists (for fresh Docker volumes)
         ENV_DIR.mkdir(parents=True, exist_ok=True)
         ENV_FILE.write_text("\n".join(lines), encoding="utf-8")
+        # Restrict permissions on .env file (Unix only)
+        if sys.platform != "win32":
+            os.chmod(ENV_FILE, 0o600)
         log.info("Configuration written to %s", ENV_FILE)
 
         # Respond before shutting down
@@ -444,5 +450,5 @@ def run_setup_server(port: int = SETUP_PORT) -> None:
     app.router.add_post("/test-openrouter", handle_test_openrouter)
     app.router.add_post("/save", handle_save)
 
-    log.info("Setup wizard available at http://0.0.0.0:%d", port)
-    web.run_app(app, host="0.0.0.0", port=port, print=None)
+    log.info("Setup wizard available at http://127.0.0.1:%d", port)
+    web.run_app(app, host="127.0.0.1", port=port, print=None)

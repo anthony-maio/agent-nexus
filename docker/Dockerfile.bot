@@ -28,4 +28,8 @@ ENV PYTHONPATH=/app/src
 # Setup wizard port (only active when config is missing)
 EXPOSE 8090
 
+# Run as non-root user
+RUN useradd -r -m nexus && chown -R nexus:nexus /app
+USER nexus
+
 CMD ["python", "-m", "nexus"]
