@@ -60,6 +60,7 @@ class ChannelRouter:
 
     def __init__(self) -> None:
         self.channels: dict[str, discord.TextChannel] = {}
+        self._ready: bool = False
 
     # ------------------------------------------------------------------
     # Bootstrap
@@ -93,6 +94,8 @@ class ChannelRouter:
                 )
                 log.info("Created channel: #%s", name)
 
+        self._ready = True
+
     # ------------------------------------------------------------------
     # Typed accessors
     # ------------------------------------------------------------------
@@ -100,16 +103,22 @@ class ChannelRouter:
     @property
     def human(self) -> discord.TextChannel:
         """The ``#human`` channel for user interaction."""
+        if not self._ready:
+            raise RuntimeError("ChannelRouter not initialized. Call ensure_channels() first.")
         return self.channels["human"]
 
     @property
     def nexus(self) -> discord.TextChannel:
         """The ``#nexus`` channel where models collaborate."""
+        if not self._ready:
+            raise RuntimeError("ChannelRouter not initialized. Call ensure_channels() first.")
         return self.channels["nexus"]
 
     @property
     def memory(self) -> discord.TextChannel:
         """The ``#memory`` channel for audit-trail logging."""
+        if not self._ready:
+            raise RuntimeError("ChannelRouter not initialized. Call ensure_channels() first.")
         return self.channels["memory"]
 
     # ------------------------------------------------------------------

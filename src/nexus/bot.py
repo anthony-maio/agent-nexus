@@ -213,6 +213,11 @@ class NexusBot(commands.Bot):
         if message.author == self.user:
             return
 
+        # Guard: router not yet initialized (message arrived before on_ready)
+        if not self.router._ready:
+            await self.process_commands(message)
+            return
+
         # Ignore messages outside our channels
         if not self.router.is_bot_channel(message.channel.id):
             await self.process_commands(message)
