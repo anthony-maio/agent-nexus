@@ -12,7 +12,7 @@ from continuity_core.event_log import Event
 class PostgresEventStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
-        self._conn = psycopg.connect(dsn, row_factory=dict_row)
+        self._conn = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=3)
         self._ensure_schema()
 
     def close(self) -> None:

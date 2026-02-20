@@ -103,6 +103,7 @@ class PiecesMCPClient:
         except Exception as exc:
             log.warning("PiecesOS not available: %s", exc)
             self._connected = False
+            await self.close()
             return False
 
     # -- Public API -----------------------------------------------------------

@@ -161,6 +161,19 @@ class CoreCommands(commands.Cog):
             mem_status = f"Connected ({count} memories)"
         embed.add_field(name="Memory (Qdrant)", value=mem_status, inline=True)
 
+        # Continuity Core (C2)
+        c2 = getattr(self.bot, "c2", None)
+        if c2 is not None:
+            c2_status = "Connected" if c2.is_running else "Offline"
+        else:
+            c2_status = "Not configured"
+        embed.add_field(name="Continuity Core", value=c2_status, inline=True)
+
+        # Autonomy mode
+        gate = getattr(self.bot, "autonomy_gate", None)
+        if gate is not None:
+            embed.add_field(name="Autonomy", value=gate.mode.value, inline=True)
+
         # Orchestrator
         orch_status = "Running" if self.bot.orchestrator.is_running else "Stopped"
         embed.add_field(
