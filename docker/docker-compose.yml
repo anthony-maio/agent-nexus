@@ -6,13 +6,21 @@ services:
     container_name: nexus-bot
     restart: unless-stopped
     env_file:
-      - ../config/.env
+      # Optional: if config/.env doesn't exist yet, the web setup wizard
+      # launches on port 8090 instead of crashing.
+      - path: ../config/.env
+        required: false
+    ports:
+      # Setup wizard UI (only active when config is missing)
+      - "${SETUP_PORT:-8090}:8090"
     depends_on:
       nexus-qdrant:
         condition: service_healthy
       nexus-redis:
         condition: service_healthy
     volumes:
+      # Mount config dir so the web setup wizard can write .env
+      - ../config:/app/config
       - ../data:/app/data
     networks:
       - nexus-net

@@ -23,7 +23,8 @@ from pathlib import Path
 
 # Resolve project root (one level up from setup/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = PROJECT_ROOT / ".env"
+ENV_DIR = PROJECT_ROOT / "config"
+ENV_FILE = ENV_DIR / ".env"
 
 BANNER = r"""
   ╔═══════════════════════════════════════════╗
@@ -245,6 +246,7 @@ def write_env(config: dict[str, str]) -> None:
         "",
     ])
 
+    ENV_DIR.mkdir(parents=True, exist_ok=True)
     ENV_FILE.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n  {GREEN}Wrote {ENV_FILE}{RESET}")
 

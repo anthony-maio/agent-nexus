@@ -20,12 +20,16 @@ from __future__ import annotations
 
 import functools
 import logging
+from pathlib import Path
 from typing import Any
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+# Canonical .env locations (checked in order of priority).
+ENV_PATHS: list[str] = ["config/.env", ".env"]
 
 # ---------------------------------------------------------------------------
 # Settings model
@@ -43,7 +47,9 @@ class NexusSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # .env loading is handled by load_dotenv() in __main__.py so that
+        # we can preprocess comma-separated list values before pydantic-
+        # settings tries to JSON-parse them.  Do NOT set env_file here.
         env_file_encoding="utf-8",
         # Allow extra env vars without raising a validation error.
         extra="ignore",
@@ -75,7 +81,7 @@ class NexusSettings(BaseSettings):
     # ------------------------------------------------------------------
     # Models -- main swarm (OpenRouter model IDs, comma-separated in env)
     # ------------------------------------------------------------------
-    SWARM_MODELS: str | list[str] = Field(
+    SWARM_MODELS: list[str] = Field(
         default=[
             "minimax/minimax-m2.5",
             "z-ai/glm-5",
@@ -230,10 +236,43 @@ class NexusSettings(BaseSettings):
 
 
 # ---------------------------------------------------------------------------
-# Lazy singleton accessor
+# Helpers
 # ---------------------------------------------------------------------------
 
-_settings: NexusSettings | None = None
+
+def find_env_file() -> Path | None:
+    """Return the first existing ``.env`` file from :data:`ENV_PATHS`."""
+    for candidate in ENV_PATHS:
+        p = Path(candidate)
+        if p.is_file():
+            return p
+    return None
+
+
+def has_config() -> bool:
+    """Return ``True`` if a loadable ``.env`` file exists with required keys."""
+    import os
+
+    if os.environ.get("DISCORD_TOKEN") and os.environ.get("OPENROUTER_API_KEY"):
+        return True
+    env_file = find_env_file()
+    if env_file is None:
+        return False
+    text = env_file.read_text(encoding="utf-8", errors="replace")
+    has_token = any(
+        line.strip().startswith("DISCORD_TOKEN=") and len(line.split("=", 1)[1].strip()) > 0
+        for line in text.splitlines()
+    )
+    has_key = any(
+        line.strip().startswith("OPENROUTER_API_KEY=") and len(line.split("=", 1)[1].strip()) > 0
+        for line in text.splitlines()
+    )
+    return has_token and has_key
+
+
+# ---------------------------------------------------------------------------
+# Lazy singleton accessor
+# ---------------------------------------------------------------------------
 
 
 @functools.lru_cache(maxsize=1)
