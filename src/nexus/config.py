@@ -21,7 +21,7 @@ from __future__ import annotations
 import functools
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -141,8 +141,8 @@ class NexusSettings(BaseSettings):
         description="Enable PiecesOS activity-tracking MCP integration.",
     )
     PIECES_MCP_URL: str = Field(
-        default="http://host.docker.internal:39300",
-        description="URL for the PiecesOS MCP server.",
+        default="http://localhost:39300",
+        description="URL for the PiecesOS MCP server. Use http://host.docker.internal:39300 in Docker.",
     )
 
     # ------------------------------------------------------------------
@@ -233,6 +233,24 @@ class NexusSettings(BaseSettings):
         raise TypeError(
             f"SWARM_MODELS must be a comma-separated string or list, got {type(value).__name__}"
         )
+
+    # ------------------------------------------------------------------
+    # Repr safety -- redact secrets in logs / debug output
+    # ------------------------------------------------------------------
+
+    _SENSITIVE_FIELDS: ClassVar[set[str]] = {
+        "DISCORD_TOKEN", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY", "GOOGLE_API_KEY",
+    }
+
+    def __repr__(self) -> str:
+        fields = []
+        for name in self.model_fields:
+            val = getattr(self, name)
+            if name in self._SENSITIVE_FIELDS:
+                val = "***" if val else None
+            fields.append(f"{name}={val!r}")
+        return f"NexusSettings({', '.join(fields)})"
 
 
 # ---------------------------------------------------------------------------
