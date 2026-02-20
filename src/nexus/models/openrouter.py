@@ -403,56 +403,81 @@ class OpenRouterClient:
 
         session = await self._ensure_session()
         url = f"{self._base_url}/chat/completions"
+        last_error: OpenRouterError | None = None
 
-        async with session.post(url, json=payload) as resp:
-            if resp.status >= 400:
-                body = await resp.json(content_type=None)
-                if "error" in body:
-                    err = body["error"]
-                    message = (
-                        err.get("message", str(err))
-                        if isinstance(err, dict)
-                        else str(err)
-                    )
-                else:
-                    message = f"HTTP {resp.status}: {body}"
-                raise OpenRouterError(
-                    message=message,
-                    status_code=resp.status,
-                    model=model,
-                )
+        for attempt in range(_MAX_RETRIES):
+            try:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status == 429:
+                        delay = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                        logger.warning(
+                            "OpenRouter stream rate-limited (429). Retrying in %.1fs "
+                            "(attempt %d/%d).",
+                            delay, attempt + 1, _MAX_RETRIES,
+                        )
+                        last_error = OpenRouterError(
+                            message="Rate limited (429)",
+                            status_code=429,
+                            model=model,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
 
-            async for raw_line in resp.content:
-                line = raw_line.decode("utf-8", errors="replace").strip()
+                    if resp.status >= 400:
+                        body = await resp.json(content_type=None)
+                        if "error" in body:
+                            err = body["error"]
+                            message = (
+                                err.get("message", str(err))
+                                if isinstance(err, dict)
+                                else str(err)
+                            )
+                        else:
+                            message = f"HTTP {resp.status}: {body}"
+                        raise OpenRouterError(
+                            message=message,
+                            status_code=resp.status,
+                            model=model,
+                        )
 
-                if not line or line.startswith(":"):
-                    # Skip empty keep-alive lines and SSE comments.
-                    continue
+                    # Stream chunks
+                    async for raw_line in resp.content:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
 
-                if line == "data: [DONE]":
-                    break
+                        if not line or line.startswith(":"):
+                            continue
 
-                if line.startswith("data: "):
-                    line = line[6:]
+                        if line == "data: [DONE]":
+                            break
 
-                try:
-                    data: dict[str, Any] = _json.loads(line)
-                except _json.JSONDecodeError:
-                    logger.debug("Skipping unparseable SSE line: %s", line[:120])
-                    continue
+                        if line.startswith("data: "):
+                            line = line[6:]
 
-                choices = data.get("choices", [])
-                if not choices:
-                    continue
+                        try:
+                            data: dict[str, Any] = _json.loads(line)
+                        except _json.JSONDecodeError:
+                            logger.debug("Skipping unparseable SSE line: %s", line[:120])
+                            continue
 
-                delta = choices[0].get("delta", {})
-                finish = choices[0].get("finish_reason")
+                        choices = data.get("choices", [])
+                        if not choices:
+                            continue
 
-                yield StreamChunk(
-                    delta=delta.get("content", "") or "",
-                    model=data.get("model"),
-                    finish_reason=finish,
-                )
+                        delta = choices[0].get("delta", {})
+                        finish = choices[0].get("finish_reason")
+
+                        yield StreamChunk(
+                            delta=delta.get("content", "") or "",
+                            model=data.get("model"),
+                            finish_reason=finish,
+                        )
+                    return  # Success - exit retry loop
+
+            except OpenRouterError:
+                raise
+
+        if last_error:
+            raise last_error
 
     async def embed(
         self,
