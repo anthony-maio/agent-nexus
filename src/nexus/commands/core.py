@@ -96,7 +96,7 @@ class CoreCommands(commands.Cog):
                     model_id, list(self.bot.swarm_models.keys())
                 )
                 for responder_id in responders:
-                    asyncio.create_task(self._crosstalk_respond(responder_id))
+                    self.bot._spawn(self._crosstalk_respond(responder_id))
 
             except Exception as exc:
                 log.exception("!ask command failed for model %s", model_id)

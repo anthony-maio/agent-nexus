@@ -120,6 +120,9 @@ class NexusBot(commands.Bot):
         # --- System prompt cache ---
         self._system_prompts: dict[str, str] = {}
 
+        # --- Background task tracking ---
+        self._background_tasks: set[asyncio.Task] = set()
+
     async def setup_hook(self) -> None:
         """Called after login, before the bot starts processing events."""
         # Load command cogs
@@ -240,7 +243,7 @@ class NexusBot(commands.Bot):
         await self.conversation.add_message("human", message.content, is_human=True)
 
         # Log to C2
-        asyncio.create_task(self._log_to_c2(
+        self._spawn(self._log_to_c2(
             actor="human", intent="message",
             inp=message.content[:500], tags=["human", "input"],
         ))
@@ -272,17 +275,17 @@ class NexusBot(commands.Bot):
 
             # Store primary response in memory (background)
             if self.memory_store.is_connected:
-                asyncio.create_task(self._store_in_memory(response.content, primary_model))
+                self._spawn(self._store_in_memory(response.content, primary_model))
 
             # Log model response to C2
-            asyncio.create_task(self._log_to_c2(
+            self._spawn(self._log_to_c2(
                 actor=primary_model, intent="response",
                 out=response.content[:500], tags=["swarm", "nexus"],
             ))
 
             # --- Reaction round: sequential + organic, but non-blocking ---
             if self.crosstalk.is_enabled:
-                asyncio.create_task(self._run_reaction_round(primary_model, model_ids, last_msg))
+                self._spawn(self._run_reaction_round(primary_model, model_ids, last_msg))
 
         except Exception as e:
             log.error(f"Error handling human message: {e}", exc_info=True)
@@ -328,10 +331,10 @@ class NexusBot(commands.Bot):
                 reactions_posted += 1
 
                 if self.memory_store.is_connected:
-                    asyncio.create_task(self._store_in_memory(reaction.content, reactor_id))
+                    self._spawn(self._store_in_memory(reaction.content, reactor_id))
 
                 # Log reaction to C2
-                asyncio.create_task(self._log_to_c2(
+                self._spawn(self._log_to_c2(
                     actor=reactor_id, intent="response",
                     out=reaction.content[:500], tags=["swarm", "nexus"],
                 ))
@@ -378,6 +381,19 @@ class NexusBot(commands.Bot):
             )
         return self._system_prompts[model_id]
 
+    def _spawn(self, coro) -> asyncio.Task:
+        """Create a tracked background task with error logging."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._task_done)
+        return task
+
+    def _task_done(self, task: asyncio.Task) -> None:
+        """Callback for completed background tasks."""
+        self._background_tasks.discard(task)
+        if not task.cancelled() and task.exception():
+            log.error("Background task failed: %s", task.exception(), exc_info=task.exception())
+
     def _resolve_guild(self) -> discord.Guild | None:
         """Resolve the target guild."""
         if self.settings.DISCORD_GUILD_ID:
@@ -398,4 +414,10 @@ class NexusBot(commands.Bot):
             await self.ollama.close()
         if self.pieces:
             await self.pieces.close()
+        # Cancel remaining background tasks
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
         await super().close()

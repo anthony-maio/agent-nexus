@@ -190,7 +190,7 @@ class AdminCommands(commands.Cog):
             self.bot.autonomy_gate.set_mode(mode_lower)
 
             # Log mode change to C2
-            asyncio.create_task(self.bot._log_to_c2(
+            self.bot._spawn(self.bot._log_to_c2(
                 actor="human", intent="config",
                 inp=f"autonomy={mode_lower}",
                 tags=["autonomy", mode_lower],
