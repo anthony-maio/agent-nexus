@@ -30,6 +30,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -186,7 +187,9 @@ class TaskDispatcher:
         ]
 
         try:
-            response = await self._route_to_provider(task_model, messages)
+            response = await asyncio.wait_for(
+                self._route_to_provider(task_model, messages), timeout=120.0,
+            )
 
             return TaskResult(
                 action_type=role,

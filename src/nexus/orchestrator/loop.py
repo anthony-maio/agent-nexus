@@ -118,20 +118,27 @@ class OrchestratorLoop:
         """Main loop: hybrid interval + trigger-based cycling."""
         await asyncio.sleep(self._STARTUP_DELAY)
 
+        # Run an immediate first cycle after startup delay.
+        first_cycle = True
+
         while self._running:
             is_triggered = False
             try:
-                # Wait for either the interval to elapse or a trigger event.
-                try:
-                    await asyncio.wait_for(
-                        self._trigger_event.wait(), timeout=self.interval,
-                    )
-                    # Trigger fired — this is a mini-cycle.
-                    is_triggered = True
-                    self._trigger_event.clear()
-                except asyncio.TimeoutError:
-                    # Interval elapsed — this is a full cycle.
-                    pass
+                if first_cycle:
+                    # Skip waiting — run the first cycle immediately.
+                    first_cycle = False
+                else:
+                    # Wait for either the interval to elapse or a trigger event.
+                    try:
+                        await asyncio.wait_for(
+                            self._trigger_event.wait(), timeout=self.interval,
+                        )
+                        # Trigger fired — this is a mini-cycle.
+                        is_triggered = True
+                        self._trigger_event.clear()
+                    except asyncio.TimeoutError:
+                        # Interval elapsed — this is a full cycle.
+                        pass
 
                 if not self._running:
                     break
@@ -146,10 +153,22 @@ class OrchestratorLoop:
                 )
 
                 # 1. Gather state from all sources.
-                state: dict[str, Any] = await self.bot.state_gatherer.gather()
+                try:
+                    state: dict[str, Any] = await asyncio.wait_for(
+                        self.bot.state_gatherer.gather(), timeout=45.0,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("State gather timed out after 45s -- skipping cycle.")
+                    continue
 
                 # 2. Ask a swarm model what to do about it.
-                actions: list[dict[str, Any]] = await self._decide(state)
+                try:
+                    actions: list[dict[str, Any]] = await asyncio.wait_for(
+                        self._decide(state), timeout=60.0,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("Decision phase timed out after 60s -- skipping dispatch.")
+                    actions = []
 
                 # 3. Dispatch each action through the autonomy gate.
                 dispatched = 0
