@@ -293,8 +293,11 @@ class NexusBot(commands.Bot):
                 self._spawn(self._run_reaction_round(primary_model, model_ids, last_msg))
 
         except Exception as e:
-            log.error(f"Error handling human message: {e}", exc_info=True)
-            await self.router.human.send(f"Error: {e}")
+            log.error("Error handling human message: %s", e, exc_info=True)
+            try:
+                await self.router.human.send("An error occurred processing your message. Check bot logs for details.")
+            except Exception:
+                pass
 
     async def _run_reaction_round(
         self, primary_model: str, model_ids: list[str], last_msg: discord.Message

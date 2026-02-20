@@ -101,7 +101,7 @@ class CoreCommands(commands.Cog):
 
             except Exception as exc:
                 log.exception("!ask command failed for model %s", model_id)
-                await ctx.send(f"Error: {exc}")
+                await ctx.send("An error occurred. Check bot logs for details.")
 
     # ------------------------------------------------------------------
     # !think -- ask all swarm models in parallel

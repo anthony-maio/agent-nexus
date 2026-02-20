@@ -82,7 +82,7 @@ class MemoryCommands(commands.Cog):
 
             except Exception as exc:
                 log.exception("!memory search failed for query: %s", query[:80])
-                await ctx.send(f"Memory search error: {exc}")
+                await ctx.send("Memory search failed. Check bot logs for details.")
 
     # ------------------------------------------------------------------
     # !remember -- store a new memory
@@ -120,7 +120,7 @@ class MemoryCommands(commands.Cog):
 
             except Exception as exc:
                 log.exception("!remember failed for text: %s", text[:80])
-                await ctx.send(f"Memory store error: {exc}")
+                await ctx.send("Failed to store memory. Check bot logs for details.")
 
     # ------------------------------------------------------------------
     # !forget -- delete a memory by ID
@@ -149,7 +149,7 @@ class MemoryCommands(commands.Cog):
 
         except Exception as exc:
             log.exception("!forget failed for memory_id: %s", memory_id)
-            await ctx.send(f"Error: {exc}")
+            await ctx.send("Failed to delete memory. Check bot logs for details.")
 
 
 async def setup(bot: commands.Bot) -> None:
