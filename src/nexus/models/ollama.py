@@ -190,7 +190,10 @@ class OllamaClient:
         data = await self._request("POST", "/v1/chat/completions", json=payload, timeout=_CHAT_TIMEOUT)
 
         # Parse the OpenAI-compatible response envelope.
-        choice = data["choices"][0]
+        choices = data.get("choices", [])
+        if not choices:
+            raise OllamaError("No choices returned in chat completion response.")
+        choice = choices[0]
         usage = data.get("usage", {})
 
         return ChatResponse(
@@ -232,7 +235,9 @@ class OllamaClient:
         data = await self._request("POST", "/api/embed", json=payload, timeout=_EMBED_TIMEOUT)
 
         # The native embed endpoint returns {"embeddings": [[...], ...]}.
-        embeddings: list[list[float]] = data["embeddings"]
+        embeddings: list[list[float]] = data.get("embeddings", [])
+        if not embeddings:
+            raise OllamaError("No embeddings returned in response.")
         return embeddings
 
     async def is_available(self) -> bool:

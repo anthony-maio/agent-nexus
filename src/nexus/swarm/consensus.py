@@ -150,9 +150,10 @@ class ConsensusProtocol:
             line_lower = line.lower().strip()
             if line_lower.startswith("decision:"):
                 val = line_lower.split(":", 1)[1].strip()
-                if "approve" in val:
+                val_clean = val.strip().rstrip(".").lower()
+                if val_clean in ("approve", "approved", "yes"):
                     decision = "approve"
-                elif "reject" in val:
+                elif val_clean in ("reject", "rejected", "no"):
                     decision = "reject"
                 else:
                     decision = "abstain"
