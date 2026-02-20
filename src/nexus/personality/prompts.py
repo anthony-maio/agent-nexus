@@ -120,6 +120,7 @@ def build_task_prompt(task_description: str) -> str:
     Returns:
         A formatted system prompt string.
     """
-    return TASK_AGENT_PROMPT.format(
-        task_description=task_description.replace("{", "{{").replace("}", "}}")
-    )
+    # Note: .format() does NOT re-interpret braces inside substitution
+    # values, so escaping the task_description is unnecessary and would
+    # produce doubled braces in the LLM prompt.
+    return TASK_AGENT_PROMPT.format(task_description=task_description)
