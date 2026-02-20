@@ -83,11 +83,14 @@ def build_system_prompt(model_id: str, swarm_model_ids: list[str]) -> str:
         else "You are the only model in the swarm."
     )
 
+    def _safe(s: str) -> str:
+        return s.replace("{", "{{").replace("}", "}}")
+
     return SWARM_BASE_PROMPT.format(
-        name=identity.name,
-        role=identity.role,
-        personality=identity.personality,
-        swarm_roster=roster,
+        name=_safe(identity.name),
+        role=_safe(identity.role),
+        personality=_safe(identity.personality),
+        swarm_roster=_safe(roster),
     )
 
 
@@ -117,4 +120,6 @@ def build_task_prompt(task_description: str) -> str:
     Returns:
         A formatted system prompt string.
     """
-    return TASK_AGENT_PROMPT.format(task_description=task_description)
+    return TASK_AGENT_PROMPT.format(
+        task_description=task_description.replace("{", "{{").replace("}", "}}")
+    )
