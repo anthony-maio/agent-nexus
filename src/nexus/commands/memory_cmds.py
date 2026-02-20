@@ -44,6 +44,7 @@ class MemoryCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="memory")
+    @commands.cooldown(rate=5, per=60, type=commands.BucketType.user)
     async def memory_search(self, ctx: commands.Context, *, query: str) -> None:
         """Search swarm memory.
 
@@ -88,6 +89,7 @@ class MemoryCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="remember")
+    @commands.cooldown(rate=5, per=60, type=commands.BucketType.user)
     async def remember(self, ctx: commands.Context, *, text: str) -> None:
         """Store something in swarm memory.
 

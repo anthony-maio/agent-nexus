@@ -48,6 +48,7 @@ class CoreCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="ask")
+    @commands.cooldown(rate=3, per=60, type=commands.BucketType.user)
     async def ask(self, ctx: commands.Context, model_name: str, *, prompt: str) -> None:
         """Ask a specific model a question.
 
@@ -107,6 +108,7 @@ class CoreCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="think")
+    @commands.cooldown(rate=2, per=120, type=commands.BucketType.user)
     async def think(self, ctx: commands.Context, *, prompt: str) -> None:
         """Ask all swarm models to respond. Multi-perspective analysis.
 

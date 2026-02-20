@@ -151,6 +151,7 @@ class AdminCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="crosstalk")
+    @commands.has_permissions(administrator=True)
     async def toggle_crosstalk(
         self, ctx: commands.Context, state: str = ""
     ) -> None:
@@ -176,6 +177,7 @@ class AdminCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="autonomy")
+    @commands.has_permissions(administrator=True)
     async def set_autonomy(
         self, ctx: commands.Context, mode: str = ""
     ) -> None:
@@ -212,6 +214,7 @@ class AdminCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="curiosity")
+    @commands.has_permissions(administrator=True)
     async def curiosity_scan(self, ctx: commands.Context) -> None:
         """Trigger a C2 curiosity scan and display results."""
         if not self.bot.c2.is_running:
