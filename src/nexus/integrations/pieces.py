@@ -6,9 +6,9 @@ via an MCP server.  This module provides an async client that queries that
 server so the Agent Nexus swarm can passively observe what the user is
 working on -- without the user needing to send explicit prompts.
 
-The MCP server uses SSE transport and listens on ``localhost:39300`` by
-default.  When running inside Docker the client connects via
-``host.docker.internal:39300`` so it can reach the host machine.
+The MCP server uses SSE transport (2024-11-05 spec) at ``localhost:39300``.
+On connect, we read the SSE stream to discover the messages endpoint URL
+(which includes a sessionId and token), then POST JSON-RPC tool calls there.
 
 Usage::
 
@@ -28,6 +28,9 @@ from types import TracebackType
 import aiohttp
 
 log = logging.getLogger(__name__)
+
+# SSE endpoint path for the 2024-11-05 MCP transport
+_SSE_PATH = "/model_context_protocol/2024-11-05/sse"
 
 
 class PiecesMCPClient:
@@ -52,6 +55,8 @@ class PiecesMCPClient:
         self.base_url: str = base_url.rstrip("/")
         self._session: aiohttp.ClientSession | None = None
         self._connected: bool = False
+        self._messages_url: str | None = None
+        self._request_id: int = 0
 
     # -- Async context manager ------------------------------------------------
 
@@ -74,35 +79,74 @@ class PiecesMCPClient:
             self._session = aiohttp.ClientSession()
         return self._session
 
-    async def connect(self) -> bool:
-        """Test connectivity to the PiecesOS MCP server.
+    def _next_id(self) -> int:
+        """Return a monotonically increasing request ID."""
+        self._request_id += 1
+        return self._request_id
 
-        Probes the SSE endpoint to verify the server is listening.  Any
-        HTTP response (even 4xx) means the server is alive; only
-        connection errors indicate it is down.
+    async def connect(self) -> bool:
+        """Establish a session with the PiecesOS MCP server via SSE.
+
+        Connects to the SSE endpoint and reads the first ``endpoint``
+        event to discover the messages URL (which includes sessionId and
+        token parameters).
 
         Returns:
-            ``True`` if the server responded, ``False`` otherwise
-            (the failure is logged as a warning, not raised).
+            ``True`` if the session was established, ``False`` otherwise.
         """
         try:
             session = await self._ensure_session()
-            # Probe the SSE endpoint — this is a known Pieces MCP route.
+            sse_url = f"{self.base_url}{_SSE_PATH}"
+
             async with session.get(
-                f"{self.base_url}/model_context_protocol/2024-11-05/sse",
-                timeout=aiohttp.ClientTimeout(total=5),
+                sse_url,
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
-                # Any HTTP response means the server is running.
+                if resp.status != 200:
+                    log.warning(
+                        "PiecesOS SSE endpoint returned HTTP %d",
+                        resp.status,
+                    )
+                    return False
+
+                # Read the SSE stream until we get the endpoint event.
+                # Format: "event: endpoint\ndata: /path?sessionId=...&token=...\n\n"
+                messages_path: str | None = None
+                event_type: str | None = None
+
+                async for raw_line in resp.content:
+                    line = raw_line.decode().rstrip("\r\n")
+
+                    if line.startswith("event:"):
+                        event_type = line[len("event:"):].strip()
+                    elif line.startswith("data:") and event_type == "endpoint":
+                        messages_path = line[len("data:"):].strip()
+                        break
+                    elif not line:
+                        # Empty line = end of event; reset if we didn't
+                        # match the one we wanted.
+                        event_type = None
+
+                if not messages_path:
+                    log.warning(
+                        "PiecesOS SSE did not return an endpoint event",
+                    )
+                    return False
+
+                # Build full messages URL from the relative path
+                self._messages_url = f"{self.base_url}{messages_path}"
                 self._connected = True
                 log.info(
-                    "PiecesOS MCP connected at %s (HTTP %d)",
+                    "PiecesOS MCP connected at %s (messages=%s)",
                     self.base_url,
-                    resp.status,
+                    self._messages_url[:80],
                 )
                 return True
+
         except Exception as exc:
             log.warning("PiecesOS not available: %s", exc)
             self._connected = False
+            self._messages_url = None
             await self.close()
             return False
 
@@ -116,7 +160,7 @@ class PiecesMCPClient:
 
         Uses the ``ask_pieces_ltm`` tool exposed by the MCP server to
         retrieve a natural-language summary of what the user has been
-        doing recently.
+        doing recently.  Automatically reconnects if the session expired.
 
         Args:
             query: Free-text query forwarded to the LTM engine.  Defaults
@@ -126,24 +170,25 @@ class PiecesMCPClient:
             A text summary of recent activity, or ``None`` if the server
             is unreachable or the query fails.
         """
-        if not self._connected or self._session is None:
+        # Auto-reconnect if session expired
+        if not self._connected or self._messages_url is None:
+            if not await self.connect():
+                return None
+        if self._session is None:
             return None
 
         try:
             payload = {
                 "jsonrpc": "2.0",
-                "id": 1,
+                "id": self._next_id(),
                 "method": "tools/call",
                 "params": {
                     "name": "ask_pieces_ltm",
                     "arguments": {"query": query},
                 },
             }
-            mcp_url = (
-                f"{self.base_url}/model_context_protocol/2025-03-26/mcp"
-            )
             async with self._session.post(
-                mcp_url,
+                self._messages_url,
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
@@ -151,9 +196,22 @@ class PiecesMCPClient:
                     log.warning(
                         "Pieces LTM query returned HTTP %d", resp.status,
                     )
+                    # Session may have expired — mark for reconnect.
+                    if resp.status in (400, 404):
+                        self._connected = False
+                        self._messages_url = None
                     return None
 
                 data = await resp.json()
+
+                # Check for JSON-RPC error
+                if "error" in data:
+                    log.warning(
+                        "Pieces LTM query error: %s",
+                        data["error"].get("message", data["error"]),
+                    )
+                    return None
+
                 result = data.get("result", {})
                 content = result.get("content", [])
                 if content and isinstance(content, list):
@@ -176,8 +234,9 @@ class PiecesMCPClient:
             await self._session.close()
         self._session = None
         self._connected = False
+        self._messages_url = None
 
     @property
     def is_connected(self) -> bool:
-        """Whether the client has an active connection to PiecesOS."""
+        """Whether the client has an active MCP session with PiecesOS."""
         return self._connected
