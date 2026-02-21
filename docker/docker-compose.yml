@@ -21,17 +21,13 @@ services:
       - nexus-net
     environment:
       # Override for Docker: Pieces runs on the host, not localhost
-      PIECES_MCP_URL: "http://host.docker.internal:39300"
-      # Continuity Core (C2) backend configuration
-      C2_NEO4J_URI: "${C2_NEO4J_URI:-bolt://nexus-neo4j:7687}"
-      C2_NEO4J_USER: "${C2_NEO4J_USER:-neo4j}"
-      C2_NEO4J_PASSWORD: "${C2_NEO4J_PASSWORD:-nexus-c2-graph}"
-      C2_POSTGRES_URL: "${C2_POSTGRES_URL:-postgresql://c2:c2@nexus-postgres:5432/continuity_core}"
-      C2_QDRANT_URL: "${C2_QDRANT_URL:-http://nexus-qdrant:6333}"
-      C2_REDIS_URL: "${C2_REDIS_URL:-redis://nexus-redis:6379/0}"
-      C2_EMBEDDING_BACKEND: "${C2_EMBEDDING_BACKEND:-openrouter}"
+      PIECES_MCP_URL: "${PIECES_MCP_URL:-http://host.docker.internal:39300}"
+      # C2 needs the OpenRouter key (derived from the main key loaded via env_file).
+      # All other C2 vars (NEO4J, POSTGRES, QDRANT, REDIS, EMBEDDING) are read
+      # from env_file (config/.env) and picked up by C2Config via os.getenv().
+      # Do NOT duplicate them here — environment overrides env_file and would
+      # clobber user-provided connection URLs with Docker service defaults.
       C2_OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
-      C2_OPENROUTER_EMBED_MODEL: "${C2_OPENROUTER_EMBED_MODEL:-qwen/qwen3-embedding-8b}"
     # For PiecesOS MCP on host machine
     extra_hosts:
       - "host.docker.internal:host-gateway"

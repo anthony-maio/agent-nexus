@@ -77,29 +77,29 @@ class PiecesMCPClient:
     async def connect(self) -> bool:
         """Test connectivity to the PiecesOS MCP server.
 
-        Sends a lightweight health-check request.  On success the client
-        is marked as connected and subsequent calls to
-        :meth:`get_recent_activity` will attempt real queries.
+        Probes the SSE endpoint to verify the server is listening.  Any
+        HTTP response (even 4xx) means the server is alive; only
+        connection errors indicate it is down.
 
         Returns:
-            ``True`` if the server responded successfully, ``False``
-            otherwise (the failure is logged as a warning, not raised).
+            ``True`` if the server responded, ``False`` otherwise
+            (the failure is logged as a warning, not raised).
         """
         try:
             session = await self._ensure_session()
+            # Probe the SSE endpoint — this is a known Pieces MCP route.
             async with session.get(
-                f"{self.base_url}/health",
+                f"{self.base_url}/model_context_protocol/2024-11-05/sse",
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
-                self._connected = resp.status == 200
-                if self._connected:
-                    log.info("PiecesOS MCP connected at %s", self.base_url)
-                else:
-                    log.warning(
-                        "PiecesOS health-check returned HTTP %d",
-                        resp.status,
-                    )
-                return self._connected
+                # Any HTTP response means the server is running.
+                self._connected = True
+                log.info(
+                    "PiecesOS MCP connected at %s (HTTP %d)",
+                    self.base_url,
+                    resp.status,
+                )
+                return True
         except Exception as exc:
             log.warning("PiecesOS not available: %s", exc)
             self._connected = False
