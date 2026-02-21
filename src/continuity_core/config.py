@@ -17,6 +17,8 @@ class C2Config:
     embedding_model: str = os.getenv("C2_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     ollama_base_url: str = os.getenv("C2_OLLAMA_BASE_URL", "http://localhost:11434")
     ollama_embed_model: str = os.getenv("C2_OLLAMA_EMBED_MODEL", "nomic-embed-text")
+    openrouter_api_key: str = os.getenv("C2_OPENROUTER_API_KEY", "")
+    openrouter_embed_model: str = os.getenv("C2_OPENROUTER_EMBED_MODEL", "qwen/qwen3-embedding-8b")
 
     # Context composer
     token_budget: int = int(os.getenv("C2_TOKEN_BUDGET", "2048"))

@@ -42,6 +42,29 @@ class OllamaEmbedder:
         return data["embedding"]
 
 
+class OpenRouterEmbedder:
+    """Embedding via OpenRouter's /api/v1/embeddings endpoint."""
+
+    def __init__(self, api_key: str, model: str) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._url = "https://openrouter.ai/api/v1/embeddings"
+
+    def embed(self, text: str) -> List[float]:
+        resp = requests.post(
+            self._url,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"input": text, "model": self._model},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["data"][0]["embedding"]
+
+
 class SentenceTransformerEmbedder:
     def __init__(self, model_name: str, device: str = "cpu") -> None:
         try:
@@ -57,6 +80,8 @@ class SentenceTransformerEmbedder:
 
 def build_embedder(config: C2Config) -> Embedder:
     backend = config.embedding_backend.lower()
+    if backend == "openrouter":
+        return OpenRouterEmbedder(config.openrouter_api_key, config.openrouter_embed_model)
     if backend == "ollama":
         return OllamaEmbedder(config.ollama_base_url, config.ollama_embed_model)
     if backend in {"sbert", "sentence-transformers"}:
