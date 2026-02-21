@@ -399,6 +399,41 @@ class AdminCommands(commands.Cog):
 
         await self.bot.orchestrator._trigger_curiosity_discussion(result)
 
+    # ------------------------------------------------------------------
+    # !pieces -- query PiecesOS activity context
+    # ------------------------------------------------------------------
+
+    @commands.command(name="pieces")
+    async def pieces_query(
+        self, ctx: commands.Context, *, query: str = "recent activity and context"
+    ) -> None:
+        """Query PiecesOS LTM for recent user activity.
+
+        Usage: !pieces [query]
+        """
+        if not self.bot.pieces.is_connected:
+            await ctx.send(
+                "PiecesOS is not connected. Check PIECES_MCP_ENABLED "
+                "and PIECES_MCP_URL in config/.env."
+            )
+            return
+
+        await ctx.send(f"Querying PiecesOS: *{query[:100]}*...")
+
+        result = await self.bot.pieces.get_recent_activity(query=query)
+        if result is None:
+            await ctx.send("PiecesOS returned no results.")
+            return
+
+        # Truncate to Discord embed limit
+        text = result[:4000] if len(result) > 4000 else result
+        embed = discord.Embed(
+            title="PiecesOS Activity",
+            description=text,
+            color=0x00BCD4,
+        )
+        await ctx.send(embed=embed)
+
 
 async def setup(bot: commands.Bot) -> None:
     """Load the AdminCommands cog into the bot."""

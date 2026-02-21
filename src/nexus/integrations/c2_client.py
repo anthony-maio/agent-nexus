@@ -35,6 +35,7 @@ class C2Client:
     """
 
     _REQUEST_TIMEOUT: float = 30.0
+    _WARMUP_TIMEOUT: float = 120.0
     _RESTART_DELAY: float = 2.0
 
     def __init__(self) -> None:
@@ -72,6 +73,20 @@ class C2Client:
                     server_info.get("version", "?"),
                 )
                 self._initialized = True
+
+                # Warmup: first tool call triggers lazy backend init which
+                # can take 30-60s.  Use extended timeout so we don't desync.
+                log.info("C2 warmup: initializing backends...")
+                warmup = await self._send_with_timeout(
+                    "tools/call",
+                    {"name": "c2.status", "arguments": {}},
+                    timeout=self._WARMUP_TIMEOUT,
+                )
+                if warmup and "result" in warmup:
+                    log.info("C2 warmup complete — backends ready")
+                else:
+                    log.warning("C2 warmup failed — backends may be unavailable")
+
                 return True
 
             log.warning("C2 initialization handshake failed: %s", resp)
@@ -114,18 +129,28 @@ class C2Client:
     async def _send(
         self, method: str, params: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Send a JSON-RPC request and read the response.
+        """Send a JSON-RPC request and read the matching response."""
+        return await self._send_with_timeout(
+            method, params, timeout=self._REQUEST_TIMEOUT,
+        )
 
-        Serializes under a lock to prevent interleaved writes on stdin.
+    async def _send_with_timeout(
+        self, method: str, params: dict[str, Any], *, timeout: float,
+    ) -> dict[str, Any] | None:
+        """Send a JSON-RPC request and read the response with ID matching.
+
+        Skips stale responses from previously timed-out calls to keep the
+        stdin/stdout pipe synchronized.
         """
         if self._process is None or self._process.stdin is None:
             return None
 
         async with self._lock:
             self._request_id += 1
+            req_id = self._request_id
             request = {
                 "jsonrpc": "2.0",
-                "id": self._request_id,
+                "id": req_id,
                 "method": method,
                 "params": params,
             }
@@ -138,15 +163,30 @@ class C2Client:
                 if self._process.stdout is None:
                     return None
 
-                raw = await asyncio.wait_for(
-                    self._process.stdout.readline(),
-                    timeout=self._REQUEST_TIMEOUT,
-                )
-                if not raw:
-                    log.warning("C2 subprocess returned empty response")
-                    return None
+                # Read lines until we get the response matching our request ID.
+                # This skips stale responses from previous timed-out calls.
+                deadline = asyncio.get_event_loop().time() + timeout
+                while True:
+                    remaining = deadline - asyncio.get_event_loop().time()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError()
 
-                return json.loads(raw.decode())
+                    raw = await asyncio.wait_for(
+                        self._process.stdout.readline(),
+                        timeout=remaining,
+                    )
+                    if not raw:
+                        log.warning("C2 subprocess returned empty response")
+                        return None
+
+                    resp = json.loads(raw.decode())
+                    if resp.get("id") == req_id:
+                        return resp
+
+                    log.debug(
+                        "C2 skipping stale response (got id=%s, want id=%s)",
+                        resp.get("id"), req_id,
+                    )
 
             except asyncio.TimeoutError:
                 log.warning("C2 request timed out: method=%s", method)
