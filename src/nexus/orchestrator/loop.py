@@ -493,7 +493,7 @@ class OrchestratorLoop:
             parts.append(f"\n--- Recent Conversation ({len(recent_msgs)} messages) ---")
             for msg in recent_msgs[-5:]:
                 author = msg.get("author", "unknown")
-                content = msg.get("content", "")[:200]
+                content = msg.get("content", "")[:1500]
                 parts.append(f"  [{author}]: {content}")
         else:
             parts.append("\n--- Recent Conversation ---")
@@ -504,7 +504,7 @@ class OrchestratorLoop:
         if memories:
             parts.append(f"\n--- Relevant Memories ({len(memories)}) ---")
             for mem in memories[:3]:
-                content = mem.get("content", "")[:200]
+                content = mem.get("content", "")[:1500]
                 source = mem.get("source", "unknown")
                 score = mem.get("score", 0.0)
                 parts.append(f"  [{source}, relevance={score:.2f}]: {content}")

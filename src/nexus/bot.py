@@ -231,10 +231,13 @@ class NexusBot(commands.Bot):
             timestamp=message.created_at,
         )
 
-        # Handle messages in #human - forward to swarm
-        if self.router.is_human_channel(message.channel.id):
-            if not message.content.startswith("!"):
-                await self._handle_human_message(message)
+        # Handle human messages in #human or #nexus - forward to swarm
+        is_human_msg = (
+            self.router.is_human_channel(message.channel.id)
+            or self.router.is_nexus_channel(message.channel.id)
+        )
+        if is_human_msg and not message.content.startswith("!"):
+            await self._handle_human_message(message)
 
         # Process commands regardless of channel
         await self.process_commands(message)
