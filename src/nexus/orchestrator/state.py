@@ -83,13 +83,28 @@ class StateGatherer:
             "has_activity": False,
         }
 
-        # Gather all sources concurrently.
-        messages, memories, activity, curiosity = await asyncio.gather(
+        # Gather all sources concurrently with individual timeouts.
+        # return_exceptions=True so one failure doesn't cancel the others.
+        results = await asyncio.gather(
             self._gather_conversation(),
             self._gather_memories(),
             self._gather_activity(),
             self._gather_curiosity(),
+            return_exceptions=True,
         )
+
+        # Unpack, treating exceptions as None
+        messages = results[0] if not isinstance(results[0], BaseException) else None
+        memories = results[1] if not isinstance(results[1], BaseException) else None
+        activity = results[2] if not isinstance(results[2], BaseException) else None
+        curiosity = results[3] if not isinstance(results[3], BaseException) else None
+
+        # Log any exceptions
+        for i, (name, r) in enumerate(zip(
+            ["conversation", "memories", "activity", "curiosity"], results,
+        )):
+            if isinstance(r, BaseException):
+                log.warning("State gather %s failed: %s", name, r)
 
         if messages is not None:
             state["recent_messages"] = messages
@@ -162,12 +177,15 @@ class StateGatherer:
                 log.debug("Memory store not connected -- skipping memory gather.")
                 return None
 
-            query_vector: list[float] = await self.bot.embeddings.embed_one(
-                self._MEMORY_QUERY,
+            query_vector: list[float] = await asyncio.wait_for(
+                self.bot.embeddings.embed_one(self._MEMORY_QUERY),
+                timeout=15.0,
             )
-            results: list[Memory] = await self.bot.memory_store.search(
-                query_vector,
-                limit=self._MEMORY_LIMIT,
+            results: list[Memory] = await asyncio.wait_for(
+                self.bot.memory_store.search(
+                    query_vector, limit=self._MEMORY_LIMIT,
+                ),
+                timeout=10.0,
             )
             return [
                 {
@@ -188,8 +206,8 @@ class StateGatherer:
         """Retrieve recent user activity from PiecesOS.
 
         PiecesOS integration is optional and may not be configured.  When
-        the client is absent or disconnected this method returns ``None``
-        silently.
+        the client is absent this method returns ``None`` silently.
+        The client handles its own reconnection if the session expired.
 
         Returns:
             A raw activity summary string, or ``None`` if the integration
@@ -199,12 +217,16 @@ class StateGatherer:
             pieces = getattr(self.bot, "pieces", None)
             if pieces is None:
                 return None
-            if not getattr(pieces, "is_connected", False):
-                return None
 
-            activity: str | None = await pieces.get_recent_activity()
+            # get_recent_activity handles auto-reconnect internally
+            activity: str | None = await asyncio.wait_for(
+                pieces.get_recent_activity(), timeout=20.0,
+            )
             return activity if activity else None
 
+        except asyncio.TimeoutError:
+            log.warning("PiecesOS activity gather timed out after 20s.")
+            return None
         except Exception:
             log.warning(
                 "Failed to gather PiecesOS activity.",
@@ -228,9 +250,14 @@ class StateGatherer:
             if c2 is None or not c2.is_running:
                 return None
 
-            result = await c2.curiosity()
+            result = await asyncio.wait_for(
+                c2.curiosity(), timeout=30.0,
+            )
             return result if result else None
 
+        except asyncio.TimeoutError:
+            log.warning("C2 curiosity gather timed out after 30s.")
+            return None
         except Exception:
             log.warning(
                 "Failed to gather C2 curiosity signals.",

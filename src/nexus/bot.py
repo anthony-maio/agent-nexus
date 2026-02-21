@@ -171,8 +171,9 @@ class NexusBot(commands.Bot):
             if connected:
                 log.info("PiecesOS MCP connected")
             else:
-                log.info("PiecesOS not available")
-                self.pieces = None
+                log.info(
+                    "PiecesOS not available at startup — will retry on use"
+                )
 
         # Start Continuity Core subprocess
         c2_started = await self.c2.start()
