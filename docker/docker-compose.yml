@@ -13,11 +13,6 @@ services:
     ports:
       # Setup wizard UI (only active when config is missing)
       - "${SETUP_PORT:-8090}:8090"
-    depends_on:
-      nexus-qdrant:
-        condition: service_healthy
-      nexus-redis:
-        condition: service_healthy
     volumes:
       # Mount config dir so the web setup wizard can write .env
       - ../config:/app/config
@@ -27,6 +22,16 @@ services:
     environment:
       # Override for Docker: Pieces runs on the host, not localhost
       PIECES_MCP_URL: "http://host.docker.internal:39300"
+      # Continuity Core (C2) backend configuration
+      C2_NEO4J_URI: "${C2_NEO4J_URI:-bolt://nexus-neo4j:7687}"
+      C2_NEO4J_USER: "${C2_NEO4J_USER:-neo4j}"
+      C2_NEO4J_PASSWORD: "${C2_NEO4J_PASSWORD:-nexus-c2-graph}"
+      C2_POSTGRES_URL: "${C2_POSTGRES_URL:-postgresql://c2:c2@nexus-postgres:5432/continuity_core}"
+      C2_QDRANT_URL: "${C2_QDRANT_URL:-http://nexus-qdrant:6333}"
+      C2_REDIS_URL: "${C2_REDIS_URL:-redis://nexus-redis:6379/0}"
+      C2_EMBEDDING_BACKEND: "${C2_EMBEDDING_BACKEND:-openrouter}"
+      C2_OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+      C2_OPENROUTER_EMBED_MODEL: "${C2_OPENROUTER_EMBED_MODEL:-qwen/qwen3-embedding-8b}"
     # For PiecesOS MCP on host machine
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -50,6 +55,7 @@ services:
     image: qdrant/qdrant:latest
     container_name: nexus-qdrant
     restart: unless-stopped
+    profiles: [qdrant]
     ports:
       - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
       - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
@@ -67,6 +73,7 @@ services:
     image: redis:7-alpine
     container_name: nexus-redis
     restart: unless-stopped
+    profiles: [redis]
     volumes:
       - redis_data:/data
     healthcheck:
@@ -77,9 +84,54 @@ services:
     networks:
       - nexus-net
 
+  nexus-neo4j:
+    image: neo4j:5-community
+    container_name: nexus-neo4j
+    restart: unless-stopped
+    profiles: [neo4j]
+    environment:
+      NEO4J_AUTH: neo4j/nexus-c2-graph
+    ports:
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7687}:7687"
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7474}:7474"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - nexus-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  nexus-postgres:
+    image: postgres:16-alpine
+    container_name: nexus-postgres
+    restart: unless-stopped
+    profiles: [postgres]
+    environment:
+      POSTGRES_USER: c2
+      POSTGRES_PASSWORD: c2
+      POSTGRES_DB: continuity_core
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U c2 -d continuity_core"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - nexus-net
+
 volumes:
   qdrant_data:
   redis_data:
+  neo4j_data:
+  postgres_data:
 
 networks:
   nexus-net:
