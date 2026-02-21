@@ -268,6 +268,17 @@ class OrchestratorLoop:
             if result.get("contradictions_found", 0) > 0:
                 await self._post_curiosity_findings(result)
 
+            # Trigger swarm discussion if curiosity signals are actionable.
+            should_discuss = (
+                result.get("stress_after", 0) > 0.2
+                or result.get("contradictions_found", 0) > 0
+                or result.get("voids_found", 0) > 0
+            )
+            if should_discuss:
+                curiosity_signals = await c2.curiosity()
+                if curiosity_signals is not None:
+                    await self._trigger_curiosity_discussion(curiosity_signals)
+
         except Exception:
             log.warning("Night cycle maintenance failed.", exc_info=True)
 
@@ -311,6 +322,219 @@ class OrchestratorLoop:
         embed.set_footer(text="Consider discussing these tensions in the swarm.")
 
         await router.nexus.send(embed=embed)
+
+    async def _trigger_curiosity_discussion(
+        self, curiosity_result: dict[str, Any],
+    ) -> None:
+        """Trigger a Tier 1 swarm discussion about curiosity findings.
+
+        Picks a random model, sends the curiosity prompt, posts the response
+        to #nexus, runs crosstalk reactions, and posts a summary to #memory.
+        """
+        import random
+
+        from nexus.channels.formatter import MessageFormatter
+
+        model_ids = list(self.bot.swarm_models.keys())
+        if not model_ids:
+            return
+
+        # Build the curiosity discussion prompt
+        prompt_parts: list[str] = [
+            "The Continuity Core has detected epistemic tensions in our "
+            "knowledge base that need investigation.",
+            "",
+        ]
+
+        stress = curiosity_result.get("stress_level", 0)
+        prompt_parts.append(f"Epistemic stress level: {stress:.3f}")
+
+        contradictions = curiosity_result.get("contradictions", [])
+        if contradictions:
+            prompt_parts.append(f"\nContradictions ({len(contradictions)}):")
+            for c in contradictions[:5]:
+                prompt_parts.append(
+                    f'  - "{c.get("s1", "")}" vs "{c.get("s2", "")}"'
+                )
+
+        tensions = curiosity_result.get("deep_tensions", [])
+        if tensions:
+            prompt_parts.append(f"\nDeep tensions ({len(tensions)}):")
+            for t in tensions[:5]:
+                prompt_parts.append(
+                    f'  - "{t.get("s1", "")}" vs "{t.get("s2", "")}"'
+                )
+
+        questions = curiosity_result.get("bridging_questions", [])
+        if questions:
+            prompt_parts.append("\nBridging questions:")
+            for q in questions[:5]:
+                prompt_parts.append(f"  - {q}")
+
+        suggested = curiosity_result.get("suggested_action", "")
+        if suggested:
+            prompt_parts.append(f"\nSuggested focus: {suggested}")
+
+        prompt_parts.append(
+            "\nDiscuss these findings. What do they mean? What should we "
+            "investigate or resolve? Be specific and actionable."
+        )
+
+        curiosity_prompt = "\n".join(prompt_parts)
+
+        # Pick a random primary responder
+        primary_model = random.choice(model_ids)
+        system_prompt = self.bot.get_system_prompt(primary_model)
+
+        try:
+            messages = self.bot.conversation.build_messages_for_model(
+                primary_model, system_prompt, limit=10,
+            )
+            # Inject the curiosity prompt as the latest user message
+            messages.append({"role": "user", "content": curiosity_prompt})
+
+            response = await self.bot.openrouter.chat(
+                model=primary_model,
+                messages=messages,
+            )
+
+            # Record in conversation history
+            await self.bot.conversation.add_message(
+                primary_model, response.content,
+            )
+
+            # Post to #nexus
+            embed = MessageFormatter.format_response(
+                primary_model, response.content,
+            )
+            last_msg = await self.bot.router.nexus.send(embed=embed)
+
+            # Store in memory
+            if self.bot.memory_store.is_connected:
+                self.bot._spawn(
+                    self._store_discussion_memory(
+                        response.content, primary_model,
+                    )
+                )
+
+            # Log to C2
+            await self._log_to_c2(
+                actor=primary_model,
+                intent="curiosity_discussion",
+                out=response.content[:500],
+                tags=["curiosity", "autonomous", "swarm"],
+            )
+
+            # Run crosstalk reactions if enabled
+            if self.bot.crosstalk.is_enabled and last_msg is not None:
+                await self._run_curiosity_reactions(
+                    primary_model, model_ids, last_msg,
+                )
+
+            # Post summary to #memory
+            summary_embed = MessageFormatter.format_memory_log(
+                "curiosity_discussion",
+                f"Triggered by stress={stress:.3f}, "
+                f"{len(contradictions)} contradiction(s), "
+                f"{len(tensions)} tension(s). "
+                f"Primary: {primary_model}.",
+            )
+            await self.bot.router.memory.send(embed=summary_embed)
+
+        except Exception:
+            log.error("Curiosity discussion failed.", exc_info=True)
+
+    async def _run_curiosity_reactions(
+        self,
+        primary_model: str,
+        model_ids: list[str],
+        last_msg: Any,
+    ) -> None:
+        """Run crosstalk reactions for the curiosity discussion."""
+        from nexus.channels.formatter import MessageFormatter
+        from nexus.swarm.crosstalk import CrosstalkManager
+
+        reaction_order = self.bot.crosstalk.build_reaction_order(
+            primary_model, model_ids,
+        )
+        reaction_suffix = CrosstalkManager.get_reaction_suffix()
+        reactions_posted = 0
+
+        for reactor_id in reaction_order:
+            if reactions_posted >= 2:
+                break
+            try:
+                reactor_prompt = (
+                    self.bot.get_system_prompt(reactor_id) + reaction_suffix
+                )
+                reactor_messages = (
+                    self.bot.conversation.build_messages_for_model(
+                        reactor_id, reactor_prompt, limit=10,
+                    )
+                )
+                reaction = await asyncio.wait_for(
+                    self.bot.openrouter.chat(
+                        model=reactor_id, messages=reactor_messages,
+                    ),
+                    timeout=30.0,
+                )
+                if CrosstalkManager.is_pass(reaction.content):
+                    continue
+
+                await self.bot.conversation.add_message(
+                    reactor_id, reaction.content,
+                )
+                embed = MessageFormatter.format_response(
+                    reactor_id, reaction.content,
+                )
+                last_msg = await last_msg.reply(
+                    embed=embed, mention_author=False,
+                )
+                reactions_posted += 1
+
+                if self.bot.memory_store.is_connected:
+                    self.bot._spawn(
+                        self._store_discussion_memory(
+                            reaction.content, reactor_id,
+                        )
+                    )
+
+                await self._log_to_c2(
+                    actor=reactor_id,
+                    intent="curiosity_discussion",
+                    out=reaction.content[:500],
+                    tags=["curiosity", "autonomous", "swarm"],
+                )
+
+            except asyncio.TimeoutError:
+                log.warning(
+                    "Curiosity reaction from %s timed out.", reactor_id,
+                )
+            except Exception:
+                log.error(
+                    "Curiosity reaction from %s failed.",
+                    reactor_id,
+                    exc_info=True,
+                )
+
+    async def _store_discussion_memory(
+        self, content: str, source: str,
+    ) -> None:
+        """Store a curiosity discussion response in vector memory."""
+        try:
+            vector = await self.bot.embeddings.embed_one(content)
+            await self.bot.memory_store.store(
+                content=content,
+                vector=vector,
+                source=source,
+                channel="nexus",
+                metadata={"type": "curiosity_discussion"},
+            )
+        except Exception:
+            log.warning(
+                "Failed to store curiosity discussion in memory.",
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # C2 event logging helper
