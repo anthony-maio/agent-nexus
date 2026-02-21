@@ -411,7 +411,7 @@ class AdminCommands(commands.Cog):
 
         Usage: !pieces [query]
         """
-        if not self.bot.pieces.is_connected:
+        if self.bot.pieces is None or not self.bot.pieces.is_connected:
             await ctx.send(
                 "PiecesOS is not connected. Check PIECES_MCP_ENABLED "
                 "and PIECES_MCP_URL in config/.env."

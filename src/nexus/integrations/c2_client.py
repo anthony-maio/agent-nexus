@@ -34,7 +34,7 @@ class C2Client:
     typed async wrappers for each tool.
     """
 
-    _REQUEST_TIMEOUT: float = 30.0
+    _REQUEST_TIMEOUT: float = 90.0
     _WARMUP_TIMEOUT: float = 120.0
     _RESTART_DELAY: float = 2.0
 
