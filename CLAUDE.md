@@ -29,7 +29,7 @@ src/
     commands/      # Discord commands (!ask, !think, !memory, etc.)
     integrations/  # PiecesOS MCP client
     personality/   # System prompts, model identities
-  continuity_core/ # Memory engine (copied from upstream, do not rewrite)
+  continuity_core/ # Memory engine (part of monorepo, edit freely)
   synthesis/       # Capability ecosystem (Phase 3)
 ```
 
@@ -60,7 +60,7 @@ ruff format src/
 - Channel routing goes through `channels/router.py`. The three channel references (`human`, `nexus`, `memory`) are resolved at startup.
 - The orchestrator background loop (`orchestrator/loop.py`) runs on a configurable interval and dispatches LiquidAI task agents via `orchestrator/dispatch.py`.
 - Consensus decisions (`swarm/consensus.py`) post to `#nexus`, collect model responses, and require configurable agreement threshold.
-- `continuity_core/` is an upstream dependency copied as-is. Edit it in its own repo and re-copy, don't modify in-place here.
+- `continuity_core/` is part of this monorepo. It was originally a separate project but is now maintained here. Edit freely.
 
 ## Environment Variables
 
@@ -69,6 +69,10 @@ Everything else has defaults. See `config/.env.example` for full list.
 
 ## Docker Services
 
+All infrastructure services use Docker Compose profiles. Users can skip any they already run externally and provide their own connection URLs via environment variables.
+
 - `nexus-bot` — The Discord bot (Python 3.12)
-- `nexus-qdrant` — Vector memory (port 6333)
-- `nexus-redis` — Working memory cache (port 6379)
+- `nexus-qdrant` — Vector memory (port 6333, profile: qdrant)
+- `nexus-redis` — Working memory cache (port 6379, profile: redis)
+- `nexus-neo4j` — C2 knowledge graph (port 7687, profile: neo4j)
+- `nexus-postgres` — C2 event log (port 5432, profile: postgres)
