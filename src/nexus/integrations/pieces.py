@@ -155,6 +155,7 @@ class PiecesMCPClient:
     async def get_recent_activity(
         self,
         query: str = "recent activity and context",
+        _is_retry: bool = False,
     ) -> str | None:
         """Query PiecesOS LTM for recent user activity.
 
@@ -196,13 +197,21 @@ class PiecesMCPClient:
                     log.warning(
                         "Pieces LTM query returned HTTP %d", resp.status,
                     )
-                    # Session may have expired — mark for reconnect.
-                    if resp.status in (400, 404):
+                    # Session expired — reconnect and retry once.
+                    if resp.status in (400, 404) and not _is_retry:
                         self._connected = False
                         self._messages_url = None
+                        log.info("Pieces session expired, reconnecting...")
+                        return await self.get_recent_activity(
+                            query=query, _is_retry=True,
+                        )
                     return None
 
                 data = await resp.json()
+                log.info(
+                    "Pieces LTM response keys: %s",
+                    list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+                )
 
                 # Check for JSON-RPC error
                 if "error" in data:
@@ -215,7 +224,17 @@ class PiecesMCPClient:
                 result = data.get("result", {})
                 content = result.get("content", [])
                 if content and isinstance(content, list):
-                    return content[0].get("text", "")
+                    text = content[0].get("text", "")
+                    log.info(
+                        "Pieces LTM returned %d chars",
+                        len(text),
+                    )
+                    return text
+
+                log.warning(
+                    "Pieces LTM empty content: result=%s",
+                    str(result)[:200],
+                )
                 return None
         except Exception as exc:
             log.warning("Pieces LTM query failed: %s", exc)
