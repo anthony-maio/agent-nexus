@@ -43,6 +43,10 @@ CHANNEL_SPECS: Final[dict[str, dict[str, str]]] = {
         "name": "memory",
         "topic": "Memory writes, activity logs, daily summaries. Audit trail.",
     },
+    "logs": {
+        "name": "logs",
+        "topic": "Bot operational logs. Orchestrator cycles, C2 events, errors.",
+    },
 }
 
 
@@ -120,6 +124,13 @@ class ChannelRouter:
         if not self._ready:
             raise RuntimeError("ChannelRouter not initialized. Call ensure_channels() first.")
         return self.channels["memory"]
+
+    @property
+    def logs(self) -> discord.TextChannel:
+        """The ``#logs`` channel for operational logging."""
+        if not self._ready:
+            raise RuntimeError("ChannelRouter not initialized. Call ensure_channels() first.")
+        return self.channels["logs"]
 
     # ------------------------------------------------------------------
     # Channel identification helpers

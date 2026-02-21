@@ -193,6 +193,17 @@ class NexusBot(commands.Bot):
         if self.pieces is not None:
             await self.activity_monitor.start()
 
+        # Attach Discord log handler to pipe logs to #logs channel
+        from nexus.channels.discord_log import DiscordLogHandler
+
+        self._discord_log_handler = DiscordLogHandler(self.router.logs)
+        fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        self._discord_log_handler.setFormatter(
+            logging.Formatter(fmt, datefmt="%H:%M:%S")
+        )
+        logging.getLogger("nexus").addHandler(self._discord_log_handler)
+        self._discord_log_handler.start()
+
         # Announce in #nexus
         from nexus.personality.identities import format_name
 
