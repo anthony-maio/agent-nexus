@@ -3,7 +3,8 @@
 Provides Discord commands for inspecting and managing the running swarm:
 model listing (``!models``), cost tracking (``!costs``), configuration
 display (``!config``), crosstalk toggling (``!crosstalk``), autonomy mode
-(``!autonomy``), curiosity scan (``!curiosity``), and status (``!status``).
+(``!autonomy``), curiosity scan (``!curiosity``), C2 backend health
+(``!c2status``), C2 event log (``!c2events``), and status (``!status``).
 
 Usage::
 
@@ -13,7 +14,6 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import discord
@@ -30,7 +30,8 @@ class AdminCommands(commands.Cog):
 
     This cog provides commands for operators to inspect swarm configuration,
     review active models and their pricing, monitor session costs, toggle
-    runtime behaviours, manage autonomy mode, and trigger curiosity scans.
+    runtime behaviours, manage autonomy mode, trigger curiosity scans,
+    check C2 backend health, and browse C2 event logs.
 
     Attributes:
         bot: The parent bot instance that owns the swarm infrastructure.
@@ -276,6 +277,89 @@ class AdminCommands(commands.Cog):
 
         await ctx.send(embed=embed)
 
+    # ------------------------------------------------------------------
+    # !c2status -- C2 backend health
+    # ------------------------------------------------------------------
+
+    @commands.command(name="c2status")
+    async def c2_status(self, ctx: commands.Context) -> None:
+        """Show Continuity Core backend health and system metrics."""
+        if not self.bot.c2.is_running:
+            await ctx.send("C2 is not running.")
+            return
+
+        result = await self.bot.c2.status()
+        if result is None:
+            await ctx.send("C2 status unavailable.")
+            return
+
+        embed = discord.Embed(title="Continuity Core Status", color=0x3498DB)
+        embed.add_field(
+            name="Neo4j",
+            value=f"{result.get('neo4j', 'unknown')} ({result.get('neo4j_nodes', 0)} nodes)",
+            inline=True,
+        )
+        embed.add_field(name="Qdrant (C2)", value=result.get("qdrant", "unknown"), inline=True)
+        embed.add_field(name="Redis", value=result.get("redis", "unknown"), inline=True)
+        evt_backend = result.get("event_backend", "unknown")
+        evt_count = result.get("event_count", 0)
+        embed.add_field(
+            name="Event Log",
+            value=f"{evt_backend} ({evt_count} events)",
+            inline=True,
+        )
+        embed.add_field(
+            name="Embeddings",
+            value=result.get("embedding_backend", "unknown"),
+            inline=True,
+        )
+        embed.add_field(
+            name="MRA Stress",
+            value=f"{result.get('stress_level', 0):.3f}",
+            inline=True,
+        )
+        if result.get("fallback_memory_count", 0) > 0:
+            embed.add_field(
+                name="Fallback Memory",
+                value=f"{result['fallback_memory_count']} items (in-memory)",
+                inline=True,
+            )
+
+        await ctx.send(embed=embed)
+
+    # ------------------------------------------------------------------
+    # !c2events -- recent C2 event log
+    # ------------------------------------------------------------------
+
+    @commands.command(name="c2events")
+    async def c2_events(self, ctx: commands.Context, limit: int = 10) -> None:
+        """Show recent C2 events. Usage: !c2events [count]"""
+        if not self.bot.c2.is_running:
+            await ctx.send("C2 is not running.")
+            return
+
+        limit = max(1, min(limit, 20))
+        result = await self.bot.c2.events(limit=limit)
+        if result is None or not result.get("events"):
+            await ctx.send("No C2 events found.")
+            return
+
+        from datetime import datetime, timezone
+
+        lines = []
+        for evt in result["events"]:
+            ts = datetime.fromtimestamp(evt["timestamp"], tz=timezone.utc).strftime("%H:%M:%S")
+            actor = evt.get("actor", "?")
+            intent = evt.get("intent", "?")
+            output = evt.get("output", "")[:80]
+            lines.append(f"`{ts}` **{actor}** [{intent}] {output}")
+
+        embed = discord.Embed(
+            title=f"C2 Events (last {result.get('count', 0)})",
+            description="\n".join(lines),
+            color=0x555555,
+        )
+        await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:
