@@ -6,22 +6,25 @@ via an MCP server.  This module provides an async client that queries that
 server so the Agent Nexus swarm can passively observe what the user is
 working on -- without the user needing to send explicit prompts.
 
-The MCP server uses SSE transport (2024-11-05 spec) at ``localhost:39300``.
-On connect, we read the SSE stream to discover the messages endpoint URL
-(which includes a sessionId and token), then POST JSON-RPC tool calls there.
+Uses the MCP Streamable HTTP transport (2025-03-26 spec):
+
+1. POST ``initialize`` to ``/mcp`` — get ``Mcp-Session-Id`` header back.
+2. POST ``tools/call`` to ``/mcp`` with that session header for each query.
 
 Usage::
 
     from nexus.integrations.pieces import PiecesMCPClient
 
-    async with PiecesMCPClient() as client:
-        if await client.connect():
-            activity = await client.get_recent_activity()
-            print(activity)
+    client = PiecesMCPClient()
+    if await client.connect():
+        activity = await client.get_recent_activity()
+        print(activity)
+    await client.close()
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from types import TracebackType
 
@@ -29,23 +32,18 @@ import aiohttp
 
 log = logging.getLogger(__name__)
 
-# SSE endpoint path for the 2024-11-05 MCP transport
-_SSE_PATH = "/model_context_protocol/2024-11-05/sse"
+# MCP endpoint path (Streamable HTTP transport)
+_MCP_PATH = "/model_context_protocol/2025-03-26/mcp"
 
 
 class PiecesMCPClient:
     """Async client for the PiecesOS MCP server.
 
-    PiecesOS provides a Long-Term Memory (LTM) engine that tracks user
-    activity.  The MCP server exposes tools via SSE transport at
-    ``localhost:39300``.
-
-    Primary tool: ``ask_pieces_ltm`` -- queries activity context.
+    Establishes a session via the ``initialize`` handshake, then uses
+    the ``Mcp-Session-Id`` header for all subsequent tool calls.
 
     Args:
-        base_url: HTTP base URL for the PiecesOS MCP server.  Defaults to
-            ``http://host.docker.internal:39300`` which works when Agent
-            Nexus runs inside a Docker container on the same host.
+        base_url: HTTP base URL for the PiecesOS MCP server.
     """
 
     def __init__(
@@ -55,7 +53,7 @@ class PiecesMCPClient:
         self.base_url: str = base_url.rstrip("/")
         self._session: aiohttp.ClientSession | None = None
         self._connected: bool = False
-        self._messages_url: str | None = None
+        self._session_id: str | None = None
         self._request_id: int = 0
 
     # -- Async context manager ------------------------------------------------
@@ -71,7 +69,7 @@ class PiecesMCPClient:
     ) -> None:
         await self.close()
 
-    # -- Connection management ------------------------------------------------
+    # -- Helpers --------------------------------------------------------------
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Return the shared HTTP session, creating it lazily if needed."""
@@ -84,70 +82,91 @@ class PiecesMCPClient:
         self._request_id += 1
         return self._request_id
 
-    async def connect(self) -> bool:
-        """Establish a session with the PiecesOS MCP server via SSE.
+    @property
+    def _mcp_url(self) -> str:
+        return f"{self.base_url}{_MCP_PATH}"
 
-        Connects to the SSE endpoint and reads the first ``endpoint``
-        event to discover the messages URL (which includes sessionId and
-        token parameters).
+    def _headers(self) -> dict[str, str]:
+        """Headers for MCP requests, including session ID if available."""
+        h: dict[str, str] = {"Content-Type": "application/json"}
+        if self._session_id:
+            h["Mcp-Session-Id"] = self._session_id
+        return h
+
+    # -- Connection management ------------------------------------------------
+
+    async def connect(self) -> bool:
+        """Initialize an MCP session with PiecesOS.
+
+        Sends the ``initialize`` JSON-RPC request.  The server returns
+        the ``Mcp-Session-Id`` header which is used for all subsequent
+        requests.
 
         Returns:
             ``True`` if the session was established, ``False`` otherwise.
         """
         try:
             session = await self._ensure_session()
-            sse_url = f"{self.base_url}{_SSE_PATH}"
+            payload = {
+                "jsonrpc": "2.0",
+                "id": self._next_id(),
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {"tools": {}},
+                    "clientInfo": {
+                        "name": "agent-nexus",
+                        "version": "0.1.0",
+                    },
+                },
+            }
 
-            async with session.get(
-                sse_url,
+            async with session.post(
+                self._mcp_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 if resp.status != 200:
                     log.warning(
-                        "PiecesOS SSE endpoint returned HTTP %d",
-                        resp.status,
+                        "PiecesOS initialize returned HTTP %d", resp.status,
                     )
                     return False
 
-                # Read the SSE stream until we get the endpoint event.
-                # Format: "event: endpoint\ndata: /path?sessionId=...&token=...\n\n"
-                messages_path: str | None = None
-                event_type: str | None = None
-
-                async for raw_line in resp.content:
-                    line = raw_line.decode().rstrip("\r\n")
-
-                    if line.startswith("event:"):
-                        event_type = line[len("event:"):].strip()
-                    elif line.startswith("data:") and event_type == "endpoint":
-                        messages_path = line[len("data:"):].strip()
-                        break
-                    elif not line:
-                        # Empty line = end of event; reset if we didn't
-                        # match the one we wanted.
-                        event_type = None
-
-                if not messages_path:
+                self._session_id = resp.headers.get("Mcp-Session-Id")
+                if not self._session_id:
                     log.warning(
-                        "PiecesOS SSE did not return an endpoint event",
+                        "PiecesOS initialize missing Mcp-Session-Id header",
                     )
                     return False
 
-                # Build full messages URL from the relative path
-                self._messages_url = f"{self.base_url}{messages_path}"
-                self._connected = True
-                log.info(
-                    "PiecesOS MCP connected at %s (messages=%s)",
-                    self.base_url,
-                    self._messages_url[:80],
-                )
-                return True
+                # Parse server info for logging
+                raw = await resp.text()
+                try:
+                    data = json.loads(raw)
+                    server_info = data.get("result", {}).get(
+                        "serverInfo", {},
+                    )
+                    log.info(
+                        "PiecesOS MCP session established "
+                        "(server=%s v%s, session=%s)",
+                        server_info.get("name", "unknown"),
+                        server_info.get("version", "?"),
+                        self._session_id[:16] + "...",
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    log.info(
+                        "PiecesOS MCP session established (session=%s)",
+                        self._session_id[:16] + "...",
+                    )
+
+            self._connected = True
+            return True
 
         except Exception as exc:
             log.warning("PiecesOS not available: %s", exc)
             self._connected = False
-            self._messages_url = None
-            await self.close()
+            self._session_id = None
             return False
 
     # -- Public API -----------------------------------------------------------
@@ -159,64 +178,66 @@ class PiecesMCPClient:
     ) -> str | None:
         """Query PiecesOS LTM for recent user activity.
 
-        Uses the ``ask_pieces_ltm`` tool exposed by the MCP server to
-        retrieve a natural-language summary of what the user has been
-        doing recently.  Automatically reconnects if the session expired.
+        Posts a ``tools/call`` request for ``ask_pieces_ltm`` with the
+        established ``Mcp-Session-Id``.  Auto-reconnects if the session
+        has expired.
 
         Args:
-            query: Free-text query forwarded to the LTM engine.  Defaults
-                to a broad "recent activity and context" request.
+            query: Free-text query forwarded to the LTM engine.
 
         Returns:
-            A text summary of recent activity, or ``None`` if the server
-            is unreachable or the query fails.
+            A text summary of recent activity, or ``None`` if unavailable.
         """
-        # Auto-reconnect if session expired
-        if not self._connected or self._messages_url is None:
+        # Auto-reconnect if needed
+        if not self._connected or self._session_id is None:
             if not await self.connect():
                 return None
         if self._session is None:
             return None
 
+        payload = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": "tools/call",
+            "params": {
+                "name": "ask_pieces_ltm",
+                "arguments": {"query": query},
+            },
+        }
+
         try:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": self._next_id(),
-                "method": "tools/call",
-                "params": {
-                    "name": "ask_pieces_ltm",
-                    "arguments": {"query": query},
-                },
-            }
             async with self._session.post(
-                self._messages_url,
+                self._mcp_url,
                 json=payload,
+                headers=self._headers(),
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:
                     log.warning(
                         "Pieces LTM query returned HTTP %d", resp.status,
                     )
-                    # Session expired — reconnect and retry once.
+                    # Session expired — reconnect and retry once
                     if resp.status in (400, 404) and not _is_retry:
                         self._connected = False
-                        self._messages_url = None
+                        self._session_id = None
                         log.info("Pieces session expired, reconnecting...")
                         return await self.get_recent_activity(
                             query=query, _is_retry=True,
                         )
                     return None
 
-                data = await resp.json()
-                log.info(
-                    "Pieces LTM response keys: %s",
-                    list(data.keys()) if isinstance(data, dict) else type(data).__name__,
-                )
+                # Response may be text/plain — force parse
+                raw = await resp.text()
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.warning("Pieces non-JSON response: %.200s", raw)
+                    return None
 
                 # Check for JSON-RPC error
                 if "error" in data:
                     log.warning(
-                        "Pieces LTM query error: %s",
+                        "Pieces LTM error: %s",
                         data["error"].get("message", data["error"]),
                     )
                     return None
@@ -225,10 +246,7 @@ class PiecesMCPClient:
                 content = result.get("content", [])
                 if content and isinstance(content, list):
                     text = content[0].get("text", "")
-                    log.info(
-                        "Pieces LTM returned %d chars",
-                        len(text),
-                    )
+                    log.info("Pieces LTM returned %d chars", len(text))
                     return text
 
                 log.warning(
@@ -236,6 +254,7 @@ class PiecesMCPClient:
                     str(result)[:200],
                 )
                 return None
+
         except Exception as exc:
             log.warning("Pieces LTM query failed: %s", exc)
             return None
@@ -243,17 +262,12 @@ class PiecesMCPClient:
     # -- Lifecycle ------------------------------------------------------------
 
     async def close(self) -> None:
-        """Close the underlying HTTP session.
-
-        Safe to call multiple times.  After closing, :attr:`is_connected`
-        returns ``False`` and a new session will be created on the next
-        :meth:`connect` call.
-        """
+        """Close all connections. Safe to call multiple times."""
         if self._session is not None and not self._session.closed:
             await self._session.close()
         self._session = None
         self._connected = False
-        self._messages_url = None
+        self._session_id = None
 
     @property
     def is_connected(self) -> bool:
