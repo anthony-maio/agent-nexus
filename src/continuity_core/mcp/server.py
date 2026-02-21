@@ -5,9 +5,16 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
-from continuity_core.mcp.tools import build_context, curiosity, introspect, read_events, status, write_event
-from continuity_core.mcp.tools.maintenance import maintenance
 from continuity_core import __version__
+from continuity_core.mcp.tools import (
+    build_context,
+    curiosity,
+    introspect,
+    read_events,
+    status,
+    write_event,
+)
+from continuity_core.mcp.tools.maintenance import maintenance
 
 
 @dataclass
@@ -219,7 +226,11 @@ def main() -> None:
         try:
             req = json.loads(line)
         except json.JSONDecodeError:
-            err = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+            err = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            }
             sys.stdout.write(json.dumps(err) + "\n")
             sys.stdout.flush()
             continue
