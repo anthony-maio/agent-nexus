@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
-from continuity_core.mcp.tools import build_context, curiosity, introspect, write_event
+from continuity_core.mcp.tools import build_context, curiosity, introspect, read_events, status, write_event
 from continuity_core.mcp.tools.maintenance import maintenance
 from continuity_core import __version__
 
@@ -137,6 +137,33 @@ def _build_registry() -> ToolRegistry:
                 },
             },
             handler=maintenance,
+        )
+    )
+    registry.register(
+        Tool(
+            name="c2.events",
+            description="Return the most recent events from the C2 event log.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of events (1-50, default 10)",
+                    },
+                },
+            },
+            handler=read_events,
+        )
+    )
+    registry.register(
+        Tool(
+            name="c2.status",
+            description="Return C2 backend health, item counts, and MRA stress level.",
+            input_schema={
+                "type": "object",
+                "properties": {},
+            },
+            handler=status,
         )
     )
     return registry
