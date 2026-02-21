@@ -248,3 +248,11 @@ class C2Client:
         return await self._call_tool("c2.maintenance", {
             "graph": graph or {},
         })
+
+    async def status(self) -> dict[str, Any] | None:
+        """Query C2 backend health and system metrics."""
+        return await self._call_tool("c2.status")
+
+    async def events(self, limit: int = 10) -> dict[str, Any] | None:
+        """Read recent events from the C2 event log."""
+        return await self._call_tool("c2.events", {"limit": limit})
