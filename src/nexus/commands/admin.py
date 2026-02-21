@@ -361,6 +361,44 @@ class AdminCommands(commands.Cog):
         )
         await ctx.send(embed=embed)
 
+    # ------------------------------------------------------------------
+    # !discuss -- trigger curiosity-driven swarm discussion
+    # ------------------------------------------------------------------
+
+    @commands.command(name="discuss")
+    async def discuss_curiosity(self, ctx: commands.Context) -> None:
+        """Trigger the swarm to discuss C2 curiosity findings."""
+        if not self.bot.c2.is_running:
+            await ctx.send("C2 is not running. Cannot trigger discussion.")
+            return
+
+        await ctx.send("Querying C2 for epistemic tensions...")
+
+        result = await self.bot.c2.curiosity()
+        if result is None:
+            await ctx.send("C2 returned no curiosity data.")
+            return
+
+        has_signals = (
+            result.get("stress_level", 0) > 0.1
+            or result.get("contradictions")
+            or result.get("deep_tensions")
+            or result.get("bridging_questions")
+        )
+
+        if not has_signals:
+            await ctx.send("No epistemic tensions detected — nothing to discuss.")
+            return
+
+        await ctx.send(
+            f"Found signals (stress={result.get('stress_level', 0):.3f}, "
+            f"{len(result.get('contradictions', []))} contradiction(s), "
+            f"{len(result.get('deep_tensions', []))} tension(s)). "
+            f"Triggering swarm discussion..."
+        )
+
+        await self.bot.orchestrator._trigger_curiosity_discussion(result)
+
 
 async def setup(bot: commands.Bot) -> None:
     """Load the AdminCommands cog into the bot."""
