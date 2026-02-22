@@ -56,3 +56,17 @@ def test_postgres_url_default(monkeypatch):
     settings = NexusSettings()
     assert hasattr(settings, "POSTGRES_URL")
     assert "postgresql" in settings.POSTGRES_URL
+
+
+def test_c2_tuning_fields_exist(monkeypatch):
+    """NexusSettings should include C2 algorithm tuning fields."""
+    monkeypatch.setenv("DISCORD_TOKEN", "test-token")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    from nexus.config import NexusSettings
+    settings = NexusSettings()
+    assert settings.C2_TOKEN_BUDGET == 2048
+    assert settings.C2_EPSILON == 0.05
+    assert settings.C2_LAMBDA == 0.001
+    assert settings.C2_EDGE_HALF_LIFE_DAYS == 7.0
+    assert settings.C2_DECAY_RATE == 0.95
+    assert settings.C2_RECENCY_HALF_LIFE_DAYS == 14.0

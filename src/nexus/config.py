@@ -169,6 +169,42 @@ class NexusSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Continuity Core (C2) algorithm tuning
+    # ------------------------------------------------------------------
+    C2_TOKEN_BUDGET: int = Field(
+        default=2048,
+        ge=256,
+        description="Token budget for C2 context composition.",
+    )
+    C2_EPSILON: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="Exploration fraction in C2 context selection.",
+    )
+    C2_LAMBDA: float = Field(
+        default=0.001,
+        ge=0.0,
+        description="Per-token cost penalty in C2 context selection.",
+    )
+    C2_EDGE_HALF_LIFE_DAYS: float = Field(
+        default=7.0,
+        ge=0.1,
+        description="Half-life in days for C2 graph edge decay.",
+    )
+    C2_DECAY_RATE: float = Field(
+        default=0.95,
+        ge=0.0,
+        le=1.0,
+        description="Salience decay rate for C2 memory items.",
+    )
+    C2_RECENCY_HALF_LIFE_DAYS: float = Field(
+        default=14.0,
+        ge=0.1,
+        description="Half-life in days for C2 recency scoring.",
+    )
+
+    # ------------------------------------------------------------------
     # Orchestrator
     # ------------------------------------------------------------------
     ORCHESTRATOR_INTERVAL: int = Field(
