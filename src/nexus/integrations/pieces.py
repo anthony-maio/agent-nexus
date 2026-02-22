@@ -109,6 +109,7 @@ class PiecesMCPClient:
             ``True`` if the session was established, ``False`` otherwise.
         """
         try:
+            log.info("Connecting to PiecesOS at %s", self._mcp_url)
             session = await self._ensure_session()
             payload = {
                 "jsonrpc": "2.0",
@@ -170,7 +171,12 @@ class PiecesMCPClient:
             return True
 
         except Exception as exc:
-            log.warning("PiecesOS not available: %s", exc)
+            log.warning(
+                "PiecesOS not available at %s (%s): %s",
+                self._mcp_url,
+                type(exc).__name__,
+                exc or "(no details)",
+            )
             self._connected = False
             self._session_id = None
             return False
@@ -262,7 +268,11 @@ class PiecesMCPClient:
                 return None
 
         except Exception as exc:
-            log.warning("Pieces LTM query failed: %s", exc)
+            log.warning(
+                "Pieces LTM query failed (%s): %s",
+                type(exc).__name__,
+                exc or "(no details)",
+            )
             return None
 
     # -- Lifecycle ------------------------------------------------------------

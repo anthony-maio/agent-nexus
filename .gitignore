@@ -1,5 +1,6 @@
 # Local planning and development files
 .local/
+docs/plans/
 # Files not intended for public repository
 .private/
 
