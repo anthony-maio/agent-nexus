@@ -60,6 +60,9 @@ class StateGatherer:
     # The query used for the general-purpose memory search.
     _MEMORY_QUERY: str = "current tasks and priorities"
 
+    # Number of recent task results to include in state.
+    _TASK_RESULT_LIMIT: int = 5
+
     def __init__(self, bot: Any) -> None:
         self.bot = bot
 
@@ -72,7 +75,8 @@ class StateGatherer:
 
         Returns:
             A dict with keys ``timestamp``, ``recent_messages``, ``memories``,
-            ``activity``, ``curiosity``, and ``has_activity``.
+            ``activity``, ``curiosity``, ``task_results``, ``active_goals``,
+            and ``has_activity``.
         """
         state: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -80,6 +84,8 @@ class StateGatherer:
             "memories": [],
             "activity": None,
             "curiosity": None,
+            "task_results": [],
+            "active_goals": "",
             "has_activity": False,
         }
 
@@ -90,21 +96,26 @@ class StateGatherer:
             self._gather_memories(),
             self._gather_activity(),
             self._gather_curiosity(),
+            self._gather_task_results(),
+            self._gather_active_goals(),
             return_exceptions=True,
         )
 
-        # Unpack, treating exceptions as None
-        messages = results[0] if not isinstance(results[0], BaseException) else None
-        memories = results[1] if not isinstance(results[1], BaseException) else None
-        activity = results[2] if not isinstance(results[2], BaseException) else None
-        curiosity = results[3] if not isinstance(results[3], BaseException) else None
+        source_names = [
+            "conversation", "memories", "activity", "curiosity",
+            "task_results", "active_goals",
+        ]
 
-        # Log any exceptions
-        for i, (name, r) in enumerate(zip(
-            ["conversation", "memories", "activity", "curiosity"], results,
-        )):
+        # Unpack, treating exceptions as None
+        unpacked: list[Any] = []
+        for i, (name, r) in enumerate(zip(source_names, results)):
             if isinstance(r, BaseException):
                 log.warning("State gather %s failed: %s", name, r)
+                unpacked.append(None)
+            else:
+                unpacked.append(r)
+
+        messages, memories, activity, curiosity, task_results, active_goals = unpacked
 
         if messages is not None:
             state["recent_messages"] = messages
@@ -114,20 +125,29 @@ class StateGatherer:
             state["activity"] = activity
         if curiosity is not None:
             state["curiosity"] = curiosity
+        if task_results is not None:
+            state["task_results"] = task_results
+        if active_goals is not None:
+            state["active_goals"] = active_goals
 
         state["has_activity"] = bool(
             state["recent_messages"]
             or state["memories"]
             or state["activity"]
             or state["curiosity"]
+            or state["task_results"]
+            or state["active_goals"]
         )
 
         log.debug(
-            "State gathered: %d message(s), %d memory(ies), activity=%s, curiosity=%s.",
+            "State gathered: %d message(s), %d memory(ies), %d result(s), "
+            "activity=%s, curiosity=%s, goals=%s.",
             len(state["recent_messages"]),
             len(state["memories"]),
+            len(state["task_results"]),
             "yes" if state["activity"] else "no",
             "yes" if state["curiosity"] else "no",
+            "yes" if state["active_goals"] else "no",
         )
         return state
 
@@ -263,6 +283,59 @@ class StateGatherer:
                 "Failed to gather C2 curiosity signals.",
                 exc_info=True,
             )
+            return None
+
+    # ------------------------------------------------------------------
+    # Task results (feedback loop)
+    # ------------------------------------------------------------------
+
+    async def _gather_task_results(self) -> list[dict[str, Any]] | None:
+        """Retrieve recent task dispatch results for decision feedback.
+
+        Returns a list of result dicts from the dispatcher's recent history
+        so the decision engine can see what has already been attempted and
+        what succeeded or failed.
+        """
+        try:
+            dispatcher = getattr(self.bot, "dispatcher", None)
+            if dispatcher is None:
+                return None
+
+            results = dispatcher.recent_results[-self._TASK_RESULT_LIMIT :]
+            return [
+                {
+                    "type": r.action_type,
+                    "description": r.description,
+                    "success": r.success,
+                    "result_snippet": r.result[:300],
+                    "model": r.model_used,
+                    "timestamp": r.timestamp.isoformat(),
+                }
+                for r in results
+            ]
+        except Exception:
+            log.warning("Failed to gather task results.", exc_info=True)
+            return None
+
+    # ------------------------------------------------------------------
+    # Active goals
+    # ------------------------------------------------------------------
+
+    async def _gather_active_goals(self) -> str | None:
+        """Build a prompt-ready summary of active goals and their tasks.
+
+        Returns a text summary from the GoalStore, or ``None`` if the
+        goal store is not available.
+        """
+        try:
+            goal_store = getattr(self.bot, "goal_store", None)
+            if goal_store is None:
+                return None
+
+            summary = await goal_store.summarize_for_prompt()
+            return summary if summary != "(No active goals)" else None
+        except Exception:
+            log.warning("Failed to gather active goals.", exc_info=True)
             return None
 
     # ------------------------------------------------------------------

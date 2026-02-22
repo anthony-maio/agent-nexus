@@ -16,16 +16,26 @@ from nexus.memory.store import MemoryStore
 from nexus.models.embeddings import EmbeddingProvider
 from nexus.models.ollama import OllamaClient
 from nexus.models.openrouter import OpenRouterClient
-from nexus.models.registry import get_active_swarm, get_embedding, ModelSpec
+from nexus.models.registry import ModelSpec, get_active_swarm, get_embedding
 from nexus.orchestrator.activity import ActivityMonitor
 from nexus.orchestrator.autonomy import AutonomyGate, AutonomyMode
 from nexus.orchestrator.dispatch import TaskDispatcher
+from nexus.orchestrator.goals import GoalStore
+from nexus.orchestrator.health import HealthMonitor
 from nexus.orchestrator.loop import OrchestratorLoop
 from nexus.orchestrator.state import StateGatherer
+from nexus.orchestrator.triggers import (
+    ActivityTrigger,
+    GoalStaleTrigger,
+    MessageRateTrigger,
+    ScheduledTrigger,
+    TriggerManager,
+)
 from nexus.personality.prompts import build_system_prompt
 from nexus.swarm.consensus import ConsensusProtocol
 from nexus.swarm.conversation import ConversationManager
 from nexus.swarm.crosstalk import CrosstalkManager
+from nexus.swarm.initiative import SwarmInitiative
 
 log = logging.getLogger(__name__)
 
@@ -37,11 +47,14 @@ class NexusBot(commands.Bot):
     - OpenRouter + Ollama model clients
     - Qdrant memory store + embedding provider
     - 3-channel routing (human, nexus, memory)
-    - Swarm conversation + crosstalk + consensus
+    - Swarm conversation + crosstalk + consensus + initiative
     - Background orchestrator loop
+    - Persistent goal store (Redis-backed)
+    - Trigger manager (activity, message rate, goal staleness, scheduled)
+    - Health monitor (periodic self-checks)
     - Continuity Core (C2) cognitive memory
-    - Activity monitor (Pieces polling)
-    - Autonomy gate (observe/escalate/autopilot)
+    - Activity monitor (Pieces polling — legacy, subsumed by triggers)
+    - Autonomy gate (observe/escalate/autopilot) with dynamic risk scoring
     - PiecesOS integration (optional)
     """
 
@@ -97,21 +110,45 @@ class NexusBot(commands.Bot):
         self.conversation = ConversationManager()
         self.crosstalk = CrosstalkManager(probability=settings.CROSSTALK_PROBABILITY)
         self.consensus = ConsensusProtocol(threshold=settings.CONSENSUS_THRESHOLD)
+        self.initiative = SwarmInitiative(
+            self,
+            cooldown_minutes=settings.INITIATIVE_COOLDOWN_MINUTES,
+            enabled=settings.INITIATIVE_ENABLED,
+        )
 
         # --- Orchestrator ---
         self.state_gatherer = StateGatherer(self)
         self.dispatcher = TaskDispatcher(self)
         self.orchestrator = OrchestratorLoop(self, interval=settings.ORCHESTRATOR_INTERVAL)
 
+        # --- Goal Store (Redis-backed persistence) ---
+        self.goal_store = GoalStore(
+            redis_url=settings.REDIS_URL,
+            max_active_goals=settings.GOAL_MAX_ACTIVE,
+            default_max_age_hours=settings.GOAL_MAX_AGE_HOURS,
+        )
+
         # --- Continuity Core (C2) ---
         self.c2 = C2Client()
 
-        # --- Autonomy Gate ---
-        self.autonomy_gate = AutonomyGate(AutonomyMode(settings.AUTONOMY_MODE))
+        # --- Autonomy Gate (with dynamic risk scoring) ---
+        self.autonomy_gate = AutonomyGate(
+            AutonomyMode(settings.AUTONOMY_MODE), bot=self,
+        )
 
-        # --- Activity Monitor ---
+        # --- Activity Monitor (legacy — kept for backward compat) ---
         self.activity_monitor = ActivityMonitor(
             self, poll_interval=settings.ACTIVITY_POLL_INTERVAL,
+        )
+
+        # --- Trigger Manager (replaces sole reliance on ActivityMonitor) ---
+        self.trigger_manager = TriggerManager(
+            self, check_interval=settings.TRIGGER_CHECK_INTERVAL,
+        )
+
+        # --- Health Monitor ---
+        self.health_monitor = HealthMonitor(
+            self, check_interval=settings.HEALTH_CHECK_INTERVAL,
         )
 
         # --- Integrations ---
@@ -153,6 +190,9 @@ class NexusBot(commands.Bot):
         except Exception as e:
             log.warning(f"Memory store initialization failed: {e}")
 
+        # Initialize goal store (Redis)
+        await self.goal_store.connect()
+
         # Check Ollama availability
         if self.ollama:
             available = await self.ollama.is_available()
@@ -190,9 +230,16 @@ class NexusBot(commands.Bot):
         # Start orchestrator
         await self.orchestrator.start()
 
-        # Start activity monitor (if Pieces is available)
+        # Start activity monitor (legacy — if Pieces is available)
         if self.pieces is not None:
             await self.activity_monitor.start()
+
+        # Register and start trigger manager
+        self._setup_triggers()
+        await self.trigger_manager.start()
+
+        # Start health monitor
+        await self.health_monitor.start()
 
         # Attach Discord log handler to pipe logs to #logs channel
         from nexus.channels.discord_log import DiscordLogHandler
@@ -209,14 +256,51 @@ class NexusBot(commands.Bot):
         from nexus.personality.identities import format_name
 
         model_names = [format_name(mid) for mid in model_ids]
+        features = []
+        if self.goal_store.is_connected:
+            features.append("goals")
+        features.append(f"autonomy={self.autonomy_gate.mode.value}")
+        features.append(f"c2={'on' if self.c2.is_running else 'off'}")
+        features.append(f"triggers={len(self.trigger_manager._triggers)}")
+
         await self.router.nexus.send(
-            f"**Agent Nexus online.** Swarm: {', '.join(model_names)}"
+            f"**Agent Nexus online.** Swarm: {', '.join(model_names)} "
+            f"[{', '.join(features)}]"
         )
         log.info(
-            "Agent Nexus ready with %d swarm models (autonomy=%s, c2=%s)",
+            "Agent Nexus ready with %d swarm models (autonomy=%s, c2=%s, "
+            "goals=%s, triggers=%d, health=on)",
             len(model_ids),
             self.autonomy_gate.mode.value,
             "connected" if self.c2.is_running else "offline",
+            "redis" if self.goal_store.is_connected else "memory",
+            len(self.trigger_manager._triggers),
+        )
+
+    def _setup_triggers(self) -> None:
+        """Register all trigger sources with the trigger manager."""
+        settings = self.settings
+
+        # Activity change trigger (PiecesOS)
+        if self.pieces is not None:
+            self.trigger_manager.add_trigger(ActivityTrigger())
+
+        # Message rate trigger
+        self.trigger_manager.add_trigger(
+            MessageRateTrigger(
+                threshold=settings.MESSAGE_RATE_TRIGGER_THRESHOLD,
+                window_minutes=5.0,
+            )
+        )
+
+        # Goal staleness trigger
+        self.trigger_manager.add_trigger(
+            GoalStaleTrigger(stale_hours=settings.GOAL_MAX_AGE_HOURS / 12)
+        )
+
+        # Scheduled reflection trigger (every 6 hours)
+        self.trigger_manager.add_trigger(
+            ScheduledTrigger(interval_hours=6.0)
         )
 
     async def on_message(self, message: discord.Message) -> None:
@@ -257,7 +341,6 @@ class NexusBot(commands.Bot):
     async def _handle_human_message(self, message: discord.Message) -> None:
         """Handle a non-command message from #human. Forward to swarm."""
         from nexus.channels.formatter import MessageFormatter
-        from nexus.swarm.crosstalk import CrosstalkManager
 
         # Record human message in conversation
         await self.conversation.add_message("human", message.content, is_human=True)
@@ -310,7 +393,10 @@ class NexusBot(commands.Bot):
         except Exception as e:
             log.error("Error handling human message: %s", e, exc_info=True)
             try:
-                await self.router.human.send("An error occurred processing your message. Check bot logs for details.")
+                await self.router.human.send(
+                    "An error occurred processing your message. "
+                    "Check bot logs for details."
+                )
             except Exception:
                 pass
 
@@ -429,6 +515,8 @@ class NexusBot(commands.Bot):
     async def close(self) -> None:
         """Clean shutdown."""
         log.info("Shutting down Agent Nexus...")
+        await self.health_monitor.stop()
+        await self.trigger_manager.stop()
         await self.activity_monitor.stop()
         await self.orchestrator.stop()
         await self.c2.stop()
