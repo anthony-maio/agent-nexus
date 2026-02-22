@@ -40,7 +40,7 @@ class DiscordLogHandler(logging.Handler):
     _INFO_LOGGERS: Final[frozenset[str]] = frozenset({
         "nexus.bot",
         "nexus.orchestrator.loop",
-        "nexus.integrations.c2_client",
+        "nexus.integrations.c2_engine",
         "nexus.integrations.pieces",
         "nexus.memory.store",
     })
