@@ -11,7 +11,6 @@ from discord.ext import commands
 from nexus.channels.router import ChannelRouter
 from nexus.config import get_settings
 from nexus.integrations.c2_engine import C2Engine
-from nexus.synthesis.tdd_engine import NexusLLMAdapter, TDDEngine
 from nexus.memory.context import ContextBuilder
 from nexus.memory.store import MemoryStore
 from nexus.models.embeddings import EmbeddingProvider
@@ -37,6 +36,7 @@ from nexus.swarm.consensus import ConsensusProtocol
 from nexus.swarm.conversation import ConversationManager
 from nexus.swarm.crosstalk import CrosstalkManager
 from nexus.swarm.initiative import SwarmInitiative
+from nexus.synthesis.tdd_engine import NexusLLMAdapter, TDDEngine
 
 log = logging.getLogger(__name__)
 
@@ -139,22 +139,26 @@ class NexusBot(commands.Bot):
 
         # --- Autonomy Gate (with dynamic risk scoring) ---
         self.autonomy_gate = AutonomyGate(
-            AutonomyMode(settings.AUTONOMY_MODE), bot=self,
+            AutonomyMode(settings.AUTONOMY_MODE),
+            bot=self,
         )
 
         # --- Activity Monitor (legacy — kept for backward compat) ---
         self.activity_monitor = ActivityMonitor(
-            self, poll_interval=settings.ACTIVITY_POLL_INTERVAL,
+            self,
+            poll_interval=settings.ACTIVITY_POLL_INTERVAL,
         )
 
         # --- Trigger Manager (replaces sole reliance on ActivityMonitor) ---
         self.trigger_manager = TriggerManager(
-            self, check_interval=settings.TRIGGER_CHECK_INTERVAL,
+            self,
+            check_interval=settings.TRIGGER_CHECK_INTERVAL,
         )
 
         # --- Health Monitor ---
         self.health_monitor = HealthMonitor(
-            self, check_interval=settings.HEALTH_CHECK_INTERVAL,
+            self,
+            check_interval=settings.HEALTH_CHECK_INTERVAL,
         )
 
         # --- Integrations ---
@@ -217,9 +221,7 @@ class NexusBot(commands.Bot):
             if connected:
                 log.info("PiecesOS MCP connected")
             else:
-                log.info(
-                    "PiecesOS not available at startup — will retry on use"
-                )
+                log.info("PiecesOS not available at startup — will retry on use")
 
         # Start Continuity Core (direct integration)
         c2_started = await self.c2.start()
@@ -252,9 +254,7 @@ class NexusBot(commands.Bot):
 
         self._discord_log_handler = DiscordLogHandler(self.router.logs)
         fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-        self._discord_log_handler.setFormatter(
-            logging.Formatter(fmt, datefmt="%H:%M:%S")
-        )
+        self._discord_log_handler.setFormatter(logging.Formatter(fmt, datefmt="%H:%M:%S"))
         logging.getLogger("nexus").addHandler(self._discord_log_handler)
         self._discord_log_handler.start()
 
@@ -271,8 +271,7 @@ class NexusBot(commands.Bot):
         features.append(f"triggers={len(self.trigger_manager._triggers)}")
 
         await self.router.nexus.send(
-            f"**Agent Nexus online.** Swarm: {', '.join(model_names)} "
-            f"[{', '.join(features)}]"
+            f"**Agent Nexus online.** Swarm: {', '.join(model_names)} [{', '.join(features)}]"
         )
         log.info(
             "Agent Nexus ready with %d swarm models (autonomy=%s, c2=%s, "
@@ -306,9 +305,7 @@ class NexusBot(commands.Bot):
         )
 
         # Scheduled reflection trigger (every 6 hours)
-        self.trigger_manager.add_trigger(
-            ScheduledTrigger(interval_hours=6.0)
-        )
+        self.trigger_manager.add_trigger(ScheduledTrigger(interval_hours=6.0))
 
     async def on_message(self, message: discord.Message) -> None:
         """Handle incoming Discord messages."""
@@ -335,10 +332,9 @@ class NexusBot(commands.Bot):
         )
 
         # Handle human messages in #human or #nexus - forward to swarm
-        is_human_msg = (
-            self.router.is_human_channel(message.channel.id)
-            or self.router.is_nexus_channel(message.channel.id)
-        )
+        is_human_msg = self.router.is_human_channel(
+            message.channel.id
+        ) or self.router.is_nexus_channel(message.channel.id)
         if is_human_msg and not message.content.startswith("!"):
             await self._handle_human_message(message)
 
@@ -353,10 +349,14 @@ class NexusBot(commands.Bot):
         await self.conversation.add_message("human", message.content, is_human=True)
 
         # Log to C2
-        self._spawn(self._log_to_c2(
-            actor="human", intent="message",
-            inp=message.content[:500], tags=["human", "input"],
-        ))
+        self._spawn(
+            self._log_to_c2(
+                actor="human",
+                intent="message",
+                inp=message.content[:500],
+                tags=["human", "input"],
+            )
+        )
 
         model_ids = list(self.swarm_models.keys())
         if not model_ids:
@@ -364,6 +364,7 @@ class NexusBot(commands.Bot):
 
         # Pick a random primary responder (so it's not always the same model)
         import random
+
         primary_model = random.choice(model_ids)
 
         try:
@@ -388,10 +389,14 @@ class NexusBot(commands.Bot):
                 self._spawn(self._store_in_memory(response.content, primary_model))
 
             # Log model response to C2
-            self._spawn(self._log_to_c2(
-                actor=primary_model, intent="response",
-                out=response.content[:500], tags=["swarm", "nexus"],
-            ))
+            self._spawn(
+                self._log_to_c2(
+                    actor=primary_model,
+                    intent="response",
+                    out=response.content[:500],
+                    tags=["swarm", "nexus"],
+                )
+            )
 
             # --- Reaction round: sequential + organic, but non-blocking ---
             if self.crosstalk.is_enabled:
@@ -401,8 +406,7 @@ class NexusBot(commands.Bot):
             log.error("Error handling human message: %s", e, exc_info=True)
             try:
                 await self.router.human.send(
-                    "An error occurred processing your message. "
-                    "Check bot logs for details."
+                    "An error occurred processing your message. Check bot logs for details."
                 )
             except Exception:
                 pass
@@ -450,10 +454,14 @@ class NexusBot(commands.Bot):
                     self._spawn(self._store_in_memory(reaction.content, reactor_id))
 
                 # Log reaction to C2
-                self._spawn(self._log_to_c2(
-                    actor=reactor_id, intent="response",
-                    out=reaction.content[:500], tags=["swarm", "nexus"],
-                ))
+                self._spawn(
+                    self._log_to_c2(
+                        actor=reactor_id,
+                        intent="response",
+                        out=reaction.content[:500],
+                        tags=["swarm", "nexus"],
+                    )
+                )
 
             except asyncio.TimeoutError:
                 log.warning(f"Reaction from {reactor_id} timed out (30s)")

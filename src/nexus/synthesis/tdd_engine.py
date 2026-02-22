@@ -159,14 +159,17 @@ class TDDEngine:
                 if i < self.max_iterations - 1:
                     attempt.status = SynthesisStatus.REFINING
                     code = await self._refine_implementation(
-                        requirement, code, test_suite, test_results, validation, i,
+                        requirement,
+                        code,
+                        test_suite,
+                        test_results,
+                        validation,
+                        i,
                     )
                     attempt.generated_code = code
                 else:
                     attempt.status = SynthesisStatus.FAILED
-                    attempt.errors.append(
-                        f"Failed after {self.max_iterations} iterations"
-                    )
+                    attempt.errors.append(f"Failed after {self.max_iterations} iterations")
 
         except Exception as exc:
             attempt.status = SynthesisStatus.FAILED
@@ -215,11 +218,12 @@ Generate 3-5 test cases covering normal cases, edge cases, and error cases."""
         )
 
     async def _generate_implementation(
-        self, requirement: str, test_suite: TestSuite,
+        self,
+        requirement: str,
+        test_suite: TestSuite,
     ) -> str:
         tests_desc = "\n".join(
-            f"- {t.name}: inputs={t.inputs}, expected={t.expected_output}"
-            for t in test_suite.tests
+            f"- {t.name}: inputs={t.inputs}, expected={t.expected_output}" for t in test_suite.tests
         )
         prompt = f"""Write a Python function for this requirement:
 
@@ -234,7 +238,9 @@ Return ONLY the function code in a ```python block. No imports of os, subprocess
         return self._extract_code(resp.content)
 
     async def _run_tests(
-        self, code: str, test_suite: TestSuite,
+        self,
+        code: str,
+        test_suite: TestSuite,
     ) -> tuple[list[TestResult], ValidationResult]:
         validation = await self.validator.validate(code)
         results: list[TestResult] = []
@@ -242,12 +248,14 @@ Return ONLY the function code in a ```python block. No imports of os, subprocess
         func_name = self._find_function_name(code)
         if func_name is None:
             for tc in test_suite.tests:
-                results.append(TestResult(
-                    test_case=tc,
-                    passed=False,
-                    error_message="No callable function found in generated code",
-                    execution_time_ms=0.0,
-                ))
+                results.append(
+                    TestResult(
+                        test_case=tc,
+                        passed=False,
+                        error_message="No callable function found in generated code",
+                        execution_time_ms=0.0,
+                    )
+                )
             return results, validation
 
         for tc in test_suite.tests:
@@ -261,20 +269,24 @@ Return ONLY the function code in a ```python block. No imports of os, subprocess
                     exec_result.status.value == "success"
                     and exec_result.output == tc.expected_output
                 )
-                results.append(TestResult(
-                    test_case=tc,
-                    passed=passed,
-                    actual_output=exec_result.output,
-                    error_message=exec_result.error,
-                    execution_time_ms=exec_result.execution_time_ms,
-                ))
+                results.append(
+                    TestResult(
+                        test_case=tc,
+                        passed=passed,
+                        actual_output=exec_result.output,
+                        error_message=exec_result.error,
+                        execution_time_ms=exec_result.execution_time_ms,
+                    )
+                )
             except Exception as exc:
-                results.append(TestResult(
-                    test_case=tc,
-                    passed=False,
-                    error_message=str(exc),
-                    execution_time_ms=0.0,
-                ))
+                results.append(
+                    TestResult(
+                        test_case=tc,
+                        passed=False,
+                        error_message=str(exc),
+                        execution_time_ms=0.0,
+                    )
+                )
 
         return results, validation
 
@@ -290,7 +302,8 @@ Return ONLY the function code in a ```python block. No imports of os, subprocess
         failures = [
             f"- {r.test_case.name}: expected={r.test_case.expected_output}, "
             f"got={r.actual_output}, error={r.error_message}"
-            for r in test_results if not r.passed
+            for r in test_results
+            if not r.passed
         ]
         issues = [f"- {i.message}" for i in validation.issues] if not validation.is_valid else []
 

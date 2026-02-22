@@ -59,9 +59,7 @@ class SandboxRuntime:
         # Write wrapper script to a temp file
         wrapper = self._create_wrapper_script(code, function_name, arguments)
 
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False, encoding="utf-8"
-        )
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8")
         try:
             tmp.write(wrapper)
             tmp.flush()

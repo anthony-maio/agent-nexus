@@ -1,14 +1,17 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 
 def test_nexus_llm_adapter_import():
     from nexus.synthesis.tdd_engine import NexusLLMAdapter
+
     assert NexusLLMAdapter is not None
 
 
 def test_tdd_engine_import():
     from nexus.synthesis.tdd_engine import TDDEngine
+
     assert TDDEngine is not None
 
 
