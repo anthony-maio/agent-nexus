@@ -41,3 +41,53 @@ async def test_c2_engine_start_stop(mock_settings):
     assert isinstance(started, bool)
     await engine.stop()
     assert not engine.is_running
+
+
+@pytest.mark.asyncio
+async def test_write_event(mock_settings):
+    """write_event should log to the C2 event store."""
+    from nexus.integrations.c2_engine import C2Engine
+    engine = C2Engine(mock_settings)
+    await engine.start()
+    result = await engine.write_event(
+        actor="test", intent="test_intent", inp="hello", out="world",
+    )
+    assert result is not None
+    assert result.get("actor") == "test"
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_events(mock_settings):
+    """events() should return recently logged events."""
+    from nexus.integrations.c2_engine import C2Engine
+    engine = C2Engine(mock_settings)
+    await engine.start()
+    await engine.write_event(actor="test", intent="ping")
+    result = await engine.events(limit=5)
+    assert result is not None
+    assert result.get("count", 0) >= 1
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_status(mock_settings):
+    """status() should return backend health info."""
+    from nexus.integrations.c2_engine import C2Engine
+    engine = C2Engine(mock_settings)
+    await engine.start()
+    result = await engine.status()
+    assert result is not None
+    assert "event_log" in result
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_curiosity_returns_dict_or_none(mock_settings):
+    """curiosity() should return a dict or None."""
+    from nexus.integrations.c2_engine import C2Engine
+    engine = C2Engine(mock_settings)
+    await engine.start()
+    result = await engine.curiosity()
+    assert result is None or isinstance(result, dict)
+    await engine.stop()
