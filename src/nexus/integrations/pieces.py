@@ -88,7 +88,10 @@ class PiecesMCPClient:
 
     def _headers(self) -> dict[str, str]:
         """Headers for MCP requests, including session ID if available."""
-        h: dict[str, str] = {"Content-Type": "application/json"}
+        h: dict[str, str] = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
         if self._session_id:
             h["Mcp-Session-Id"] = self._session_id
         return h
@@ -124,7 +127,10 @@ class PiecesMCPClient:
             async with session.post(
                 self._mcp_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 if resp.status != 200:
