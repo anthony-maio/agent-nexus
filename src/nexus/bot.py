@@ -11,6 +11,7 @@ from discord.ext import commands
 from nexus.channels.router import ChannelRouter
 from nexus.config import get_settings
 from nexus.integrations.c2_engine import C2Engine
+from nexus.synthesis.tdd_engine import NexusLLMAdapter, TDDEngine
 from nexus.memory.context import ContextBuilder
 from nexus.memory.store import MemoryStore
 from nexus.models.embeddings import EmbeddingProvider
@@ -130,6 +131,11 @@ class NexusBot(commands.Bot):
 
         # --- Continuity Core (C2) ---
         self.c2 = C2Engine(settings)
+
+        # --- Synthesis TDD Engine ---
+        self.tdd = TDDEngine(
+            llm=NexusLLMAdapter(self.openrouter),
+        )
 
         # --- Autonomy Gate (with dynamic risk scoring) ---
         self.autonomy_gate = AutonomyGate(
@@ -261,6 +267,7 @@ class NexusBot(commands.Bot):
             features.append("goals")
         features.append(f"autonomy={self.autonomy_gate.mode.value}")
         features.append(f"c2={'on' if self.c2.is_running else 'off'}")
+        features.append("tdd=on")
         features.append(f"triggers={len(self.trigger_manager._triggers)}")
 
         await self.router.nexus.send(
