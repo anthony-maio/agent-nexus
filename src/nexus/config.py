@@ -142,7 +142,10 @@ class NexusSettings(BaseSettings):
     )
     PIECES_MCP_URL: str = Field(
         default="http://localhost:39300",
-        description="URL for the PiecesOS MCP server. Use http://host.docker.internal:39300 in Docker.",
+        description=(
+            "URL for the PiecesOS MCP server. "
+            "Use http://host.docker.internal:39300 in Docker."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -197,6 +200,61 @@ class NexusSettings(BaseSettings):
         description=(
             "Agreement ratio required for multi-model consensus decisions."
         ),
+    )
+
+    # ------------------------------------------------------------------
+    # Goals and task queue
+    # ------------------------------------------------------------------
+    GOAL_MAX_ACTIVE: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum number of simultaneously active goals.",
+    )
+    GOAL_MAX_AGE_HOURS: float = Field(
+        default=72.0,
+        ge=1.0,
+        description="Hours before an inactive goal is marked stale.",
+    )
+    TASK_MAX_ATTEMPTS: int = Field(
+        default=3,
+        ge=1,
+        description="Maximum retry attempts for failed task queue items.",
+    )
+
+    # ------------------------------------------------------------------
+    # Swarm initiative
+    # ------------------------------------------------------------------
+    INITIATIVE_ENABLED: bool = Field(
+        default=True,
+        description="Enable self-initiated swarm conversations.",
+    )
+    INITIATIVE_COOLDOWN_MINUTES: float = Field(
+        default=30.0,
+        ge=1.0,
+        description="Minimum minutes between self-initiated conversations.",
+    )
+
+    # ------------------------------------------------------------------
+    # Trigger system
+    # ------------------------------------------------------------------
+    TRIGGER_CHECK_INTERVAL: int = Field(
+        default=30,
+        ge=5,
+        description="Seconds between trigger system checks.",
+    )
+    MESSAGE_RATE_TRIGGER_THRESHOLD: int = Field(
+        default=10,
+        ge=2,
+        description="Number of messages in 5 minutes to trigger a mini-cycle.",
+    )
+
+    # ------------------------------------------------------------------
+    # Health monitoring
+    # ------------------------------------------------------------------
+    HEALTH_CHECK_INTERVAL: int = Field(
+        default=600,
+        ge=60,
+        description="Seconds between automatic health checks.",
     )
 
     # ------------------------------------------------------------------

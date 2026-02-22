@@ -59,6 +59,9 @@ class OrchestratorLoop:
     # Seconds to wait after bot startup before the first cycle fires.
     _STARTUP_DELAY: float = 30.0
 
+    # Maximum number of recent cycle summaries to keep for temporal context.
+    _MAX_CYCLE_HISTORY: int = 5
+
     def __init__(self, bot: Any, interval: int = 3600) -> None:
         self.bot = bot
         self.interval: int = max(interval, 10)
@@ -67,6 +70,8 @@ class OrchestratorLoop:
         self._cycle_count: int = 0
         self._last_cycle: datetime | None = None
         self._trigger_event: asyncio.Event = asyncio.Event()
+        # Rolling history of recent cycle outcomes for temporal context.
+        self._cycle_history: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -175,9 +180,14 @@ class OrchestratorLoop:
                 for action in actions:
                     dispatched += await self._gate_and_dispatch(action)
 
-                # 4. Full cycle only: run night-cycle maintenance via C2.
+                # 3b. Dispatch ready tasks from the goal queue.
+                dispatched += await self._dispatch_goal_queue_tasks()
+
+                # 4. Full cycle only: run night-cycle maintenance via C2
+                #    and prune stale goals.
                 if not is_triggered:
                     await self._run_night_cycle()
+                    await self._prune_goals()
 
                 self._last_cycle = datetime.now(timezone.utc)
                 elapsed = (self._last_cycle - cycle_start).total_seconds()
@@ -188,6 +198,9 @@ class OrchestratorLoop:
                     dispatched,
                     elapsed,
                 )
+
+                # Record cycle in history for temporal context.
+                self._record_cycle(cycle_type, dispatched, elapsed, actions)
 
                 # Log cycle completion to C2
                 await self._log_to_c2(
@@ -212,12 +225,24 @@ class OrchestratorLoop:
     async def _gate_and_dispatch(self, action: dict[str, Any]) -> int:
         """Run an action through the autonomy gate and dispatch if allowed.
 
+        In AUTOPILOT mode, high-risk actions are checked via multi-model
+        consensus before execution.
+
         Returns 1 if dispatched, 0 otherwise.
         """
         gate: AutonomyGate | None = getattr(self.bot, "autonomy_gate", None)
 
         if gate is not None:
             if gate.should_auto_execute(action):
+                # In autopilot, run consensus check on high-risk actions
+                if gate.mode.value == "autopilot" and gate.is_high_risk(action):
+                    approved = await self._consensus_check(action)
+                    if not approved:
+                        log.info(
+                            "Consensus rejected autopilot action: %s",
+                            action.get("description", ""),
+                        )
+                        return 0
                 log.info("Auto-executing action: %s", action.get("description", ""))
             elif gate.should_escalate(action):
                 log.info("Escalating action to #human: %s", action.get("description", ""))
@@ -241,6 +266,63 @@ class OrchestratorLoop:
             )
             return 1
         return 0
+
+    async def _consensus_check(self, action: dict[str, Any]) -> bool:
+        """Run a multi-model consensus vote on a high-risk action.
+
+        Used in AUTOPILOT mode to add a safety check without human
+        involvement.  Returns ``True`` if the swarm approves.
+        """
+        from nexus.swarm.consensus import ConsensusOutcome
+
+        consensus = getattr(self.bot, "consensus", None)
+        if consensus is None:
+            return True  # No consensus protocol — allow by default
+
+        model_ids = list(self.bot.swarm_models.keys())
+        if len(model_ids) < 2:
+            return True  # Need at least 2 models for meaningful consensus
+
+        question = (
+            f"Should the swarm auto-execute this action?\n"
+            f"Type: {action.get('type', 'unknown')}\n"
+            f"Priority: {action.get('priority', 'medium')}\n"
+            f"Description: {action.get('description', 'No description')}"
+        )
+
+        async def call_model(model_id: str, prompt: str) -> str:
+            response = await self.bot.openrouter.chat(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": self.bot.get_system_prompt(model_id)},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=256,
+            )
+            return response.content
+
+        try:
+            result = await consensus.request_consensus(
+                question=question,
+                model_ids=model_ids[:3],  # Cap at 3 voters for speed
+                call_model_fn=call_model,
+            )
+
+            log.info(
+                "Consensus result for '%s': %s (%s)",
+                action.get("description", "")[:60],
+                result.outcome.value,
+                result.summary,
+            )
+
+            return result.outcome in (
+                ConsensusOutcome.APPROVED,
+                ConsensusOutcome.NEEDS_HUMAN,  # Tie-break: allow in autopilot
+            )
+        except Exception:
+            log.warning("Consensus check failed — allowing action.", exc_info=True)
+            return True
 
     # ------------------------------------------------------------------
     # Night cycle
@@ -564,13 +646,17 @@ class OrchestratorLoop:
     async def _decide(self, state: dict[str, Any]) -> list[dict[str, Any]]:
         """Ask a swarm model what actions to take based on current state.
 
-        The decision model receives a structured summary of the current state
-        and returns a JSON array of action objects.  Each action has:
+        Uses intelligent model selection based on state content and model
+        strengths.  The decision model receives a structured summary
+        including active goals, recent task results, and cycle history.
+
+        Each returned action has:
 
         - ``type`` -- one of ``research``, ``code``, ``analyze``, ``summarize``,
           ``classify``, ``extract``.
         - ``description`` -- human-readable description of the task.
         - ``priority`` -- ``high``, ``medium``, or ``low``.
+        - ``goal_id`` -- (optional) ID of the goal this action relates to.
 
         Returns an empty list when there is nothing actionable or the model
         response cannot be parsed.
@@ -581,13 +667,13 @@ class OrchestratorLoop:
 
         prompt = self._build_decision_prompt(state)
 
-        # Select the first available swarm model for orchestration decisions.
         model_ids: list[str] = list(self.bot.swarm_models.keys())
         if not model_ids:
             log.warning("No swarm models configured -- cannot make orchestrator decisions.")
             return []
 
-        decision_model = model_ids[0]
+        # Intelligent model selection based on state content.
+        decision_model = self._select_decision_model(state, model_ids)
 
         # Build autonomy context for the decision model.
         gate: AutonomyGate | None = getattr(self.bot, "autonomy_gate", None)
@@ -615,10 +701,16 @@ class OrchestratorLoop:
                             '  "type": one of "research", "code", "analyze", "summarize", '
                             '"classify", "extract"\n'
                             '  "description": a clear, specific task description\n'
-                            '  "priority": "high", "medium", or "low"\n\n'
+                            '  "priority": "high", "medium", or "low"\n'
+                            '  "goal_id": (optional) ID of an existing goal this relates to\n'
+                            '  "new_goal": (optional) object with "title" and "description" '
+                            "to create a new goal\n\n"
+                            "You can also create new goals when a sustained effort is needed. "
                             "Return an empty array [] if no actions are needed right now. "
                             "Only propose actions that are clearly useful based on the state. "
-                            "Do not invent tasks with no basis in the provided context."
+                            "Do not invent tasks with no basis in the provided context. "
+                            "Do not duplicate actions that already appear in active goals or "
+                            "recent task results."
                             + autonomy_hint
                         ),
                     },
@@ -628,7 +720,12 @@ class OrchestratorLoop:
                 max_tokens=1024,
             )
 
-            return self._parse_actions(response.content, decision_model)
+            actions = self._parse_actions(response.content, decision_model)
+
+            # Process any new goal creation requests.
+            await self._process_goal_actions(actions)
+
+            return actions
 
         except Exception:
             log.error(
@@ -637,6 +734,90 @@ class OrchestratorLoop:
                 exc_info=True,
             )
             return []
+
+    def _select_decision_model(
+        self, state: dict[str, Any], model_ids: list[str],
+    ) -> str:
+        """Select the best model for the decision based on state content.
+
+        Scores models by matching their strengths against keywords found
+        in the state.  Falls back to round-robin when scores are tied.
+        """
+        # Keywords in state that hint at what kind of decision is needed.
+        state_text = json.dumps(state, default=str).lower()
+
+        keyword_strengths: dict[str, list[str]] = {
+            "code": ["coding", "programming"],
+            "bug": ["coding", "programming"],
+            "contradiction": ["reasoning", "analysis"],
+            "tension": ["reasoning", "analysis"],
+            "void": ["reasoning", "analysis"],
+            "plan": ["agentic-planning", "reasoning"],
+            "goal": ["agentic-planning", "reasoning"],
+            "search": ["reasoning", "long-context"],
+            "creative": ["creativity", "general-intelligence"],
+        }
+
+        model_scores: dict[str, int] = {mid: 0 for mid in model_ids}
+
+        for keyword, strengths in keyword_strengths.items():
+            if keyword in state_text:
+                for mid in model_ids:
+                    spec = self.bot.swarm_models.get(mid)
+                    if spec:
+                        model_scores[mid] += sum(
+                            1 for s in spec.strengths if s in strengths
+                        )
+
+        # Sort by score descending
+        ranked = sorted(model_scores.items(), key=lambda x: x[1], reverse=True)
+        top_score = ranked[0][1]
+
+        if top_score > 0:
+            # Pick from top-scoring models with round-robin tie-breaking
+            top_models = [m for m, s in ranked if s == top_score]
+            idx = self._cycle_count % len(top_models)
+            choice = top_models[idx]
+            log.debug(
+                "Decision model selected: %s (score=%d, cycle=%d)",
+                choice, top_score, self._cycle_count,
+            )
+            return choice
+
+        # No strong signal — round-robin through all models
+        choice = model_ids[self._cycle_count % len(model_ids)]
+        log.debug("Decision model (round-robin): %s", choice)
+        return choice
+
+    async def _process_goal_actions(
+        self, actions: list[dict[str, Any]],
+    ) -> None:
+        """Process any new_goal fields in the parsed actions."""
+        goal_store = getattr(self.bot, "goal_store", None)
+        if goal_store is None:
+            return
+
+        from nexus.orchestrator.goals import Goal
+
+        for action in actions:
+            new_goal = action.pop("new_goal", None)
+            if not isinstance(new_goal, dict):
+                continue
+
+            title = str(new_goal.get("title", "")).strip()
+            description = str(new_goal.get("description", "")).strip()
+            if not title:
+                continue
+
+            goal = Goal(
+                title=title,
+                description=description,
+                priority=action.get("priority", "medium"),
+                source="orchestrator",
+            )
+            goal_id = await goal_store.add_goal(goal)
+            action["goal_id"] = goal_id
+            log.info("New goal created from decision: %s — %s", goal_id, title)
 
     def _parse_actions(
         self, raw_response: str, model_id: str
@@ -691,11 +872,20 @@ class OrchestratorLoop:
             description = str(item.get("description", "")).strip()
             if not description:
                 continue
-            actions.append({
+            action: dict[str, Any] = {
                 "type": action_type,
                 "description": description,
                 "priority": priority,
-            })
+            }
+            # Preserve optional goal linkage fields.
+            goal_id = item.get("goal_id")
+            if isinstance(goal_id, str) and goal_id.strip():
+                action["goal_id"] = goal_id.strip()
+            new_goal = item.get("new_goal")
+            if isinstance(new_goal, dict):
+                action["new_goal"] = new_goal
+
+            actions.append(action)
 
         return actions
 
@@ -704,12 +894,36 @@ class OrchestratorLoop:
     # ------------------------------------------------------------------
 
     def _build_decision_prompt(self, state: dict[str, Any]) -> str:
-        """Build the decision prompt from gathered state."""
+        """Build the decision prompt from gathered state.
+
+        Includes active goals, recent task results, and cycle history
+        so the decision model has full temporal context.
+        """
         parts: list[str] = [
             f"Timestamp: {state.get('timestamp', 'unknown')}",
+            f"Cycle: #{self._cycle_count}",
             "",
             "=== Current Swarm State ===",
         ]
+
+        # Active goals (persistent objectives).
+        active_goals: str = state.get("active_goals", "")
+        if active_goals:
+            parts.append("\n--- Active Goals ---")
+            parts.append(active_goals)
+
+        # Recent task results (feedback loop).
+        task_results: list[dict[str, Any]] = state.get("task_results", [])
+        if task_results:
+            parts.append(f"\n--- Recent Task Results ({len(task_results)}) ---")
+            for tr in task_results:
+                status = "OK" if tr.get("success") else "FAILED"
+                parts.append(
+                    f"  [{status}] {tr.get('type', '?')}: "
+                    f"{tr.get('description', '')[:100]}"
+                )
+                if tr.get("result_snippet"):
+                    parts.append(f"    -> {tr['result_snippet'][:200]}")
 
         # Recent conversation.
         recent_msgs: list[dict[str, Any]] = state.get("recent_messages", [])
@@ -764,13 +978,117 @@ class OrchestratorLoop:
             if suggested:
                 parts.append(f"  Suggested focus: {suggested}")
 
+        # Cycle history (temporal context).
+        if self._cycle_history:
+            parts.append(f"\n--- Recent Cycle History ({len(self._cycle_history)}) ---")
+            for ch in self._cycle_history[-3:]:
+                parts.append(
+                    f"  Cycle #{ch.get('cycle', '?')} ({ch.get('type', '?')}): "
+                    f"{ch.get('dispatched', 0)} dispatched, "
+                    f"{ch.get('elapsed', 0):.1f}s"
+                )
+                for a in ch.get("actions", [])[:2]:
+                    parts.append(f"    - {a.get('type', '?')}: {a.get('description', '')[:80]}")
+
         parts.append("\n=== End State ===")
         parts.append(
             "\nBased on this state, what tasks should be dispatched to the "
-            "task agents? Return a JSON array of actions."
+            "task agents? You can also create new goals for sustained efforts. "
+            "Return a JSON array of actions."
         )
 
         return "\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Cycle history
+    # ------------------------------------------------------------------
+
+    def _record_cycle(
+        self,
+        cycle_type: str,
+        dispatched: int,
+        elapsed: float,
+        actions: list[dict[str, Any]],
+    ) -> None:
+        """Record a cycle summary for temporal context in future decisions."""
+        self._cycle_history.append({
+            "cycle": self._cycle_count,
+            "type": cycle_type,
+            "dispatched": dispatched,
+            "elapsed": round(elapsed, 1),
+            "actions": [
+                {"type": a.get("type", "?"), "description": a.get("description", "")}
+                for a in actions[:3]
+            ],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        if len(self._cycle_history) > self._MAX_CYCLE_HISTORY:
+            self._cycle_history = self._cycle_history[-self._MAX_CYCLE_HISTORY:]
+
+    # ------------------------------------------------------------------
+    # Goal queue dispatch
+    # ------------------------------------------------------------------
+
+    async def _dispatch_goal_queue_tasks(self) -> int:
+        """Dispatch ready tasks from the persistent goal queue.
+
+        Returns the number of tasks dispatched.
+        """
+        goal_store = getattr(self.bot, "goal_store", None)
+        if goal_store is None:
+            return 0
+
+        try:
+            ready = await goal_store.get_ready_tasks()
+            dispatched = 0
+
+            for task_item in ready[:self._MAX_ACTIONS_PER_CYCLE]:
+                await goal_store.mark_task_dispatched(task_item.id)
+
+                action = {
+                    "type": task_item.action_type,
+                    "description": task_item.description,
+                    "priority": task_item.priority,
+                    "goal_id": task_item.goal_id,
+                }
+
+                result = await self.bot.dispatcher.dispatch(action)
+
+                if result is not None and result.success:
+                    await goal_store.mark_task_completed(
+                        task_item.id,
+                        result_summary=result.result[:200],
+                    )
+                    dispatched += 1
+                elif result is not None:
+                    await goal_store.mark_task_failed(
+                        task_item.id,
+                        error=result.result[:100],
+                    )
+
+            if dispatched:
+                log.info(
+                    "Dispatched %d goal queue task(s) (%d ready).",
+                    dispatched,
+                    len(ready),
+                )
+            return dispatched
+
+        except Exception:
+            log.warning("Goal queue dispatch failed.", exc_info=True)
+            return 0
+
+    async def _prune_goals(self) -> None:
+        """Prune stale goals during full cycles."""
+        goal_store = getattr(self.bot, "goal_store", None)
+        if goal_store is None:
+            return
+        try:
+            pruned = await goal_store.prune_stale_goals()
+            if pruned:
+                log.info("Pruned %d stale goal(s).", pruned)
+        except Exception:
+            log.warning("Goal pruning failed.", exc_info=True)
 
     # ------------------------------------------------------------------
     # Read-only properties

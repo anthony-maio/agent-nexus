@@ -47,14 +47,23 @@ _HIGH_RISK_TYPES = frozenset({"code", "classify", "extract"})
 class AutonomyGate:
     """Controls whether actions auto-execute or require human approval.
 
+    Supports dynamic risk scoring that factors in action type, priority,
+    and recent dispatch failure rates.
+
     Args:
         mode: The initial autonomy mode.
+        bot: Optional bot reference for dynamic risk scoring.
     """
 
     _PROPOSAL_TIMEOUT: float = 300.0  # 5 minutes
 
-    def __init__(self, mode: AutonomyMode = AutonomyMode.ESCALATE) -> None:
+    def __init__(
+        self,
+        mode: AutonomyMode = AutonomyMode.ESCALATE,
+        bot: Any = None,
+    ) -> None:
         self.mode: AutonomyMode = mode
+        self._bot = bot
 
     def set_mode(self, mode: AutonomyMode | str) -> None:
         """Set the autonomy mode.  Accepts enum or string."""
@@ -62,6 +71,54 @@ class AutonomyGate:
             mode = AutonomyMode(mode.lower())
         self.mode = mode
         log.info("Autonomy mode set to: %s", self.mode.value)
+
+    def set_bot(self, bot: Any) -> None:
+        """Set the bot reference for dynamic risk scoring."""
+        self._bot = bot
+
+    # ------------------------------------------------------------------
+    # Risk scoring
+    # ------------------------------------------------------------------
+
+    def compute_risk_score(self, action: dict[str, Any]) -> float:
+        """Compute a 0.0–1.0 risk score for an action.
+
+        Factors:
+        - Base risk from action type (0.2 for low-risk, 0.6 for high-risk)
+        - Priority boost (+0.1 for high priority)
+        - Recent failure rate penalty (+0.2 if >50% failures)
+
+        Returns a float between 0.0 (safe) and 1.0 (dangerous).
+        """
+        action_type = action.get("type", "")
+
+        # Base risk
+        if action_type in _LOW_RISK_TYPES:
+            score = 0.2
+        elif action_type in _HIGH_RISK_TYPES:
+            score = 0.6
+        else:
+            score = 0.4
+
+        # Priority adjustment
+        if action.get("priority") == "high":
+            score += 0.1
+
+        # Failure rate penalty
+        if self._bot is not None:
+            dispatcher = getattr(self._bot, "dispatcher", None)
+            if dispatcher is not None:
+                total = dispatcher.success_count + dispatcher.failure_count
+                if total >= 5:
+                    failure_rate = dispatcher.failure_count / total
+                    if failure_rate > 0.5:
+                        score += 0.2
+
+        return min(score, 1.0)
+
+    def is_high_risk(self, action: dict[str, Any]) -> bool:
+        """Return ``True`` if the action is classified as high-risk."""
+        return self.compute_risk_score(action) >= 0.5
 
     # ------------------------------------------------------------------
     # Decision logic
@@ -73,8 +130,8 @@ class AutonomyGate:
             return True
 
         if self.mode == AutonomyMode.ESCALATE:
-            action_type = action.get("type", "")
-            return action_type in _LOW_RISK_TYPES
+            # Use dynamic risk scoring instead of static type check
+            return not self.is_high_risk(action)
 
         # OBSERVE mode: never auto-execute.
         return False
@@ -85,8 +142,7 @@ class AutonomyGate:
             return True
 
         if self.mode == AutonomyMode.ESCALATE:
-            action_type = action.get("type", "")
-            return action_type in _HIGH_RISK_TYPES
+            return self.is_high_risk(action)
 
         # AUTOPILOT: don't escalate (unless model expressed uncertainty,
         # but that's handled at the decision-engine level).

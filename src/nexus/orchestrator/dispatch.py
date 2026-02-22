@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -100,6 +100,14 @@ class TaskDispatcher:
         "extract": "extraction",
     }
 
+    # Fallback roles when the primary agent fails.
+    FALLBACK_MAP: dict[str, str] = {
+        "reasoning": "rag",
+        "extraction": "reasoning",
+        "router": "reasoning",
+        "rag": "reasoning",
+    }
+
     def __init__(self, bot: Any, max_result_history: int = 50) -> None:
         self.bot = bot
         self._max_result_history: int = max_result_history
@@ -112,9 +120,14 @@ class TaskDispatcher:
     async def dispatch(self, action: dict[str, Any]) -> TaskResult | None:
         """Dispatch an action to the appropriate task agent.
 
+        Includes automatic retry with fallback to a different model role
+        when the primary agent fails, and updates linked goals with
+        progress notes.
+
         Args:
             action: An action dict from the orchestrator's decision engine.
                 Expected keys: ``type``, ``description``, ``priority``.
+                Optional: ``goal_id`` to link the task to a persistent goal.
 
         Returns:
             A :class:`TaskResult` on success or failure, or ``None`` if the
@@ -123,6 +136,7 @@ class TaskDispatcher:
         action_type: str = action.get("type", "analyze")
         description: str = str(action.get("description", "")).strip()
         priority: str = action.get("priority", "medium")
+        goal_id: str = action.get("goal_id", "")
 
         if not description:
             log.debug("Skipping action with empty description.")
@@ -140,11 +154,63 @@ class TaskDispatcher:
 
         result = await self._call_task_agent(role, description, priority)
 
+        # Retry with fallback role if primary failed
+        if result is not None and not result.success:
+            fallback_role = self.FALLBACK_MAP.get(role)
+            if fallback_role and fallback_role != role:
+                log.info(
+                    "Primary agent '%s' failed — retrying with fallback '%s'.",
+                    role,
+                    fallback_role,
+                )
+                result = await self._call_task_agent(
+                    fallback_role, description, priority,
+                )
+
         if result is not None:
             self._store_result(result)
             await self._post_result_to_nexus(result, description)
 
+            # Update linked goal if present
+            if goal_id:
+                await self._update_goal(goal_id, result)
+
+            # Trigger swarm initiative for significant results
+            if result.success and priority == "high":
+                await self._maybe_trigger_initiative(result)
+
         return result
+
+    async def _update_goal(self, goal_id: str, result: TaskResult) -> None:
+        """Update a linked goal with the task result."""
+        goal_store = getattr(self.bot, "goal_store", None)
+        if goal_store is None:
+            return
+        try:
+            snippet = result.result[:100].replace("\n", " ")
+            await goal_store.add_progress_note(
+                goal_id,
+                f"{'OK' if result.success else 'FAIL'}: {result.description[:60]} -> {snippet}",
+            )
+        except Exception:
+            log.debug("Failed to update goal %s with task result.", goal_id)
+
+    async def _maybe_trigger_initiative(self, result: TaskResult) -> None:
+        """Trigger a swarm discussion for high-priority successful results."""
+        initiative = getattr(self.bot, "initiative", None)
+        if initiative is None:
+            return
+        try:
+            await initiative.maybe_initiate(
+                reason="task_result",
+                context=(
+                    f"Task completed ({result.action_type}): "
+                    f"{result.description}\n\n"
+                    f"Result: {result.result[:500]}"
+                ),
+            )
+        except Exception:
+            log.debug("Failed to trigger initiative from task result.")
 
     # ------------------------------------------------------------------
     # Agent invocation
@@ -161,7 +227,7 @@ class TaskDispatcher:
         Resolves the model from the registry, routes to OpenRouter or Ollama,
         and wraps the response in a :class:`TaskResult`.
         """
-        from nexus.models.registry import TASK_MODELS, ModelProvider, ModelSpec
+        from nexus.models.registry import TASK_MODELS, ModelSpec
 
         task_model: ModelSpec | None = TASK_MODELS.get(role)
         if task_model is None:
