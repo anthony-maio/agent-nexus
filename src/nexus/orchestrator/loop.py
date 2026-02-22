@@ -1067,6 +1067,13 @@ class OrchestratorLoop:
                         task_item.id,
                         error=result.result[:100],
                     )
+                else:
+                    # dispatch() returned None — reset task so it doesn't
+                    # stay stuck in DISPATCHED forever.
+                    await goal_store.mark_task_failed(
+                        task_item.id,
+                        error="Dispatcher returned no result",
+                    )
 
             if dispatched:
                 log.info(

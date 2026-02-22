@@ -135,12 +135,21 @@ class MessageRateTrigger(BaseTrigger):
 
 
 class GoalStaleTrigger(BaseTrigger):
-    """Fires when any active goal hasn't had progress for X hours."""
+    """Fires when any active goal hasn't had progress for X hours.
+
+    Tracks which goal IDs have already triggered so a single stale goal
+    doesn't cause continuous mini-cycles on every poll.  The suppression
+    resets when the goal's ``updated_at`` changes (i.e. it receives new
+    progress) or when it is pruned/completed.
+    """
 
     name = "goal_stale"
 
     def __init__(self, stale_hours: float = 6.0) -> None:
         self.stale_hours = stale_hours
+        # Maps goal_id -> updated_at timestamp that was stale when we fired.
+        # If the goal gets new activity (updated_at changes), we re-fire.
+        self._fired_goals: dict[str, str] = {}
 
     async def check(self, bot: Any) -> bool:
         goal_store = getattr(bot, "goal_store", None)
@@ -152,12 +161,24 @@ class GoalStaleTrigger(BaseTrigger):
         now = datetime.now(timezone.utc)
         active = await goal_store.get_active_goals()
 
+        # Clean out fired entries for goals no longer active.
+        active_ids = {g.id for g in active}
+        self._fired_goals = {
+            gid: ts for gid, ts in self._fired_goals.items()
+            if gid in active_ids
+        }
+
         for goal in active:
             try:
                 updated = datetime.fromisoformat(goal.updated_at)
                 age_hours = (now - updated).total_seconds() / 3600
                 if age_hours > self.stale_hours:
-                    return True
+                    # Only fire if we haven't already fired for this
+                    # goal at this updated_at timestamp.
+                    prev = self._fired_goals.get(goal.id)
+                    if prev != goal.updated_at:
+                        self._fired_goals[goal.id] = goal.updated_at
+                        return True
             except (ValueError, TypeError):
                 continue
 
@@ -213,9 +234,14 @@ class TriggerManager:
         self._fire_counts: dict[str, int] = {}
 
     def add_trigger(self, trigger: BaseTrigger) -> None:
-        """Register a trigger source."""
+        """Register a trigger source (idempotent by name)."""
+        # Prevent duplicate registrations on Discord reconnect.
+        for existing in self._triggers:
+            if existing.name == trigger.name:
+                log.debug("Trigger %s already registered — skipping.", trigger.name)
+                return
         self._triggers.append(trigger)
-        self._fire_counts[trigger.name] = 0
+        self._fire_counts.setdefault(trigger.name, 0)
         log.info("Trigger registered: %s", trigger)
 
     async def start(self) -> None:

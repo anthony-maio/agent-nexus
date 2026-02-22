@@ -399,20 +399,25 @@ class GoalStore:
     # ------------------------------------------------------------------
 
     async def prune_stale_goals(self) -> int:
-        """Mark goals as stale if they exceed their max age.  Returns count."""
+        """Mark goals as stale if inactive for longer than max age.
+
+        Uses ``updated_at`` (last activity) rather than ``created_at``
+        so that long-running goals with recent progress are not pruned.
+        Returns the number of goals marked stale.
+        """
         now = datetime.now(timezone.utc)
         active = await self.get_active_goals()
         pruned = 0
 
         for goal in active:
             try:
-                created = datetime.fromisoformat(goal.created_at)
-                age_hours = (now - created).total_seconds() / 3600
-                if age_hours > goal.max_age_hours:
+                updated = datetime.fromisoformat(goal.updated_at)
+                inactive_hours = (now - updated).total_seconds() / 3600
+                if inactive_hours > goal.max_age_hours:
                     await self.update_goal(goal.id, status=GoalStatus.STALE.value)
                     log.info(
-                        "Goal %s marked stale (age=%.1fh, max=%.1fh): %s",
-                        goal.id, age_hours, goal.max_age_hours, goal.title,
+                        "Goal %s marked stale (inactive=%.1fh, max=%.1fh): %s",
+                        goal.id, inactive_hours, goal.max_age_hours, goal.title,
                     )
                     pruned += 1
             except (ValueError, TypeError):
