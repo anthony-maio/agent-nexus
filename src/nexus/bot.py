@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from nexus.channels.router import ChannelRouter
 from nexus.config import get_settings
-from nexus.integrations.c2_client import C2Client
+from nexus.integrations.c2_engine import C2Engine
 from nexus.memory.context import ContextBuilder
 from nexus.memory.store import MemoryStore
 from nexus.models.embeddings import EmbeddingProvider
@@ -129,7 +129,7 @@ class NexusBot(commands.Bot):
         )
 
         # --- Continuity Core (C2) ---
-        self.c2 = C2Client()
+        self.c2 = C2Engine(settings)
 
         # --- Autonomy Gate (with dynamic risk scoring) ---
         self.autonomy_gate = AutonomyGate(
@@ -215,10 +215,10 @@ class NexusBot(commands.Bot):
                     "PiecesOS not available at startup — will retry on use"
                 )
 
-        # Start Continuity Core subprocess
+        # Start Continuity Core (direct integration)
         c2_started = await self.c2.start()
         if c2_started:
-            log.info("Continuity Core (C2) subprocess started")
+            log.info("Continuity Core (C2) engine started (direct)")
         else:
             log.info("C2 not available - cognitive memory features disabled")
 
