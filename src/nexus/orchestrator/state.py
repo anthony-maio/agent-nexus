@@ -251,12 +251,12 @@ class StateGatherer:
                 return None
 
             result = await asyncio.wait_for(
-                c2.curiosity(), timeout=30.0,
+                c2.curiosity(), timeout=90.0,
             )
             return result if result else None
 
         except asyncio.TimeoutError:
-            log.warning("C2 curiosity gather timed out after 30s.")
+            log.warning("C2 curiosity gather timed out after 90s.")
             return None
         except Exception:
             log.warning(
