@@ -154,11 +154,13 @@ class OrchestratorLoop:
 
                 # 1. Gather state from all sources.
                 try:
+                    # Per-source timeouts handle individual failures.
+                    # Outer timeout is a safety net only (max source = 90s).
                     state: dict[str, Any] = await asyncio.wait_for(
-                        self.bot.state_gatherer.gather(), timeout=45.0,
+                        self.bot.state_gatherer.gather(), timeout=120.0,
                     )
                 except asyncio.TimeoutError:
-                    log.warning("State gather timed out after 45s -- skipping cycle.")
+                    log.warning("State gather timed out after 120s -- skipping cycle.")
                     continue
 
                 # 2. Ask a swarm model what to do about it.
