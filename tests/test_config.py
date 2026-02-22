@@ -46,3 +46,13 @@ def test_optional_api_keys_show_none_in_repr():
         r = repr(settings)
         # Optional keys not set should show None, not ***
         assert "ANTHROPIC_API_KEY=None" in r
+
+
+def test_postgres_url_default(monkeypatch):
+    """NexusSettings should include POSTGRES_URL with a sensible default."""
+    monkeypatch.setenv("DISCORD_TOKEN", "test-token")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    from nexus.config import NexusSettings
+    settings = NexusSettings()
+    assert hasattr(settings, "POSTGRES_URL")
+    assert "postgresql" in settings.POSTGRES_URL

@@ -19,12 +19,6 @@ services:
       - ../data:/app/data
     networks:
       - nexus-net
-    environment:
-      # Only vars that need remapping belong here.  Everything else
-      # (PIECES_MCP_URL, C2_*, QDRANT_URL, REDIS_URL, etc.) comes from
-      # env_file (config/.env) and must NOT be duplicated — environment
-      # overrides env_file and would clobber user-provided values.
-      C2_OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
     # For PiecesOS MCP on host machine
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -105,15 +99,14 @@ services:
     image: postgres:16-alpine
     container_name: nexus-postgres
     restart: unless-stopped
-    profiles: [postgres]
     environment:
-      POSTGRES_USER: c2
-      POSTGRES_PASSWORD: c2
-      POSTGRES_DB: continuity_core
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      POSTGRES_DB: nexus
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U c2 -d continuity_core"]
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus"]
       interval: 10s
       timeout: 5s
       retries: 3

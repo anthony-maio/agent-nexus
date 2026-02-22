@@ -163,6 +163,10 @@ class NexusSettings(BaseSettings):
         default="redis://nexus-redis:6379/0",
         description="Redis connection URL for caching and pub/sub.",
     )
+    POSTGRES_URL: str = Field(
+        default="postgresql://nexus:nexus@nexus-postgres:5432/nexus",
+        description="PostgreSQL connection URL for C2 event log and synthesis.",
+    )
 
     # ------------------------------------------------------------------
     # Orchestrator
