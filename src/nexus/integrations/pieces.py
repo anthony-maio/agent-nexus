@@ -1,15 +1,20 @@
 """PiecesOS MCP client for activity-stream awareness.
 
-PiecesOS is a retail productivity tool that tracks user activity (screen
-content, clipboard, keystrokes) and exposes a Long-Term Memory (LTM) engine
-via an MCP server.  This module provides an async client that queries that
-server so the Agent Nexus swarm can passively observe what the user is
-working on -- without the user needing to send explicit prompts.
+PiecesOS is a productivity tool that tracks user activity and exposes a
+Long-Term Memory (LTM) engine via an MCP server.  This module provides an
+async client that queries that server so the Agent Nexus swarm can passively
+observe what the user is working on -- without the user needing to send
+explicit prompts.
 
-Uses the MCP Streamable HTTP transport (2025-03-26 spec):
+Uses the MCP SSE transport (2024-11-05 spec):
 
-1. POST ``initialize`` to ``/mcp`` — get ``Mcp-Session-Id`` header back.
-2. POST ``tools/call`` to ``/mcp`` with that session header for each query.
+1. Open an SSE stream on ``/sse`` to discover the ``messages`` URL.
+2. POST ``initialize`` to the messages URL.
+3. POST ``tools/call`` to the messages URL for each query.
+4. Read responses from the SSE stream.
+
+Each query creates a **fresh SSE connection** to avoid socket state issues.
+Includes response caching to reduce redundant LTM queries.
 
 Usage::
 
@@ -24,37 +29,54 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
+import socket as sync_socket
+import time
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from types import TracebackType
-
-import aiohttp
+from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
-# MCP endpoint path (Streamable HTTP transport)
-_MCP_PATH = "/model_context_protocol/2025-03-26/mcp"
+# MCP protocol version supported by PiecesOS
+_MCP_VERSION = "2024-11-05"
 
 
 class PiecesMCPClient:
-    """Async client for the PiecesOS MCP server.
+    """Async client for the PiecesOS MCP server (SSE transport).
 
-    Establishes a session via the ``initialize`` handshake, then uses
-    the ``Mcp-Session-Id`` header for all subsequent tool calls.
+    Each LTM query opens a fresh SSE connection, sends the request via
+    the discovered messages URL, and reads the response from the SSE
+    stream.  This avoids socket state issues with long-lived connections.
+
+    Includes a response cache to reduce redundant queries.
 
     Args:
-        base_url: HTTP base URL for the PiecesOS MCP server.
+        base_url: HTTP base URL for PiecesOS
+            (e.g. ``http://192.168.86.34:39300``).
+        cache_ttl_minutes: How long to cache LTM responses.
     """
 
     def __init__(
         self,
-        base_url: str = "http://host.docker.internal:39300",
+        base_url: str = "http://localhost:39300",
+        cache_ttl_minutes: int = 15,
     ) -> None:
         self.base_url: str = base_url.rstrip("/")
-        self._session: aiohttp.ClientSession | None = None
         self._connected: bool = False
-        self._session_id: str | None = None
-        self._request_id: int = 0
+
+        # Response cache: hash -> (response_text, timestamp)
+        self._cache: dict[str, tuple[str, datetime]] = {}
+        self._cache_ttl = timedelta(minutes=cache_ttl_minutes)
+
+        # Parse host/port once for socket connections
+        parsed = urlparse(self.base_url)
+        self._host: str = parsed.hostname or "localhost"
+        self._port: int = parsed.port or 39300
 
     # -- Async context manager ------------------------------------------------
 
@@ -69,204 +91,294 @@ class PiecesMCPClient:
     ) -> None:
         await self.close()
 
-    # -- Helpers --------------------------------------------------------------
+    # -- Cache ----------------------------------------------------------------
 
-    async def _ensure_session(self) -> aiohttp.ClientSession:
-        """Return the shared HTTP session, creating it lazily if needed."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+    def _cache_key(self, query: str) -> str:
+        return hashlib.md5(query.lower().strip().encode()).hexdigest()
 
-    def _next_id(self) -> int:
-        """Return a monotonically increasing request ID."""
-        self._request_id += 1
-        return self._request_id
+    def _get_cached(self, query: str) -> str | None:
+        key = self._cache_key(query)
+        if key in self._cache:
+            response, ts = self._cache[key]
+            if datetime.now(timezone.utc) - ts < self._cache_ttl:
+                log.debug("Pieces cache hit: %s", query[:40])
+                return response
+            del self._cache[key]
+        return None
 
-    @property
-    def _mcp_url(self) -> str:
-        return f"{self.base_url}{_MCP_PATH}"
+    def _set_cache(self, query: str, response: str) -> None:
+        key = self._cache_key(query)
+        self._cache[key] = (response, datetime.now(timezone.utc))
+        # Prune expired entries if cache grows too large
+        if len(self._cache) > 100:
+            now = datetime.now(timezone.utc)
+            self._cache = {
+                k: v for k, v in self._cache.items()
+                if now - v[1] < self._cache_ttl
+            }
 
-    def _headers(self) -> dict[str, str]:
-        """Headers for MCP requests, including session ID if available."""
-        h: dict[str, str] = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        }
-        if self._session_id:
-            h["Mcp-Session-Id"] = self._session_id
-        return h
+    # -- Low-level sync transport (runs in thread) ----------------------------
+
+    def _sync_discover_messages_url(self, timeout: float = 10.0) -> str | None:
+        """Open SSE stream and discover the messages URL.
+
+        Returns the full messages URL, or ``None`` on failure.
+        """
+        sock = sync_socket.socket(sync_socket.AF_INET, sync_socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            sock.connect((self._host, self._port))
+            sock.send(
+                f"GET /model_context_protocol/{_MCP_VERSION}/sse HTTP/1.1\r\n"
+                f"Host: {self._host}:{self._port}\r\n"
+                f"Accept: text/event-stream\r\n"
+                f"\r\n".encode()
+            )
+
+            data = b""
+            while True:
+                try:
+                    chunk = sock.recv(1024)
+                    if not chunk:
+                        break
+                    data += chunk
+                    if b"messages?" in data:
+                        break
+                except sync_socket.timeout:
+                    break
+
+            for line in data.decode(errors="ignore").split("\n"):
+                if line.startswith("data:"):
+                    path = line[5:].strip()
+                    if "messages" in path:
+                        return f"{self.base_url}{path}"
+            return None
+        finally:
+            sock.close()
+
+    def _sync_query(self, question: str, timeout: float = 30.0) -> str | None:
+        """Run a full SSE query cycle synchronously (called via to_thread).
+
+        Opens a fresh SSE connection, sends ``initialize`` +
+        ``tools/call`` for ``ask_pieces_ltm``, and reads the response
+        from the SSE stream.
+        """
+        sock = None
+        try:
+            # 1. Open SSE stream
+            sock = sync_socket.socket(
+                sync_socket.AF_INET, sync_socket.SOCK_STREAM,
+            )
+            sock.settimeout(timeout)
+            sock.connect((self._host, self._port))
+            sock.send(
+                f"GET /model_context_protocol/{_MCP_VERSION}/sse HTTP/1.1\r\n"
+                f"Host: {self._host}:{self._port}\r\n"
+                f"Accept: text/event-stream\r\n"
+                f"\r\n".encode()
+            )
+
+            # 2. Read until we find the messages URL
+            data = b""
+            while True:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    return None
+                data += chunk
+                if b"messages?" in data:
+                    break
+
+            messages_url = None
+            for line in data.decode(errors="ignore").split("\n"):
+                if line.startswith("data:"):
+                    path = line[5:].strip()
+                    if "messages" in path:
+                        messages_url = f"{self.base_url}{path}"
+                        break
+
+            if not messages_url:
+                log.warning("Pieces SSE: no messages URL discovered")
+                return None
+
+            headers = {"Content-Type": "application/json"}
+
+            # 3. Send initialize
+            init_payload = json.dumps({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": _MCP_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "agent-nexus", "version": "1.0"},
+                },
+            }).encode()
+
+            init_req = urllib.request.Request(
+                messages_url,
+                data=init_payload,
+                headers=headers,
+                method="POST",
+            )
+            urllib.request.urlopen(init_req, timeout=10)
+            time.sleep(0.3)
+            sock.recv(8192)  # Clear init response from SSE buffer
+
+            # 4. Send LTM query
+            query_payload = json.dumps({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "ask_pieces_ltm",
+                    "arguments": {"question": question},
+                },
+            }).encode()
+
+            query_req = urllib.request.Request(
+                messages_url,
+                data=query_payload,
+                headers=headers,
+                method="POST",
+            )
+            urllib.request.urlopen(query_req, timeout=30)
+
+            # 5. Read response from SSE stream (look for id: 2)
+            buffer = b""
+            start = time.time()
+            while time.time() - start < timeout:
+                try:
+                    chunk = sock.recv(8192)
+                    if chunk:
+                        buffer += chunk
+
+                    if b'"id":2' in buffer or b'"id": 2' in buffer:
+                        decoded = buffer.decode(errors="ignore")
+                        for sse_line in decoded.split("\n"):
+                            if "data:" not in sse_line:
+                                continue
+                            if '"id":2' not in sse_line and '"id": 2' not in sse_line:
+                                continue
+                            json_start = sse_line.find("{")
+                            if json_start < 0:
+                                continue
+                            try:
+                                resp = json.loads(sse_line[json_start:])
+                            except json.JSONDecodeError:
+                                continue
+
+                            if "error" in resp:
+                                log.warning(
+                                    "Pieces LTM error: %s",
+                                    resp["error"].get(
+                                        "message", resp["error"],
+                                    ),
+                                )
+                                return None
+
+                            if "result" in resp:
+                                content = resp["result"].get("content", [])
+                                if content:
+                                    item = content[0]
+                                    if isinstance(item, dict) and "text" in item:
+                                        return item["text"]
+                                    if isinstance(item, str):
+                                        return item
+                except sync_socket.timeout:
+                    break
+
+            log.warning("Pieces LTM query timed out after %.0fs", timeout)
+            return None
+
+        except Exception as exc:
+            log.warning(
+                "Pieces sync query failed (%s): %s",
+                type(exc).__name__,
+                exc or "(no details)",
+            )
+            return None
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
     # -- Connection management ------------------------------------------------
 
     async def connect(self) -> bool:
-        """Initialize an MCP session with PiecesOS.
+        """Test connection to PiecesOS MCP server.
 
-        Sends the ``initialize`` JSON-RPC request.  The server returns
-        the ``Mcp-Session-Id`` header which is used for all subsequent
-        requests.
+        Attempts to open the SSE endpoint and discover the messages URL
+        to verify the server is reachable.
 
         Returns:
-            ``True`` if the session was established, ``False`` otherwise.
+            ``True`` if the server is reachable, ``False`` otherwise.
         """
+        sse_url = (
+            f"{self.base_url}/model_context_protocol/{_MCP_VERSION}/sse"
+        )
+        log.info("Connecting to PiecesOS at %s (SSE transport)", sse_url)
         try:
-            log.info("Connecting to PiecesOS at %s", self._mcp_url)
-            session = await self._ensure_session()
-            payload = {
-                "jsonrpc": "2.0",
-                "id": self._next_id(),
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-03-26",
-                    "capabilities": {"tools": {}},
-                    "clientInfo": {
-                        "name": "agent-nexus",
-                        "version": "0.1.0",
-                    },
-                },
-            }
+            url = await asyncio.to_thread(
+                self._sync_discover_messages_url, 10.0,
+            )
+            if url:
+                log.info("PiecesOS MCP connected (messages URL discovered)")
+                self._connected = True
+                return True
 
-            async with session.post(
-                self._mcp_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    log.warning(
-                        "PiecesOS initialize returned HTTP %d", resp.status,
-                    )
-                    return False
-
-                self._session_id = resp.headers.get("Mcp-Session-Id")
-                if not self._session_id:
-                    log.warning(
-                        "PiecesOS initialize missing Mcp-Session-Id header",
-                    )
-                    return False
-
-                # Parse server info for logging
-                raw = await resp.text()
-                try:
-                    data = json.loads(raw)
-                    server_info = data.get("result", {}).get(
-                        "serverInfo", {},
-                    )
-                    log.info(
-                        "PiecesOS MCP session established "
-                        "(server=%s v%s, session=%s)",
-                        server_info.get("name", "unknown"),
-                        server_info.get("version", "?"),
-                        self._session_id[:16] + "...",
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    log.info(
-                        "PiecesOS MCP session established (session=%s)",
-                        self._session_id[:16] + "...",
-                    )
-
-            self._connected = True
-            return True
+            log.warning(
+                "PiecesOS not available at %s: "
+                "SSE stream did not return messages URL",
+                self.base_url,
+            )
+            self._connected = False
+            return False
 
         except Exception as exc:
             log.warning(
                 "PiecesOS not available at %s (%s): %s",
-                self._mcp_url,
+                self.base_url,
                 type(exc).__name__,
                 exc or "(no details)",
             )
             self._connected = False
-            self._session_id = None
             return False
 
     # -- Public API -----------------------------------------------------------
 
     async def get_recent_activity(
         self,
-        query: str = "recent activity and context",
-        _is_retry: bool = False,
+        query: str = "What has the user been working on recently?",
     ) -> str | None:
         """Query PiecesOS LTM for recent user activity.
 
-        Posts a ``tools/call`` request for ``ask_pieces_ltm`` with the
-        established ``Mcp-Session-Id``.  Auto-reconnects if the session
-        has expired.
+        Each call opens a fresh SSE connection to avoid stale socket
+        issues.  Results are cached to reduce redundant queries.
 
         Args:
-            query: Free-text query forwarded to the LTM engine.
+            query: Question forwarded to the ``ask_pieces_ltm`` tool.
 
         Returns:
             A text summary of recent activity, or ``None`` if unavailable.
         """
-        # Auto-reconnect if needed
-        if not self._connected or self._session_id is None:
+        if not self._connected:
             if not await self.connect():
                 return None
-        if self._session is None:
-            return None
 
-        payload = {
-            "jsonrpc": "2.0",
-            "id": self._next_id(),
-            "method": "tools/call",
-            "params": {
-                "name": "ask_pieces_ltm",
-                "arguments": {"query": query},
-            },
-        }
+        # Check cache first
+        cached = self._get_cached(query)
+        if cached is not None:
+            return cached
 
         try:
-            async with self._session.post(
-                self._mcp_url,
-                json=payload,
-                headers=self._headers(),
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    log.warning(
-                        "Pieces LTM query returned HTTP %d", resp.status,
-                    )
-                    # Session expired — reconnect and retry once
-                    if resp.status in (400, 404) and not _is_retry:
-                        self._connected = False
-                        self._session_id = None
-                        log.info("Pieces session expired, reconnecting...")
-                        return await self.get_recent_activity(
-                            query=query, _is_retry=True,
-                        )
-                    return None
-
-                # Response may be text/plain — force parse
-                raw = await resp.text()
-                try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    log.warning("Pieces non-JSON response: %.200s", raw)
-                    return None
-
-                # Check for JSON-RPC error
-                if "error" in data:
-                    log.warning(
-                        "Pieces LTM error: %s",
-                        data["error"].get("message", data["error"]),
-                    )
-                    return None
-
-                result = data.get("result", {})
-                content = result.get("content", [])
-                if content and isinstance(content, list):
-                    text = content[0].get("text", "")
-                    log.info("Pieces LTM returned %d chars", len(text))
-                    return text
-
-                log.warning(
-                    "Pieces LTM empty content: result=%s",
-                    str(result)[:200],
-                )
-                return None
-
+            result = await asyncio.to_thread(self._sync_query, query, 30.0)
+            if result:
+                log.info("Pieces LTM returned %d chars", len(result))
+                self._set_cache(query, result)
+                return result
+            return None
         except Exception as exc:
             log.warning(
                 "Pieces LTM query failed (%s): %s",
@@ -278,14 +390,11 @@ class PiecesMCPClient:
     # -- Lifecycle ------------------------------------------------------------
 
     async def close(self) -> None:
-        """Close all connections. Safe to call multiple times."""
-        if self._session is not None and not self._session.closed:
-            await self._session.close()
-        self._session = None
+        """Clean up. Safe to call multiple times."""
         self._connected = False
-        self._session_id = None
+        self._cache.clear()
 
     @property
     def is_connected(self) -> bool:
-        """Whether the client has an active MCP session with PiecesOS."""
+        """Whether the client has successfully connected to PiecesOS."""
         return self._connected
