@@ -169,6 +169,25 @@ class NexusSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Continuity Core (C2) -- Neo4j knowledge graph
+    # ------------------------------------------------------------------
+    C2_NEO4J_URI: str = Field(
+        default="",
+        description=(
+            "Neo4j bolt URI for the C2 knowledge graph.  "
+            "Leave empty to disable the graph backend."
+        ),
+    )
+    C2_NEO4J_USER: str = Field(
+        default="neo4j",
+        description="Neo4j username.",
+    )
+    C2_NEO4J_PASSWORD: str = Field(
+        default="",
+        description="Neo4j password.",
+    )
+
+    # ------------------------------------------------------------------
     # Continuity Core (C2) algorithm tuning
     # ------------------------------------------------------------------
     C2_TOKEN_BUDGET: int = Field(
@@ -338,7 +357,7 @@ class NexusSettings(BaseSettings):
 
     _SENSITIVE_FIELDS: ClassVar[set[str]] = {
         "DISCORD_TOKEN", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY", "GOOGLE_API_KEY",
+        "OPENAI_API_KEY", "GOOGLE_API_KEY", "C2_NEO4J_PASSWORD",
     }
 
     def __repr__(self) -> str:

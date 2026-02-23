@@ -27,8 +27,7 @@ class C2Engine:
     """Async facade over continuity_core internals.
 
     Builds a ``C2Config`` from ``NexusSettings`` so C2 shares the same
-    infrastructure (Redis, Qdrant, Postgres) as the rest of Nexus.
-    Neo4j is disabled.
+    infrastructure (Redis, Qdrant, Postgres, Neo4j) as the rest of Nexus.
     """
 
     def __init__(self, settings: NexusSettings) -> None:
@@ -44,9 +43,9 @@ class C2Engine:
             redis_url=settings.REDIS_URL,
             qdrant_url=settings.QDRANT_URL,
             postgres_url=settings.POSTGRES_URL,
-            neo4j_uri="",  # disabled -- graph in Qdrant metadata
-            neo4j_user="",
-            neo4j_password="",
+            neo4j_uri=settings.C2_NEO4J_URI,
+            neo4j_user=settings.C2_NEO4J_USER,
+            neo4j_password=settings.C2_NEO4J_PASSWORD,
             embedding_backend="openrouter",
             embedding_model="",
             ollama_base_url="",
@@ -356,7 +355,20 @@ class C2Engine:
                 }
                 info["qdrant"] = "connected" if self._system.qdrant is not None else "unavailable"
                 info["redis"] = "connected" if self._system.redis is not None else "unavailable"
-                info["neo4j"] = "disabled"
+                neo4j = getattr(self._system, "_neo4j", None)
+                if neo4j is not None:
+                    try:
+                        info["neo4j"] = "connected"
+                        if hasattr(neo4j, "node_count"):
+                            info["neo4j_node_count"] = neo4j.node_count()
+                        else:
+                            info["neo4j_node_count"] = "unknown"
+                    except Exception:
+                        info["neo4j"] = "error"
+                elif self._system.config.neo4j_uri:
+                    info["neo4j"] = "configured (not initialized)"
+                else:
+                    info["neo4j"] = "disabled"
                 info["embedding"] = self._system.config.openrouter_embed_model
 
                 cache = self._system.get_mra_signals()
