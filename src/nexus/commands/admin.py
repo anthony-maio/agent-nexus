@@ -425,34 +425,34 @@ class AdminCommands(commands.Cog):
             await ctx.send("PiecesOS returned no results.")
             return
 
-        embed = discord.Embed(
-            title="PiecesOS Activity",
-            color=0x00BCD4,
-        )
-        if digest.projects:
-            embed.add_field(
-                name="Active Projects",
-                value="\n".join(f"- {p}" for p in digest.projects[:8]),
-                inline=False,
-            )
+        title = "PiecesOS Activity"
+        age = digest.age_description
+        if age:
+            title += f" ({age})"
+        if digest.is_stale:
+            title += " [STALE]"
+
+        embed = discord.Embed(title=title, color=0x00BCD4)
         if digest.recent_focus:
             embed.add_field(
                 name="Current Focus",
                 value=digest.recent_focus[:1024],
                 inline=False,
             )
-        if digest.summary:
+        if digest.projects:
             embed.add_field(
-                name="Summary",
-                value=digest.summary[:1024],
+                name="Active Projects",
+                value="\n".join(f"- {p}" for p in digest.projects[:8]),
                 inline=False,
             )
         if digest.active_apps:
             embed.add_field(
                 name="Active Apps",
                 value=", ".join(digest.active_apps[:8]),
-                inline=False,
+                inline=True,
             )
+        if digest.most_recent_at:
+            embed.set_footer(text=f"Source: {digest.most_recent_at}")
         await ctx.send(embed=embed)
 
 

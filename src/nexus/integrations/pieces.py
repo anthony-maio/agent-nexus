@@ -60,10 +60,44 @@ class ActivityDigest:
     raw_summaries: list[str] = field(default_factory=list)
     active_apps: list[str] = field(default_factory=list)
     timestamp: str = ""
+    most_recent_at: str = ""  # ISO timestamp of newest summary
 
     @property
     def is_empty(self) -> bool:
         return not self.summary and not self.projects
+
+    @property
+    def age_hours(self) -> float | None:
+        """Hours since the most recent summary, or None if unknown."""
+        if not self.most_recent_at:
+            return None
+        try:
+            created = datetime.fromisoformat(
+                self.most_recent_at.replace("Z", "+00:00"),
+            )
+            delta = datetime.now(timezone.utc) - created
+            return delta.total_seconds() / 3600
+        except (ValueError, TypeError):
+            return None
+
+    @property
+    def age_description(self) -> str:
+        """Human-readable age like '2h ago' or '3d ago'."""
+        hours = self.age_hours
+        if hours is None:
+            return ""
+        if hours < 1:
+            return f"{int(hours * 60)}m ago"
+        if hours < 24:
+            return f"{int(hours)}h ago"
+        days = hours / 24
+        return f"{int(days)}d ago"
+
+    @property
+    def is_stale(self) -> bool:
+        """True if the most recent summary is older than 24 hours."""
+        hours = self.age_hours
+        return hours is not None and hours > 24
 
 
 # Regex for "### Core Tasks & Projects" section items and TL;DR project names.
@@ -74,6 +108,43 @@ _PROJECT_LINE_RE = re.compile(
 _TLDR_PROJECT_RE = re.compile(
     r"\b([A-Z][a-z]+(?:[-_ ][A-Z][a-z]+)+(?:[-_ ][A-Z0-9]+)*)\b",
 )
+# Garbage app titles that PiecesOS sometimes returns.
+_GARBAGE_APP_TITLES = frozenset({
+    "[COULD NOT RETRIEVE APP TITLE]",
+    "unknown",
+    "",
+})
+
+
+def _strip_summary_metadata(text: str) -> str:
+    """Strip the PiecesOS metadata header from a combined_string.
+
+    PiecesOS prepends lines like:
+        Automated Summary:
+        Created: 2 days, 20 hrs ago (2026-02-20 ...)
+        Summarized time-range: ...
+
+    Strip everything before the first markdown heading (## or ###).
+    """
+    # Find first markdown heading.
+    heading_match = re.search(r"^#{2,3}\s", text, re.MULTILINE)
+    if heading_match:
+        return text[heading_match.start():].strip()
+    # No headings — strip known metadata prefixes line by line.
+    lines = text.split("\n")
+    content_lines: list[str] = []
+    past_metadata = False
+    for line in lines:
+        stripped = line.strip()
+        if not past_metadata:
+            if stripped.lower().startswith(("automated summary", "created:",
+                                           "summarized time-range")):
+                continue
+            if not stripped:
+                continue
+            past_metadata = True
+        content_lines.append(line)
+    return "\n".join(content_lines).strip() if content_lines else text.strip()
 
 
 def _extract_projects(text: str) -> list[str]:
@@ -180,57 +251,65 @@ def _parse_structured(data: dict, now_iso: str) -> ActivityDigest:
     summaries_raw = data.get("summaries", [])
     events_raw = data.get("events", [])
 
-    # Extract combined_string from each summary.
-    raw_summaries: list[str] = []
-    all_projects: list[str] = []
-    best_summary = ""
-    best_focus = ""
-    best_score = -1.0
-
+    # Sort summaries by created timestamp (most recent first).
+    valid_summaries: list[dict] = []
     for s in summaries_raw:
         if not isinstance(s, dict):
             continue
         combined = s.get("combined_string", "")
         if not combined:
             continue
-        raw_summaries.append(combined[:2000])
+        valid_summaries.append(s)
+
+    valid_summaries.sort(
+        key=lambda s: s.get("created", ""),
+        reverse=True,
+    )
+
+    # Track the most recent summary's timestamp.
+    most_recent_at = ""
+    if valid_summaries:
+        most_recent_at = valid_summaries[0].get("created", "")
+
+    # Process summaries: strip metadata, extract projects and content.
+    raw_summaries: list[str] = []
+    all_projects: list[str] = []
+    best_summary = ""
+    best_focus = ""
+
+    for i, s in enumerate(valid_summaries):
+        combined = s.get("combined_string", "")
+        cleaned = _strip_summary_metadata(combined)
+        raw_summaries.append(cleaned[:2000])
 
         # Extract projects from this summary.
-        for p in _extract_projects(combined):
+        for p in _extract_projects(cleaned):
             if p not in all_projects:
                 all_projects.append(p)
 
-        # Track highest-scored summary for recent_focus.
-        score = s.get("score", 0.0)
-        if not isinstance(score, (int, float)):
-            score = 0.0
-        if score > best_score:
-            best_score = score
-            tldr = _extract_tldr(combined)
-            best_focus = tldr if tldr else combined[:300]
+        # Most recent summary (i=0) provides the focus and summary.
+        if i == 0:
+            tldr = _extract_tldr(cleaned)
+            best_focus = tldr if tldr else cleaned[:300]
+            best_summary = tldr if tldr else cleaned[:500]
 
-    # Build the overall summary from TL;DR of first summary (most recent).
-    if raw_summaries:
-        tldr = _extract_tldr(raw_summaries[0])
-        best_summary = tldr if tldr else raw_summaries[0][:500]
-
-    # Extract active apps from events.
+    # Extract active apps from events, filtering garbage titles.
     active_apps: list[str] = []
     seen_apps: set[str] = set()
     for ev in events_raw:
         if not isinstance(ev, dict):
             continue
         app = ev.get("app_title", "")
-        if app and app not in seen_apps:
+        if app and app not in _GARBAGE_APP_TITLES and app not in seen_apps:
             # Clean up ".exe" suffix.
             clean = app.removesuffix(".exe").strip()
-            if clean:
+            if clean and clean not in _GARBAGE_APP_TITLES:
                 seen_apps.add(app)
                 active_apps.append(clean)
         window = ev.get("window_title", "")
         if window and not app:
-            # Use window title as fallback context.
-            active_apps.append(window[:60])
+            if window not in _GARBAGE_APP_TITLES:
+                active_apps.append(window[:60])
 
     return ActivityDigest(
         projects=all_projects[:10],
@@ -239,6 +318,7 @@ def _parse_structured(data: dict, now_iso: str) -> ActivityDigest:
         raw_summaries=raw_summaries[:5],
         active_apps=active_apps[:10],
         timestamp=now_iso,
+        most_recent_at=most_recent_at,
     )
 
 # MCP protocol version supported by PiecesOS

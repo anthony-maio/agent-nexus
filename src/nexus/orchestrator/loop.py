@@ -380,6 +380,10 @@ class OrchestratorLoop:
         if activity is None or not hasattr(activity, "recent_focus"):
             return
 
+        # Don't post stale activity — it's misleading.
+        if getattr(activity, "is_stale", False):
+            return
+
         # Throttle: at most once per 10 minutes.
         now = datetime.now(timezone.utc)
         if self._last_activity_post is not None:
@@ -400,20 +404,24 @@ class OrchestratorLoop:
             return
 
         try:
-            embed = discord.Embed(
-                title="User Activity Update",
-                color=0x00BCD4,
-            )
-            if activity.projects:
-                embed.add_field(
-                    name="Active Projects",
-                    value=", ".join(activity.projects[:5]),
-                    inline=False,
-                )
+            age = getattr(activity, "age_description", "")
+            title = "User Activity Update"
+            if age:
+                title = f"User Activity ({age})"
+
+            embed = discord.Embed(title=title, color=0x00BCD4)
             if activity.recent_focus:
                 embed.add_field(
                     name="Current Focus",
-                    value=activity.recent_focus[:200],
+                    value=activity.recent_focus[:300],
+                    inline=False,
+                )
+            if activity.projects:
+                embed.add_field(
+                    name="Active Projects",
+                    value="\n".join(
+                        f"- {p}" for p in activity.projects[:5]
+                    ),
                     inline=False,
                 )
             if activity.active_apps:
@@ -1100,14 +1108,21 @@ class OrchestratorLoop:
         # PiecesOS activity (parsed digest).
         activity = state.get("activity")
         if activity is not None:
-            parts.append("\n--- Recent User Activity (PiecesOS) ---")
-            if hasattr(activity, "projects") and activity.projects:
-                parts.append(
-                    f"  Active projects: {', '.join(activity.projects)}"
-                )
+            age = getattr(activity, "age_description", "")
+            stale = getattr(activity, "is_stale", False)
+            header = "Recent User Activity (PiecesOS)"
+            if age:
+                header += f" [{age}]"
+            if stale:
+                header += " (STALE)"
+            parts.append(f"\n--- {header} ---")
             if hasattr(activity, "recent_focus") and activity.recent_focus:
                 parts.append(
                     f"  Current focus: {activity.recent_focus[:300]}"
+                )
+            if hasattr(activity, "projects") and activity.projects:
+                parts.append(
+                    f"  Active projects: {', '.join(activity.projects)}"
                 )
             if hasattr(activity, "summary") and activity.summary:
                 parts.append(f"  Summary: {activity.summary[:500]}")

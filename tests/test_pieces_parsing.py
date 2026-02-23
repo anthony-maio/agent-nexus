@@ -69,9 +69,34 @@ class TestStructuredParsing:
 
     def test_extracts_recent_focus(self):
         digest = parse_activity_response(SAMPLE_STRUCTURED)
-        # Highest score summary provides recent_focus.
+        # Most recent summary (by created timestamp) provides recent_focus.
         assert digest.recent_focus
         assert len(digest.recent_focus) > 0
+
+    def test_focus_uses_most_recent_not_highest_scored(self):
+        """The most recently created summary should drive focus, not score."""
+        raw = json.dumps({
+            "summaries": [
+                {
+                    "created": "2026-02-20 10:00:00Z",
+                    "score": 0.9,
+                    "combined_string": (
+                        "## TL;DR\nOld high-scored summary.\n"
+                    ),
+                },
+                {
+                    "created": "2026-02-23 10:00:00Z",
+                    "score": 0.1,
+                    "combined_string": (
+                        "## TL;DR\nFresh low-scored summary.\n"
+                    ),
+                },
+            ],
+            "events": [],
+        })
+        digest = parse_activity_response(raw)
+        assert "Fresh low-scored" in digest.recent_focus
+        assert "Old high-scored" not in digest.recent_focus
 
     def test_extracts_active_apps(self):
         digest = parse_activity_response(SAMPLE_STRUCTURED)
@@ -96,6 +121,56 @@ class TestStructuredParsing:
         project_lower = [p.lower() for p in digest.projects]
         # Check no exact duplicates exist.
         assert len(project_lower) == len(set(project_lower))
+
+    def test_metadata_stripped_from_focus(self):
+        """'Automated Summary:' and 'Created:' should not appear in focus."""
+        digest = parse_activity_response(SAMPLE_STRUCTURED)
+        assert "Automated Summary" not in digest.recent_focus
+        assert "Created:" not in digest.recent_focus
+
+    def test_metadata_stripped_from_summary(self):
+        digest = parse_activity_response(SAMPLE_STRUCTURED)
+        assert "Automated Summary" not in digest.summary
+
+    def test_metadata_stripped_from_raw_summaries(self):
+        digest = parse_activity_response(SAMPLE_STRUCTURED)
+        for raw in digest.raw_summaries:
+            assert not raw.startswith("Automated Summary")
+
+    def test_most_recent_at_populated(self):
+        digest = parse_activity_response(SAMPLE_STRUCTURED)
+        assert digest.most_recent_at == "2026-02-23 13:25:55.076568Z"
+
+
+# =====================================================================
+# Garbage app title filtering
+# =====================================================================
+
+
+class TestGarbageFiltering:
+    def test_filters_could_not_retrieve(self):
+        raw = json.dumps({
+            "summaries": [{
+                "created": "2026-02-23",
+                "score": 0.5,
+                "combined_string": "## TL;DR\nWorking.\n",
+            }],
+            "events": [
+                {
+                    "app_title": "[COULD NOT RETRIEVE APP TITLE]",
+                    "window_title": "something",
+                    "score": 1.0,
+                },
+                {
+                    "app_title": "Code.exe",
+                    "window_title": "file.py",
+                    "score": 0.9,
+                },
+            ],
+        })
+        digest = parse_activity_response(raw)
+        assert "[COULD NOT RETRIEVE APP TITLE]" not in digest.active_apps
+        assert "Code" in digest.active_apps
 
 
 # =====================================================================
@@ -203,3 +278,25 @@ class TestActivityDigest:
     def test_is_empty_with_projects(self):
         digest = ActivityDigest(projects=["MyProject"])
         assert not digest.is_empty
+
+    def test_age_hours_none_when_no_timestamp(self):
+        digest = ActivityDigest()
+        assert digest.age_hours is None
+
+    def test_age_description_format(self):
+        digest = ActivityDigest(
+            most_recent_at="2020-01-01T00:00:00+00:00",
+        )
+        # Very old — should show days.
+        assert "d ago" in digest.age_description
+
+    def test_is_stale_with_old_timestamp(self):
+        digest = ActivityDigest(
+            most_recent_at="2020-01-01T00:00:00+00:00",
+        )
+        assert digest.is_stale
+
+    def test_not_stale_without_timestamp(self):
+        digest = ActivityDigest()
+        # No timestamp means unknown, not stale.
+        assert not digest.is_stale
