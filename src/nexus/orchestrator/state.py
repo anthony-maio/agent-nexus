@@ -42,7 +42,8 @@ class StateGatherer:
     - ``timestamp`` -- ISO-8601 UTC timestamp of the gather operation.
     - ``recent_messages`` -- List of recent conversation message dicts.
     - ``memories`` -- List of semantically relevant memory dicts.
-    - ``activity`` -- Raw PiecesOS activity string, or ``None``.
+    - ``activity`` -- Parsed :class:`~nexus.integrations.pieces.ActivityDigest`,
+      or ``None``.
     - ``curiosity`` -- C2 curiosity signals dict, or ``None``.
     - ``has_activity`` -- Boolean flag indicating whether *any* source
       produced data (used as a fast-path check by the orchestrator).
@@ -222,27 +223,28 @@ class StateGatherer:
             )
             return None
 
-    async def _gather_activity(self) -> str | None:
-        """Retrieve recent user activity from PiecesOS.
+    async def _gather_activity(self) -> Any:
+        """Retrieve recent user activity from PiecesOS as a parsed digest.
 
         PiecesOS integration is optional and may not be configured.  When
         the client is absent this method returns ``None`` silently.
         The client handles its own reconnection if the session expired.
 
         Returns:
-            A raw activity summary string, or ``None`` if the integration
-            is unavailable or returns nothing.
+            An :class:`~nexus.integrations.pieces.ActivityDigest`, or
+            ``None`` if the integration is unavailable or returns nothing.
         """
         try:
             pieces = getattr(self.bot, "pieces", None)
             if pieces is None:
                 return None
 
-            # get_recent_activity handles auto-reconnect internally
-            activity: str | None = await asyncio.wait_for(
-                pieces.get_recent_activity(), timeout=20.0,
+            digest = await asyncio.wait_for(
+                pieces.get_activity_digest(), timeout=20.0,
             )
-            return activity if activity else None
+            if digest is not None and not digest.is_empty:
+                return digest
+            return None
 
         except asyncio.TimeoutError:
             log.warning("PiecesOS activity gather timed out after 20s.")

@@ -76,6 +76,9 @@ class OrchestratorLoop:
         from nexus.orchestrator.guardrails import IdleLoopDetector
 
         self._idle_detector = IdleLoopDetector()
+        # Activity digest tracking for change detection.
+        self._last_activity_focus: str = ""
+        self._last_activity_post: datetime | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -171,6 +174,9 @@ class OrchestratorLoop:
                 except asyncio.TimeoutError:
                     log.warning("State gather timed out after 120s -- skipping cycle.")
                     continue
+
+                # 1b. Post activity digest to #nexus if focus changed.
+                await self._maybe_post_activity_digest(state)
 
                 # 2. Ask a swarm model what to do about it.
                 try:
@@ -361,6 +367,66 @@ class OrchestratorLoop:
             await router.nexus.send(embed=embed)
         except Exception:
             log.debug("Failed to post idle-loop notice.", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Activity digest posting
+    # ------------------------------------------------------------------
+
+    async def _maybe_post_activity_digest(
+        self, state: dict[str, Any],
+    ) -> None:
+        """Post a brief activity update to #nexus when focus changes."""
+        activity = state.get("activity")
+        if activity is None or not hasattr(activity, "recent_focus"):
+            return
+
+        # Throttle: at most once per 10 minutes.
+        now = datetime.now(timezone.utc)
+        if self._last_activity_post is not None:
+            elapsed = (now - self._last_activity_post).total_seconds()
+            if elapsed < 600:
+                return
+
+        # Detect meaningful change in focus.
+        current_focus = (activity.recent_focus or "")[:50]
+        if current_focus == self._last_activity_focus:
+            return
+
+        self._last_activity_focus = current_focus
+        self._last_activity_post = now
+
+        router = getattr(self.bot, "router", None)
+        if router is None or getattr(router, "nexus", None) is None:
+            return
+
+        try:
+            embed = discord.Embed(
+                title="User Activity Update",
+                color=0x00BCD4,
+            )
+            if activity.projects:
+                embed.add_field(
+                    name="Active Projects",
+                    value=", ".join(activity.projects[:5]),
+                    inline=False,
+                )
+            if activity.recent_focus:
+                embed.add_field(
+                    name="Current Focus",
+                    value=activity.recent_focus[:200],
+                    inline=False,
+                )
+            if activity.active_apps:
+                embed.add_field(
+                    name="Active Apps",
+                    value=", ".join(activity.active_apps[:5]),
+                    inline=True,
+                )
+            await router.nexus.send(embed=embed)
+        except Exception:
+            log.debug(
+                "Failed to post activity digest.", exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Night cycle
@@ -990,11 +1056,24 @@ class OrchestratorLoop:
                 score = mem.get("score", 0.0)
                 parts.append(f"  [{source}, relevance={score:.2f}]: {content}")
 
-        # PiecesOS activity.
-        activity: str | None = state.get("activity")
-        if activity:
+        # PiecesOS activity (parsed digest).
+        activity = state.get("activity")
+        if activity is not None:
             parts.append("\n--- Recent User Activity (PiecesOS) ---")
-            parts.append(f"  {activity[:500]}")
+            if hasattr(activity, "projects") and activity.projects:
+                parts.append(
+                    f"  Active projects: {', '.join(activity.projects)}"
+                )
+            if hasattr(activity, "recent_focus") and activity.recent_focus:
+                parts.append(
+                    f"  Current focus: {activity.recent_focus[:300]}"
+                )
+            if hasattr(activity, "summary") and activity.summary:
+                parts.append(f"  Summary: {activity.summary[:500]}")
+            if hasattr(activity, "active_apps") and activity.active_apps:
+                parts.append(
+                    f"  Active apps: {', '.join(activity.active_apps[:5])}"
+                )
 
         # C2 curiosity signals.
         curiosity: dict[str, Any] | None = state.get("curiosity")

@@ -33,14 +33,213 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import socket as sync_socket
 import time
 import urllib.request
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
 from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Activity digest: parsed PiecesOS LTM response
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ActivityDigest:
+    """Structured summary parsed from a PiecesOS LTM response."""
+
+    projects: list[str] = field(default_factory=list)
+    summary: str = ""
+    recent_focus: str = ""
+    raw_summaries: list[str] = field(default_factory=list)
+    active_apps: list[str] = field(default_factory=list)
+    timestamp: str = ""
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.summary and not self.projects
+
+
+# Regex for "### Core Tasks & Projects" section items and TL;DR project names.
+_PROJECT_LINE_RE = re.compile(
+    r"[-*]\s+(?:\*\*)?([A-Z][A-Za-z0-9 _\-/:.]+?)(?:\*\*)?(?:\s*[:;]|\s*$)",
+)
+# Broad pattern for project-like names in TL;DR (capitalized multi-word).
+_TLDR_PROJECT_RE = re.compile(
+    r"\b([A-Z][a-z]+(?:[-_ ][A-Z][a-z]+)+(?:[-_ ][A-Z0-9]+)*)\b",
+)
+
+
+def _extract_projects(text: str) -> list[str]:
+    """Extract project names from a PiecesOS summary string."""
+    projects: list[str] = []
+    seen: set[str] = set()
+
+    # 1. Look for "### Core Tasks & Projects" section lines.
+    in_core_section = False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if "core tasks" in stripped.lower() and "project" in stripped.lower():
+            in_core_section = True
+            continue
+        if in_core_section:
+            if stripped.startswith("#") and "core" not in stripped.lower():
+                in_core_section = False
+                continue
+            m = _PROJECT_LINE_RE.match(stripped)
+            if m:
+                name = m.group(1).strip()
+                if len(name) >= 3 and name.lower() not in seen:
+                    seen.add(name.lower())
+                    projects.append(name)
+
+    # 2. Look for project-like names in TL;DR section.
+    tldr_start = text.lower().find("tl;dr")
+    if tldr_start >= 0:
+        tldr_block = text[tldr_start:tldr_start + 500]
+        for m in _TLDR_PROJECT_RE.finditer(tldr_block):
+            name = m.group(1).strip()
+            if len(name) >= 5 and name.lower() not in seen:
+                # Skip common false positives.
+                if name.lower() not in {
+                    "the user", "this week", "last week",
+                    "today", "yesterday",
+                }:
+                    seen.add(name.lower())
+                    projects.append(name)
+
+    return projects[:10]
+
+
+def _extract_tldr(text: str) -> str:
+    """Extract the TL;DR section from a PiecesOS summary."""
+    tldr_start = text.lower().find("tl;dr")
+    if tldr_start < 0:
+        return ""
+    # Skip the "## TL;DR\n" header.
+    content_start = text.find("\n", tldr_start)
+    if content_start < 0:
+        return ""
+    content_start += 1
+    # Read until the next section header or end.
+    next_header = text.find("\n#", content_start)
+    if next_header >= 0:
+        return text[content_start:next_header].strip()
+    return text[content_start:content_start + 500].strip()
+
+
+def parse_activity_response(raw: str) -> ActivityDigest:
+    """Parse a PiecesOS LTM response into a structured digest.
+
+    Handles two formats:
+    - JSON with ``summaries`` and ``events`` arrays (structured response)
+    - Plain text narrative (direct LTM summary)
+
+    Args:
+        raw: The raw text from the ``ask_pieces_ltm`` MCP tool.
+
+    Returns:
+        An :class:`ActivityDigest` with extracted fields.
+    """
+    if not raw or not raw.strip():
+        return ActivityDigest(timestamp=datetime.now(timezone.utc).isoformat())
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Try JSON parse first.
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        data = None
+
+    if isinstance(data, dict) and "summaries" in data:
+        return _parse_structured(data, now_iso)
+
+    # Plain text fallback.
+    projects = _extract_projects(raw)
+    tldr = _extract_tldr(raw)
+    summary = tldr if tldr else raw[:500]
+    return ActivityDigest(
+        projects=projects,
+        summary=summary,
+        recent_focus=summary[:300],
+        raw_summaries=[raw[:2000]],
+        active_apps=[],
+        timestamp=now_iso,
+    )
+
+
+def _parse_structured(data: dict, now_iso: str) -> ActivityDigest:
+    """Parse a JSON response with ``summaries`` and ``events`` arrays."""
+    summaries_raw = data.get("summaries", [])
+    events_raw = data.get("events", [])
+
+    # Extract combined_string from each summary.
+    raw_summaries: list[str] = []
+    all_projects: list[str] = []
+    best_summary = ""
+    best_focus = ""
+    best_score = -1.0
+
+    for s in summaries_raw:
+        if not isinstance(s, dict):
+            continue
+        combined = s.get("combined_string", "")
+        if not combined:
+            continue
+        raw_summaries.append(combined[:2000])
+
+        # Extract projects from this summary.
+        for p in _extract_projects(combined):
+            if p not in all_projects:
+                all_projects.append(p)
+
+        # Track highest-scored summary for recent_focus.
+        score = s.get("score", 0.0)
+        if not isinstance(score, (int, float)):
+            score = 0.0
+        if score > best_score:
+            best_score = score
+            tldr = _extract_tldr(combined)
+            best_focus = tldr if tldr else combined[:300]
+
+    # Build the overall summary from TL;DR of first summary (most recent).
+    if raw_summaries:
+        tldr = _extract_tldr(raw_summaries[0])
+        best_summary = tldr if tldr else raw_summaries[0][:500]
+
+    # Extract active apps from events.
+    active_apps: list[str] = []
+    seen_apps: set[str] = set()
+    for ev in events_raw:
+        if not isinstance(ev, dict):
+            continue
+        app = ev.get("app_title", "")
+        if app and app not in seen_apps:
+            # Clean up ".exe" suffix.
+            clean = app.removesuffix(".exe").strip()
+            if clean:
+                seen_apps.add(app)
+                active_apps.append(clean)
+        window = ev.get("window_title", "")
+        if window and not app:
+            # Use window title as fallback context.
+            active_apps.append(window[:60])
+
+    return ActivityDigest(
+        projects=all_projects[:10],
+        summary=best_summary[:1000],
+        recent_focus=best_focus[:500],
+        raw_summaries=raw_summaries[:5],
+        active_apps=active_apps[:10],
+        timestamp=now_iso,
+    )
 
 # MCP protocol version supported by PiecesOS
 _MCP_VERSION = "2024-11-05"
@@ -386,6 +585,26 @@ class PiecesMCPClient:
                 exc or "(no details)",
             )
             return None
+
+    async def get_activity_digest(
+        self,
+        query: str = "What has the user been working on recently?",
+    ) -> ActivityDigest | None:
+        """Query PiecesOS LTM and return a parsed activity digest.
+
+        Convenience wrapper around :meth:`get_recent_activity` that
+        parses the raw response into a structured :class:`ActivityDigest`.
+
+        Args:
+            query: Question forwarded to the ``ask_pieces_ltm`` tool.
+
+        Returns:
+            A parsed :class:`ActivityDigest`, or ``None`` if unavailable.
+        """
+        raw = await self.get_recent_activity(query=query)
+        if raw is None:
+            return None
+        return parse_activity_response(raw)
 
     # -- Lifecycle ------------------------------------------------------------
 

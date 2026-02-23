@@ -420,18 +420,39 @@ class AdminCommands(commands.Cog):
 
         await ctx.send(f"Querying PiecesOS: *{query[:100]}*...")
 
-        result = await self.bot.pieces.get_recent_activity(query=query)
-        if result is None:
+        digest = await self.bot.pieces.get_activity_digest(query=query)
+        if digest is None or digest.is_empty:
             await ctx.send("PiecesOS returned no results.")
             return
 
-        # Truncate to Discord embed limit
-        text = result[:4000] if len(result) > 4000 else result
         embed = discord.Embed(
             title="PiecesOS Activity",
-            description=text,
             color=0x00BCD4,
         )
+        if digest.projects:
+            embed.add_field(
+                name="Active Projects",
+                value="\n".join(f"- {p}" for p in digest.projects[:8]),
+                inline=False,
+            )
+        if digest.recent_focus:
+            embed.add_field(
+                name="Current Focus",
+                value=digest.recent_focus[:1024],
+                inline=False,
+            )
+        if digest.summary:
+            embed.add_field(
+                name="Summary",
+                value=digest.summary[:1024],
+                inline=False,
+            )
+        if digest.active_apps:
+            embed.add_field(
+                name="Active Apps",
+                value=", ".join(digest.active_apps[:8]),
+                inline=False,
+            )
         await ctx.send(embed=embed)
 
 
