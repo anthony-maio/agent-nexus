@@ -72,6 +72,10 @@ class OrchestratorLoop:
         self._trigger_event: asyncio.Event = asyncio.Event()
         # Rolling history of recent cycle outcomes for temporal context.
         self._cycle_history: list[dict[str, Any]] = []
+        # Guardrail: idle-loop detection across cycles.
+        from nexus.orchestrator.guardrails import IdleLoopDetector
+
+        self._idle_detector = IdleLoopDetector()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -175,6 +179,11 @@ class OrchestratorLoop:
                     )
                 except asyncio.TimeoutError:
                     log.warning("Decision phase timed out after 60s -- skipping dispatch.")
+                    actions = []
+
+                # 2b. Guardrail 3: suppress dispatch if topics are recycling.
+                if actions and self._idle_detector.check_cycle(actions, state):
+                    await self._post_idle_notice()
                     actions = []
 
                 # 3. Dispatch each action through the autonomy gate.
@@ -325,6 +334,33 @@ class OrchestratorLoop:
         except Exception:
             log.warning("Consensus check failed — allowing action.", exc_info=True)
             return True
+
+    # ------------------------------------------------------------------
+    # Guardrail helpers
+    # ------------------------------------------------------------------
+
+    async def _post_idle_notice(self) -> None:
+        """Post a brief notice to #nexus about topic recycling suppression."""
+        # Only post once per suppression episode.
+        if self._idle_detector.staleness_counter > self._idle_detector.stale_cycle_limit:
+            return
+        router = getattr(self.bot, "router", None)
+        if router is None or getattr(router, "nexus", None) is None:
+            return
+        try:
+            import discord
+
+            embed = discord.Embed(
+                title="Swarm Paused",
+                description=(
+                    "Auto-dispatch paused: detecting topic recycling with no "
+                    "new external input. Will resume when new activity arrives."
+                ),
+                color=0xF39C12,
+            )
+            await router.nexus.send(embed=embed)
+        except Exception:
+            log.debug("Failed to post idle-loop notice.", exc_info=True)
 
     # ------------------------------------------------------------------
     # Night cycle
@@ -723,6 +759,11 @@ class OrchestratorLoop:
             )
 
             actions = self._parse_actions(response.content, decision_model)
+
+            # Guardrail 1: Drop actions referencing entities not in state.
+            from nexus.orchestrator.guardrails import check_entity_grounding
+
+            actions = check_entity_grounding(actions, prompt)
 
             # Process any new goal creation requests.
             await self._process_goal_actions(actions)

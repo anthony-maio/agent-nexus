@@ -168,6 +168,33 @@ class TaskDispatcher:
                 )
 
         if result is not None:
+            # Guardrail 2: validate task agent output before propagation.
+            if result.success:
+                from nexus.orchestrator.guardrails import validate_task_output
+
+                is_valid, reason = validate_task_output(
+                    result.result, description,
+                )
+                if not is_valid:
+                    log.info(
+                        "GUARDRAIL: Suppressing hallucinated result: %.100s",
+                        description,
+                    )
+                    result = TaskResult(
+                        action_type=result.action_type,
+                        description=result.description,
+                        result=reason,
+                        model_used=result.model_used,
+                        success=False,
+                        timestamp=result.timestamp,
+                        priority=result.priority,
+                    )
+                    # Store the failed result so the decision model sees
+                    # "this failed" next cycle, but do NOT post to #nexus
+                    # and do NOT trigger initiative — breaks the loop.
+                    self._store_result(result)
+                    return result
+
             self._store_result(result)
             await self._post_result_to_nexus(result, description)
 
