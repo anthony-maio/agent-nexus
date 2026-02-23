@@ -18,7 +18,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -194,60 +193,36 @@ DEFAULT_SWARM_IDS: list[str] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Tier 2 -- Task Agent Models (LiquidAI, dispatched for specific tasks)
+# Tier 2 -- Task Agent Models (dispatched for specific tasks)
 # ---------------------------------------------------------------------------
+#
+# GLM-4.7-Flash: 30B-class model optimised for agentic coding, long-horizon
+# task planning, and tool collaboration.  Replaces the LiquidAI 1.2B family
+# which were too small to produce reliable, grounded outputs.
+#
+# All roles currently route to the same model since it handles routing,
+# reasoning, extraction, and RAG equally well at 30B scale.
+
+_GLM_FLASH = ModelSpec(
+    id="z-ai/glm-4.7-flash",
+    name="GLM 4.7 Flash",
+    provider=ModelProvider.OPENROUTER,
+    tier=ModelTier.TASK,
+    context_window=202_752,
+    cost_input_per_m=0.06,
+    cost_output_per_m=0.40,
+    strengths=[
+        "agentic-coding", "tool-calling", "reasoning",
+        "long-horizon-planning", "extraction", "routing",
+    ],
+)
 
 TASK_MODELS: dict[str, ModelSpec] = {
-    "router": ModelSpec(
-        id="liquid/lfm-2.5-1.2b-instruct:free",
-        name="LFM 2.5 1.2B Instruct (Router/Classifier)",
-        provider=ModelProvider.OPENROUTER,
-        tier=ModelTier.TASK,
-        context_window=32_000,
-        cost_input_per_m=0.0,
-        cost_output_per_m=0.0,
-        strengths=["routing", "classification", "fast"],
-    ),
-    "reasoning": ModelSpec(
-        id="liquid/lfm-2.5-1.2b-thinking:free",
-        name="LFM 2.5 1.2B Thinking (Reasoning)",
-        provider=ModelProvider.OPENROUTER,
-        tier=ModelTier.TASK,
-        context_window=32_000,
-        cost_input_per_m=0.0,
-        cost_output_per_m=0.0,
-        strengths=["reasoning", "chain-of-thought", "fast"],
-    ),
-    "tool_calling": ModelSpec(
-        id="LiquidAI/LFM2-1.2B-Tool",
-        name="LFM2 1.2B Tool",
-        provider=ModelProvider.OLLAMA,
-        tier=ModelTier.TASK,
-        context_window=32_000,
-        cost_input_per_m=0.0,
-        cost_output_per_m=0.0,
-        strengths=["tool-calling", "function-execution", "local"],
-    ),
-    "rag": ModelSpec(
-        id="LiquidAI/LFM2-1.2B-RAG",
-        name="LFM2 1.2B RAG",
-        provider=ModelProvider.OLLAMA,
-        tier=ModelTier.TASK,
-        context_window=32_000,
-        cost_input_per_m=0.0,
-        cost_output_per_m=0.0,
-        strengths=["retrieval", "context-grounding", "local"],
-    ),
-    "extraction": ModelSpec(
-        id="LiquidAI/LFM2-1.2B-Extract",
-        name="LFM2 1.2B Extract",
-        provider=ModelProvider.OLLAMA,
-        tier=ModelTier.TASK,
-        context_window=32_000,
-        cost_input_per_m=0.0,
-        cost_output_per_m=0.0,
-        strengths=["data-extraction", "structured-output", "local"],
-    ),
+    "router": _GLM_FLASH,
+    "reasoning": _GLM_FLASH,
+    "tool_calling": _GLM_FLASH,
+    "rag": _GLM_FLASH,
+    "extraction": _GLM_FLASH,
 }
 
 # ---------------------------------------------------------------------------

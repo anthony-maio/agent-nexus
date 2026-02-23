@@ -116,25 +116,17 @@ _PREMIUM_SWARM: list[ModelIdentity] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Task agents -- lightweight LiquidAI models for routing and quick reasoning
+# Task agents -- GLM-4.7-Flash for agentic task execution
 # ---------------------------------------------------------------------------
 
 _TASK_AGENTS: list[ModelIdentity] = [
     ModelIdentity(
-        model_id="liquid/lfm-2.5-1.2b-instruct:free",
-        name="Router",
-        emoji="\u27A1\ufe0f",  # right arrow
-        role="Router",
-        color=0x95A5A6,
-        personality="Lightweight dispatcher that routes tasks to the right agent",
-    ),
-    ModelIdentity(
-        model_id="liquid/lfm-2.5-1.2b-thinking:free",
-        name="Thinker",
-        emoji="\U0001F4AD",  # thought balloon
-        role="Reasoner",
-        color=0x95A5A6,
-        personality="Compact reasoner that thinks step-by-step before answering",
+        model_id="z-ai/glm-4.7-flash",
+        name="Flash",
+        emoji="\u26A1",  # high voltage
+        role="Task Agent",
+        color=0x3498DB,
+        personality="Fast agentic task executor for coding, reasoning, and extraction",
     ),
 ]
 
