@@ -946,26 +946,67 @@ class OrchestratorLoop:
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
 
+        # Strip <think>...</think> blocks (some models emit reasoning).
+        import re as _re
+
+        text = _re.sub(r"<think>.*?</think>", "", text, flags=_re.DOTALL).strip()
+
+        parsed = self._try_parse_json_array(text, model_id)
+        if parsed is None:
+            return []
+        return self._validate_action_list(parsed, model_id)
+
+    def _try_parse_json_array(
+        self, text: str, model_id: str,
+    ) -> list[Any] | None:
+        """Try to extract a JSON array from the model's response text."""
+        # Direct parse.
         try:
             parsed = json.loads(text)
-        except json.JSONDecodeError:
+            if isinstance(parsed, list):
+                return parsed
             log.warning(
-                "Could not parse orchestrator decision as JSON (model=%s): %.200s",
-                model_id,
-                text,
-            )
-            return []
-
-        if not isinstance(parsed, list):
-            log.warning(
-                "Orchestrator decision is not a JSON array (model=%s, type=%s).",
+                "Orchestrator decision is not a JSON array "
+                "(model=%s, type=%s).",
                 model_id,
                 type(parsed).__name__,
             )
-            return []
+            return None
+        except json.JSONDecodeError:
+            pass
 
-        # Validate and cap actions.
-        valid_types = {"research", "code", "analyze", "summarize", "classify", "extract"}
+        # Fallback: extract JSON array from surrounding reasoning text.
+        bracket_start = text.find("[")
+        bracket_end = text.rfind("]")
+        if bracket_start >= 0 and bracket_end > bracket_start:
+            try:
+                parsed = json.loads(text[bracket_start:bracket_end + 1])
+                if isinstance(parsed, list):
+                    log.debug(
+                        "Extracted JSON array from surrounding text "
+                        "(model=%s).",
+                        model_id,
+                    )
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        log.warning(
+            "Could not parse orchestrator decision as JSON "
+            "(model=%s): %.200s",
+            model_id,
+            text,
+        )
+        return None
+
+    def _validate_action_list(
+        self, parsed: list[Any], model_id: str,
+    ) -> list[dict[str, Any]]:
+        """Validate and normalise a parsed list of action dicts."""
+        valid_types = {
+            "research", "code", "analyze", "summarize",
+            "classify", "extract",
+        }
         valid_priorities = {"high", "medium", "low"}
         actions: list[dict[str, Any]] = []
 

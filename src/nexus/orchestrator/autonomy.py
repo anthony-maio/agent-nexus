@@ -104,12 +104,15 @@ class AutonomyGate:
         if action.get("priority") == "high":
             score += 0.1
 
-        # Failure rate penalty
+        # Failure rate penalty — only apply when there are SOME successes
+        # to compare against.  A 100% failure rate from guardrail rejections
+        # should not escalate low-risk actions into a doom loop where
+        # everything times out in #human.
         if self._bot is not None:
             dispatcher = getattr(self._bot, "dispatcher", None)
             if dispatcher is not None:
                 total = dispatcher.success_count + dispatcher.failure_count
-                if total >= 5:
+                if total >= 5 and dispatcher.success_count > 0:
                     failure_rate = dispatcher.failure_count / total
                     if failure_rate > 0.5:
                         score += 0.2
