@@ -551,6 +551,24 @@ class OrchestratorLoop:
             )
             actions = []
 
+        # 2a. Log decisions to C2 for knowledge-graph continuity.
+        if actions:
+            c2 = getattr(self.bot, "c2", None)
+            if c2 is not None and c2.is_running:
+                summary = "; ".join(
+                    a.get("description", "")[:60] for a in actions[:3]
+                )
+                try:
+                    await c2.write_event(
+                        actor="orchestrator",
+                        intent="decision",
+                        inp=summary,
+                        out=f"{len(actions)} actions proposed",
+                        tags=["manual", "decision"],
+                    )
+                except Exception:
+                    pass  # Non-critical
+
         # 2b. Guardrail 4: drop tasks requiring impossible capabilities.
         if actions:
             from nexus.orchestrator.guardrails import check_capability
@@ -1194,6 +1212,34 @@ class OrchestratorLoop:
         "agent returned empty",
         "context caching hypothesis",
         "holding pattern",
+        # Goal-summarisation loop: agents summarising their own goals
+        "summarize the current state",
+        "current state and findings for goal",
+        "findings for goal [",
+        "progress made on",
+        "status update for goal",
+        # Meta-about-meta: system auditing/fixing itself
+        "evidence integrity audit",
+        "hallucination detection",
+        "hallucinated citation",
+        "preventing hallucinated",
+        "metadata discrepancy",
+        "metadata synchronization",
+        "stale metadata",
+        "task completion and mechanism",
+        "bidirectional validation",
+        "task execution database",
+        "task tracking and reporting",
+        "ontological tag",
+        "extraction result baseline",
+        "result validation fix",
+        # Agents designing systems they can't build
+        "implement caching layer",
+        "deploy a",
+        "modify task_runner",
+        "modify the code",
+        "universal post-hook",
+        "verification gate",
     ]
 
     def _is_meta_goal(self, description: str) -> bool:

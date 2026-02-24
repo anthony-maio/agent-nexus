@@ -199,6 +199,39 @@ def build_tools(bot: Any) -> list:
             log.warning("get_recent_c2_events tool failed: %s", exc)
             return f"C2 events query failed: {exc}"
 
+    @tool
+    async def remember_finding(content: str, importance: int = 7) -> str:
+        """Store an important finding in vector memory for future reference.
+
+        Use this when you discover something significant that future task
+        agents should be able to find via semantic search. Be specific and
+        descriptive — vague findings are not useful.
+
+        Args:
+            content: The finding to remember (be specific and descriptive).
+            importance: How important this is (1-10, default 7).
+        """
+        if not bot.memory_store.is_connected:
+            return "Memory store is not connected."
+        try:
+            importance = max(1, min(importance, 10))
+            text = content[:500]
+            vector = await bot.embeddings.embed_one(text)
+            await bot.memory_store.store(
+                content=text,
+                vector=vector,
+                source="task_agent",
+                channel="nexus",
+                metadata={
+                    "type": "agent_discovery",
+                    "importance": str(importance),
+                },
+            )
+            return "Finding stored in vector memory."
+        except Exception as exc:
+            log.warning("remember_finding tool failed: %s", exc)
+            return f"Failed to store finding: {exc}"
+
     return [
         query_memory,
         query_c2_context,
@@ -206,4 +239,5 @@ def build_tools(bot: Any) -> list:
         write_c2_event,
         get_active_goals,
         get_recent_c2_events,
+        remember_finding,
     ]

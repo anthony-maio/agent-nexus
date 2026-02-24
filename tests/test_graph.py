@@ -168,6 +168,24 @@ class TestIsMetaGoal:
         assert _is_meta_goal("Diagnose the bug in the extraction tool")
         assert _is_meta_goal("Investigate why the agent returned empty result")
 
+    def test_detects_goal_summarisation_loop(self):
+        assert _is_meta_goal(
+            "Summarize the current state and findings for Goal [b8cd519fb605]"
+        )
+        assert _is_meta_goal(
+            "Current state and findings for Goal [fecc63bc6307]"
+        )
+        assert _is_meta_goal("Status update for Goal [5ee7fbeef0d1]")
+        assert _is_meta_goal("Progress made on the Evidence Integrity Audit")
+
+    def test_detects_meta_about_meta(self):
+        assert _is_meta_goal("Evidence Integrity Audit of task agent outputs")
+        assert _is_meta_goal("Research preventing hallucinated citations")
+        assert _is_meta_goal("Analyze the metadata discrepancy in goal tracking")
+        assert _is_meta_goal("Implement caching layer to reduce latency")
+        assert _is_meta_goal("Modify task_runner.py to enforce validation")
+        assert _is_meta_goal("Query the task execution database for status")
+
     def test_passes_normal_goals(self):
         assert not _is_meta_goal("Research user's Python project structure")
         assert not _is_meta_goal("Analyze code patterns in the repository")
@@ -337,6 +355,7 @@ class TestEnrichC2Node:
         c2.get_context = AsyncMock(return_value={
             "chosen": [{"text": "Python best practices", "store": "kg"}],
         })
+        c2.events = AsyncMock(return_value={"events": []})
 
         bot = MagicMock()
         bot.c2 = c2
@@ -365,6 +384,64 @@ class TestEnrichC2Node:
         bot = MagicMock(spec=[])  # No c2 attribute.
         result = await enrich_c2_node(_minimal_state(), bot=bot)
         assert result["c2_context"] == ""
+
+    @pytest.mark.asyncio
+    async def test_includes_curiosity_signals(self):
+        from nexus.orchestrator.graph import enrich_c2_node
+
+        c2 = AsyncMock()
+        c2.is_running = True
+        c2.get_context = AsyncMock(return_value={"chosen": []})
+        c2.events = AsyncMock(return_value={"events": []})
+
+        bot = MagicMock()
+        bot.c2 = c2
+
+        curiosity = {
+            "stress_level": 0.42,
+            "contradictions": [
+                {"s1": "Pattern A works", "s2": "Pattern A fails", "score": 0.8},
+            ],
+            "deep_tensions": [
+                {"s1": "Use Redis", "s2": "Use Postgres", "score": 0.6, "similarity": 0.7},
+            ],
+            "bridging_questions": ["Which storage backend is preferred?"],
+        }
+        state = _minimal_state(curiosity=curiosity)
+        result = await enrich_c2_node(state, bot=bot)
+
+        ctx = result["c2_context"]
+        assert "Epistemic State" in ctx
+        assert "stress=0.420" in ctx
+        assert "Contradiction:" in ctx
+        assert "Pattern A works" in ctx
+        assert "Tension:" in ctx
+        assert "Open question:" in ctx
+        assert "Which storage backend" in ctx
+
+    @pytest.mark.asyncio
+    async def test_includes_recent_events(self):
+        from nexus.orchestrator.graph import enrich_c2_node
+
+        c2 = AsyncMock()
+        c2.is_running = True
+        c2.get_context = AsyncMock(return_value={"chosen": []})
+        c2.events = AsyncMock(return_value={
+            "events": [
+                {"intent": "decision", "input": "Analyze code patterns"},
+                {"intent": "task_result", "input": "Found 3 issues"},
+            ],
+        })
+
+        bot = MagicMock()
+        bot.c2 = c2
+
+        result = await enrich_c2_node(_minimal_state(), bot=bot)
+        ctx = result["c2_context"]
+        assert "Recent Events" in ctx
+        assert "[decision]" in ctx
+        assert "Analyze code patterns" in ctx
+        assert "[task_result]" in ctx
 
 
 class TestGuardrailsNode:
@@ -523,6 +600,117 @@ class TestPostResultsNode:
         result = await post_results_node(state, bot=bot)
         assert result == {}
 
+    @pytest.mark.asyncio
+    async def test_writes_successful_result_to_qdrant(self):
+        from nexus.orchestrator.graph import post_results_node
+
+        bot = MagicMock()
+        bot.router.nexus.send = AsyncMock()
+        bot.c2 = AsyncMock()
+        bot.c2.is_running = True
+        bot.c2.write_event = AsyncMock(return_value=True)
+        bot.embeddings.embed_one = AsyncMock(return_value=[0.1, 0.2])
+        bot.memory_store.store = AsyncMock()
+        bot.settings.TASK_AGENT_MODEL = "test/model"
+
+        state = _minimal_state(agent_results=[{
+            "action": {"type": "research", "description": "Investigate bug"},
+            "result": "Found the root cause in module X.",
+            "success": True,
+            "tool_calls": [],
+        }])
+
+        await post_results_node(state, bot=bot)
+
+        # Qdrant store should be called with the result content.
+        bot.memory_store.store.assert_called_once()
+        call_kwargs = bot.memory_store.store.call_args[1]
+        assert "Investigate bug" in call_kwargs["content"]
+        assert "root cause" in call_kwargs["content"]
+        assert call_kwargs["metadata"]["type"] == "task_result"
+
+    @pytest.mark.asyncio
+    async def test_skips_qdrant_write_on_failure(self):
+        from nexus.orchestrator.graph import post_results_node
+
+        bot = MagicMock()
+        bot.router.nexus.send = AsyncMock()
+        bot.c2 = None
+        bot.settings.TASK_AGENT_MODEL = "test/model"
+        bot.embeddings.embed_one = AsyncMock()
+        bot.memory_store.store = AsyncMock()
+
+        state = _minimal_state(agent_results=[{
+            "action": {"type": "analyze", "description": "Test task"},
+            "result": "Error occurred.",
+            "success": False,
+            "tool_calls": [],
+        }])
+
+        await post_results_node(state, bot=bot)
+
+        # Qdrant store should NOT be called for failed results.
+        bot.memory_store.store.assert_not_called()
+
+
+class TestOrchestratorDecideC2Write:
+    @pytest.mark.asyncio
+    async def test_logs_decision_to_c2(self):
+        from nexus.orchestrator.graph import orchestrator_decide_node
+
+        # Mock LLM response with a valid action.
+        mock_response = MagicMock()
+        mock_response.content = json.dumps([
+            {"type": "research", "description": "Look into auth patterns"},
+        ])
+
+        orchestrator_llm = AsyncMock()
+        orchestrator_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        c2 = AsyncMock()
+        c2.is_running = True
+        c2.write_event = AsyncMock(return_value=True)
+
+        bot = MagicMock()
+        bot.c2 = c2
+
+        state = _minimal_state(
+            recent_messages=[{"author": "human", "content": "Check auth"}],
+        )
+
+        await orchestrator_decide_node(
+            state, orchestrator_llm=orchestrator_llm, bot=bot,
+        )
+
+        # C2 write_event should be called with the decision.
+        c2.write_event.assert_called_once()
+        call_kwargs = c2.write_event.call_args[1]
+        assert call_kwargs["actor"] == "orchestrator"
+        assert call_kwargs["intent"] == "decision"
+        assert "auth patterns" in call_kwargs["inp"]
+
+    @pytest.mark.asyncio
+    async def test_skips_c2_write_when_no_actions(self):
+        from nexus.orchestrator.graph import orchestrator_decide_node
+
+        mock_response = MagicMock()
+        mock_response.content = "[]"
+
+        orchestrator_llm = AsyncMock()
+        orchestrator_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        c2 = AsyncMock()
+        c2.is_running = True
+
+        bot = MagicMock()
+        bot.c2 = c2
+
+        await orchestrator_decide_node(
+            _minimal_state(), orchestrator_llm=orchestrator_llm, bot=bot,
+        )
+
+        c2.write_event.assert_not_called()
+
 
 # =====================================================================
 # ReAct loop
@@ -606,12 +794,12 @@ class TestReactLoop:
 
 
 class TestBuildTools:
-    def test_returns_six_tools(self):
+    def test_returns_seven_tools(self):
         from nexus.orchestrator.tools import build_tools
 
         bot = MagicMock()
         tools = build_tools(bot)
-        assert len(tools) == 6
+        assert len(tools) == 7
         names = {t.name for t in tools}
         assert names == {
             "query_memory",
@@ -620,6 +808,7 @@ class TestBuildTools:
             "write_c2_event",
             "get_active_goals",
             "get_recent_c2_events",
+            "remember_finding",
         }
 
     @pytest.mark.asyncio
@@ -716,6 +905,40 @@ class TestBuildTools:
         goals_tool = next(t for t in tools if t.name == "get_active_goals")
         result = await goals_tool.ainvoke({})
         assert "not available" in result
+
+    @pytest.mark.asyncio
+    async def test_remember_finding_success(self):
+        from nexus.orchestrator.tools import build_tools
+
+        bot = MagicMock()
+        bot.memory_store.is_connected = True
+        bot.embeddings.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3])
+        bot.memory_store.store = AsyncMock()
+
+        tools = build_tools(bot)
+        remember = next(t for t in tools if t.name == "remember_finding")
+        result = await remember.ainvoke({
+            "content": "Auth tokens expire after 24h by default",
+            "importance": 8,
+        })
+        assert "stored" in result.lower()
+        bot.memory_store.store.assert_called_once()
+        call_kwargs = bot.memory_store.store.call_args[1]
+        assert "Auth tokens" in call_kwargs["content"]
+        assert call_kwargs["metadata"]["type"] == "agent_discovery"
+        assert call_kwargs["metadata"]["importance"] == "8"
+
+    @pytest.mark.asyncio
+    async def test_remember_finding_disconnected(self):
+        from nexus.orchestrator.tools import build_tools
+
+        bot = MagicMock()
+        bot.memory_store.is_connected = False
+
+        tools = build_tools(bot)
+        remember = next(t for t in tools if t.name == "remember_finding")
+        result = await remember.ainvoke({"content": "Some finding"})
+        assert "not connected" in result
 
 
 # =====================================================================

@@ -118,10 +118,12 @@ async def enrich_c2_node(
     *,
     bot: Any,
 ) -> dict[str, Any]:
-    """Compose C2 context pack from recent conversation."""
+    """Compose rich C2 context pack from knowledge, stress, and events."""
     c2 = getattr(bot, "c2", None)
     if c2 is None or not c2.is_running:
         return {"c2_context": ""}
+
+    parts: list[str] = []
 
     # Build a query from recent conversation + curiosity signals.
     query_parts: list[str] = []
@@ -137,20 +139,47 @@ async def enrich_c2_node(
 
     query = " ".join(query_parts)[:500] or "current tasks and priorities"
 
+    # Stage 1: Knowledge context from C2 pipeline.
     try:
         result = await c2.get_context(query, token_budget=2048)
-        if result is None:
-            return {"c2_context": ""}
-        chosen = result.get("chosen", [])
-        if not chosen:
-            return {"c2_context": ""}
-        context_text = "\n".join(
-            c.get("text", "")[:300] for c in chosen
-        )
-        return {"c2_context": context_text}
+        if result is not None:
+            chosen = result.get("chosen", [])
+            if chosen:
+                parts.append("## Stored Knowledge")
+                for c in chosen:
+                    parts.append(c.get("text", "")[:300])
     except Exception:
         log.debug("C2 context enrichment failed.", exc_info=True)
-        return {"c2_context": ""}
+
+    # Stage 2: Epistemic state (contradictions, tensions, questions).
+    if curiosity:
+        stress = curiosity.get("stress_level", 0)
+        if stress > 0:
+            parts.append(f"\n## Epistemic State (stress={stress:.3f})")
+            for c in curiosity.get("contradictions", [])[:3]:
+                s1 = c.get("s1", "")[:80]
+                s2 = c.get("s2", "")[:80]
+                parts.append(f"- Contradiction: {s1} vs {s2}")
+            for t in curiosity.get("deep_tensions", [])[:2]:
+                s1 = t.get("s1", "")[:80]
+                s2 = t.get("s2", "")[:80]
+                parts.append(f"- Tension: {s1} vs {s2}")
+            for q in curiosity.get("bridging_questions", [])[:2]:
+                parts.append(f"- Open question: {q[:100]}")
+
+    # Stage 3: Recent C2 events (what just happened).
+    try:
+        events_result = await c2.events(limit=5)
+        if events_result and events_result.get("events"):
+            parts.append("\n## Recent Events")
+            for evt in events_result["events"][:5]:
+                intent = evt.get("intent", "")
+                inp = evt.get("input", "")[:80]
+                parts.append(f"- [{intent}] {inp}")
+    except Exception:
+        pass  # Non-critical
+
+    return {"c2_context": "\n".join(parts)}
 
 
 async def orchestrator_decide_node(
@@ -168,6 +197,25 @@ async def orchestrator_decide_node(
             HumanMessage(content=prompt),
         ])
         actions = _parse_actions(response.content)
+
+        # Log decision to C2 for future context.
+        if actions:
+            c2 = getattr(bot, "c2", None)
+            if c2 is not None and c2.is_running:
+                summary = "; ".join(
+                    a.get("description", "")[:60] for a in actions[:3]
+                )
+                try:
+                    await c2.write_event(
+                        actor="orchestrator",
+                        intent="decision",
+                        inp=summary,
+                        out=f"{len(actions)} actions proposed",
+                        tags=["langgraph", "decision"],
+                    )
+                except Exception:
+                    pass  # Non-critical
+
         return {"proposed_actions": actions}
     except Exception:
         log.error("Orchestrator decision failed.", exc_info=True)
@@ -325,7 +373,7 @@ async def post_results_node(
     # Post to #nexus.
     await _post_to_nexus(bot, latest)
 
-    # Log to C2.
+    # Log to C2 event log.
     c2 = getattr(bot, "c2", None)
     if c2 is not None and c2.is_running:
         try:
@@ -338,6 +386,24 @@ async def post_results_node(
             )
         except Exception:
             pass
+
+    # Persist successful results to Qdrant vector memory for future search.
+    if success and result_text and hasattr(bot, "memory_store"):
+        try:
+            content = f"[Task: {description[:100]}] {result_text[:400]}"
+            vector = await bot.embeddings.embed_one(content)
+            await bot.memory_store.store(
+                content=content,
+                vector=vector,
+                source="task_agent",
+                channel="nexus",
+                metadata={
+                    "type": "task_result",
+                    "action_type": action.get("type", ""),
+                },
+            )
+        except Exception:
+            pass  # Non-critical
 
     # Update linked goal.
     goal_id = action.get("goal_id", "")
@@ -671,6 +737,34 @@ _META_GOAL_PATTERNS: list[str] = [
     "agent returned empty",
     "context caching hypothesis",
     "holding pattern",
+    # Goal-summarisation loop: agents summarising their own goals endlessly
+    "summarize the current state",
+    "current state and findings for goal",
+    "findings for goal [",
+    "progress made on",
+    "status update for goal",
+    # Meta-about-meta: system auditing/fixing itself
+    "evidence integrity audit",
+    "hallucination detection",
+    "hallucinated citation",
+    "preventing hallucinated",
+    "metadata discrepancy",
+    "metadata synchronization",
+    "stale metadata",
+    "task completion and mechanism",
+    "bidirectional validation",
+    "task execution database",
+    "task tracking and reporting",
+    "ontological tag",
+    "extraction result baseline",
+    "result validation fix",
+    # Agents designing systems they can't build
+    "implement caching layer",
+    "deploy a",
+    "modify task_runner",
+    "modify the code",
+    "universal post-hook",
+    "verification gate",
 ]
 
 
