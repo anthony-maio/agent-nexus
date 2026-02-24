@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict, List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client import models as qmodels
 
-
 EmbedFn = Callable[[str], List[float]]
 
 
@@ -33,7 +32,10 @@ class QdrantMemoryStore:
         except Exception:
             self._client.create_collection(
                 collection_name=self._collection,
-                vectors_config=qmodels.VectorParams(size=self._vector_size, distance=qmodels.Distance.COSINE),
+                vectors_config=qmodels.VectorParams(
+                    size=self._vector_size,
+                    distance=qmodels.Distance.COSINE,
+                ),
             )
 
     def remember(self, content: str, memory_type: str, importance: int = 5,
@@ -61,15 +63,20 @@ class QdrantMemoryStore:
         qvec = self._embed_fn(query)
         qfilter = None
         if type_filter:
-            qfilter = qmodels.Filter(must=[qmodels.FieldCondition(key="type", match=qmodels.MatchValue(value=type_filter))])
-        results = self._client.search(
+            qfilter = qmodels.Filter(
+                must=[qmodels.FieldCondition(
+                    key="type",
+                    match=qmodels.MatchValue(value=type_filter),
+                )]
+            )
+        response = self._client.query_points(
             collection_name=self._collection,
-            query_vector=qvec,
+            query=qvec,
             query_filter=qfilter,
             limit=top_k,
         )
         out: List[QdrantResult] = []
-        for r in results:
+        for r in response.points:
             payload = dict(r.payload or {})
             out.append(QdrantResult(id=str(r.id), score=float(r.score), payload=payload))
         return out
