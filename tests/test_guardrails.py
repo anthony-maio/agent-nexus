@@ -132,6 +132,34 @@ class TestTaskOutputValidation:
         )
         assert is_valid
 
+    def test_fabricated_infrastructure_fails(self):
+        is_valid, reason = validate_task_output(
+            "I accessed /app/agents/task_agent/manifest.json and found "
+            "the config at /config/agent_config.yaml. The PID: 12345 "
+            "shows the agent is running.",
+            "Extract config files",
+        )
+        assert not is_valid
+        assert "infrastructure" in reason
+
+    def test_fabricated_shell_commands_fails(self):
+        is_valid, reason = validate_task_output(
+            "Running cat /etc/passwd and grep -r 'secret' /app/config "
+            "reveals the deployment structure.",
+            "Analyze system",
+        )
+        assert not is_valid
+        assert "infrastructure" in reason
+
+    def test_single_path_mention_passes(self):
+        """One path reference alone shouldn't trigger — need 2+ signals."""
+        is_valid, _ = validate_task_output(
+            "The config is typically stored at /etc/nginx/nginx.conf "
+            "on Linux systems.",
+            "Research nginx config",
+        )
+        assert is_valid
+
     def test_legal_terminology_fails(self):
         is_valid, reason = validate_task_output(
             "The plaintiff filed a subpoena for the defendant's deposition records.",
@@ -146,12 +174,17 @@ class TestTaskOutputValidation:
 # =====================================================================
 
 
-def _make_state(has_human=False, has_activity=False):
+def _make_state(has_human=False, has_activity=False, stale_activity=False):
     state = {"recent_messages": [], "activity": None}
     if has_human:
         state["recent_messages"] = [{"author": "human", "content": "hello"}]
     if has_activity:
-        state["activity"] = "User edited file.py"
+        from nexus.integrations.pieces import ActivityDigest
+
+        digest = ActivityDigest(summary="User edited file.py")
+        if stale_activity:
+            digest.most_recent_at = "2020-01-01T00:00:00+00:00"
+        state["activity"] = digest
     return state
 
 
@@ -206,6 +239,18 @@ class TestIdleLoopDetector:
         # PiecesOS activity detected
         detector.check_cycle(actions, _make_state(has_activity=True))
         assert detector.staleness_counter == 0
+
+    def test_stale_activity_does_not_reset(self):
+        detector = IdleLoopDetector(stale_cycle_limit=3)
+        actions = [{"description": "Analyze conversation patterns in the codebase"}]
+        detector.check_cycle(actions, _make_state())
+        detector.check_cycle(actions, _make_state())
+        assert detector.staleness_counter == 1
+        # Stale PiecesOS activity should NOT reset
+        detector.check_cycle(
+            actions, _make_state(has_activity=True, stale_activity=True),
+        )
+        assert detector.staleness_counter == 2
 
     def test_empty_actions_not_stale(self):
         detector = IdleLoopDetector()

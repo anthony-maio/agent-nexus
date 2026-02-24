@@ -130,6 +130,9 @@ class OrchestratorLoop:
         """Main loop: hybrid interval + trigger-based cycling."""
         await asyncio.sleep(self._STARTUP_DELAY)
 
+        # Prune stale goals from previous runs before the first cycle.
+        await self._startup_prune_goals()
+
         # Run an immediate first cycle after startup delay.
         first_cycle = True
 
@@ -367,6 +370,36 @@ class OrchestratorLoop:
             await router.nexus.send(embed=embed)
         except Exception:
             log.debug("Failed to post idle-loop notice.", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Startup maintenance
+    # ------------------------------------------------------------------
+
+    async def _startup_prune_goals(self) -> None:
+        """Prune stale goals from previous runs on startup.
+
+        Redis-backed goals survive restarts, so old goals from crashed
+        or stopped runs can fill the goal limit immediately.  This
+        clears them before the first decision cycle.
+        """
+        goal_store = getattr(self.bot, "goal_store", None)
+        if goal_store is None:
+            return
+        try:
+            pruned = await goal_store.prune_stale_goals()
+            if pruned:
+                log.info(
+                    "Startup: pruned %d stale goal(s) from previous runs.",
+                    pruned,
+                )
+            active = await goal_store.get_active_goals()
+            log.info(
+                "Startup: %d active goal(s) in store.", len(active),
+            )
+        except Exception:
+            log.warning(
+                "Startup goal pruning failed.", exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Activity digest posting
@@ -817,12 +850,21 @@ class OrchestratorLoop:
                             '  "goal_id": (optional) ID of an existing goal this relates to\n'
                             '  "new_goal": (optional) object with "title" and "description" '
                             "to create a new goal\n\n"
-                            "You can also create new goals when a sustained effort is needed. "
-                            "Return an empty array [] if no actions are needed right now. "
-                            "Only propose actions that are clearly useful based on the state. "
-                            "Do not invent tasks with no basis in the provided context. "
-                            "Do not duplicate actions that already appear in active goals or "
-                            "recent task results."
+                            "IMPORTANT CONSTRAINTS:\n"
+                            "- Task agents are LLMs called via API. They can ONLY analyze text, "
+                            "write content, and reason. They CANNOT access files, run commands, "
+                            "query databases, or interact with infrastructure.\n"
+                            "- Do NOT create tasks that require filesystem access, "
+                            "running scripts, executing queries, or inspecting infrastructure.\n"
+                            "- Do NOT create meta-goals about the swarm itself (e.g. 'summarize "
+                            "cycle results', 'compile status report', 'review escalation').\n"
+                            "- Do NOT create goals about diagnosing or fixing the swarm's own "
+                            "infrastructure or task agent failures.\n"
+                            "- Tasks should be grounded in the USER's actual work — projects they "
+                            "are working on, code they are writing, topics they are researching.\n"
+                            "- Return an empty array [] if there is nothing useful to do. "
+                            "Doing nothing is BETTER than inventing busywork.\n"
+                            "- Do not duplicate actions already in active goals or recent results."
                             + autonomy_hint
                         ),
                     },

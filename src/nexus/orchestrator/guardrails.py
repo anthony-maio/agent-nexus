@@ -122,6 +122,29 @@ _FABRICATED_SPECIFICS: list[re.Pattern[str]] = [
     ),
 ]
 
+# Patterns indicating fabricated infrastructure/system access.
+# Task agents are LLMs with no filesystem, DB, or infra access.
+_FABRICATED_INFRA: list[re.Pattern[str]] = [
+    # File paths the agent claims to have accessed
+    re.compile(r"(?:/app/|/var/|/etc/|/config/|/bin/)\S+", re.IGNORECASE),
+    # Shell commands the agent claims to have run
+    re.compile(r"\b(?:cat|ls|grep|curl|docker|kubectl)\s+\S+"),
+    # Database queries the agent claims to have executed
+    re.compile(
+        r"\b(?:SELECT|INSERT|CALL|MATCH|CREATE)\s+\w+",
+        re.IGNORECASE,
+    ),
+    # Log IDs and process IDs the agent fabricated
+    re.compile(r"\bLog ID\s*#?\d+\b", re.IGNORECASE),
+    re.compile(r"\bPID\s*:?\s*\d+\b"),
+    # Error codes from systems the agent can't access
+    re.compile(r"\bError\s+\d{3}\b"),
+    # Fabricated agent names
+    re.compile(
+        r"\bAgent\s+[A-Z][a-z]+-(?:Alpha|Beta|Gamma|\d+)\b",
+    ),
+]
+
 _FILLER_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\(\d+\s*words?\)", re.IGNORECASE),
 ]
@@ -170,6 +193,16 @@ def validate_task_output(
         if matches:
             reasons.append(f"fabricated specifics: {matches[:3]}")
             break
+
+    # 2b. Fabricated infrastructure access
+    infra_hits: list[str] = []
+    for pattern in _FABRICATED_INFRA:
+        matches = pattern.findall(result_text)
+        infra_hits.extend(matches[:2])
+    if len(infra_hits) >= 2:
+        reasons.append(
+            f"fabricated infrastructure access: {infra_hits[:4]}"
+        )
 
     # 3. Filler padding
     for pattern in _FILLER_PATTERNS:
@@ -325,7 +358,9 @@ class IdleLoopDetector:
             if msg.get("author") == "human":
                 return True
 
-        if state.get("activity") is not None:
+        # Only count non-stale activity as fresh input.
+        activity = state.get("activity")
+        if activity is not None and not getattr(activity, "is_stale", False):
             return True
 
         return False
