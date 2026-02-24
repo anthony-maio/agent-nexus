@@ -170,6 +170,42 @@ class TestTaskOutputValidation:
         assert not is_valid
         assert "legal" in reason
 
+    def test_assigned_to_task_agents_passes(self):
+        """'assigned to task agents' is normal English, not a fabricated name."""
+        is_valid, _ = validate_task_output(
+            "The work was assigned to task agents for further processing.",
+            "Summarize task dispatch strategy",
+        )
+        assert is_valid
+
+    def test_create_evidence_passes(self):
+        """'Create evidence' is normal English, not a SQL CREATE statement."""
+        is_valid, _ = validate_task_output(
+            "Create evidence-based documentation of the approach. "
+            "Match source material with identified patterns.",
+            "Document findings",
+        )
+        assert is_valid
+
+    def test_actual_sql_still_fails(self):
+        """Real SQL syntax should still be caught."""
+        is_valid, reason = validate_task_output(
+            "I ran SELECT * FROM users and also ran "
+            "INSERT INTO logs the findings.",
+            "Query data",
+        )
+        assert not is_valid
+        assert "infrastructure" in reason
+
+    def test_fabricated_personnel_with_full_name_fails(self):
+        """'reviewed by John Smith' with a full name is fabricated."""
+        is_valid, reason = validate_task_output(
+            "The code was reviewed by John Smith and approved by Jane Doe.",
+            "Check review status",
+        )
+        assert not is_valid
+        assert "fabricated" in reason
+
 
 # =====================================================================
 # Idle-Loop Detection

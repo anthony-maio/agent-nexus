@@ -124,23 +124,41 @@ _FABRICATED_SPECIFICS: list[re.Pattern[str]] = [
     re.compile(r"\b[A-Z]{2,10}-\d{2,6}\b"),  # Jira-style
     re.compile(r"\bqueue\s+position\s*#?\d+\b", re.IGNORECASE),
     re.compile(r"\b\d+\.\d{3,}%"),  # Overly precise: "99.847%"
+    # Fabricated personnel attribution -- require a proper name (capitalized
+    # first+last) after the verb phrase to avoid matching generic phrases
+    # like "assigned to task agents".
     re.compile(
-        r"\b(?:reviewed by|assigned to|approved by)\s+[A-Z][a-z]+",
-        re.IGNORECASE,
+        r"\b(?:reviewed by|assigned to|approved by)\s+"
+        r"[A-Z][a-z]+\s+[A-Z][a-z]+",
     ),
 ]
 
 # Patterns indicating fabricated infrastructure/system access.
 # Task agents are LLMs with no filesystem, DB, or infra access.
+# NOTE: Each pattern must be precise enough to avoid matching common
+# English phrases (e.g. "Create evidence" is NOT a SQL CREATE statement).
 _FABRICATED_INFRA: list[re.Pattern[str]] = [
     # File paths the agent claims to have accessed
     re.compile(r"(?:/app/|/var/|/etc/|/config/|/bin/)\S+", re.IGNORECASE),
     # Shell commands the agent claims to have run
     re.compile(r"\b(?:cat|ls|grep|curl|docker|kubectl)\s+\S+"),
-    # Database queries the agent claims to have executed
+    # SQL queries -- require SQL syntax, not just keywords in English prose.
+    # Must have keyword + table/column pattern (e.g. "SELECT * FROM",
+    # "INSERT INTO", "CREATE TABLE") not "Create evidence" or "Match source".
     re.compile(
-        r"\b(?:SELECT|INSERT|CALL|MATCH|CREATE)\s+\w+",
+        r"\bSELECT\s+(?:\*|\w+)\s+FROM\b",
         re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bINSERT\s+INTO\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bCREATE\s+(?:TABLE|INDEX|VIEW|DATABASE)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bMATCH\s*\([^)]+\)",  # Cypher MATCH (node) syntax
     ),
     # Log IDs and process IDs the agent fabricated
     re.compile(r"\bLog ID\s*#?\d+\b", re.IGNORECASE),
