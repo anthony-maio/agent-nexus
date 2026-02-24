@@ -73,9 +73,10 @@ class OrchestratorLoop:
         # Rolling history of recent cycle outcomes for temporal context.
         self._cycle_history: list[dict[str, Any]] = []
         # Guardrail: idle-loop detection across cycles.
-        from nexus.orchestrator.guardrails import IdleLoopDetector
+        from nexus.orchestrator.guardrails import FailureCircuitBreaker, IdleLoopDetector
 
         self._idle_detector = IdleLoopDetector()
+        self._circuit_breaker = FailureCircuitBreaker()
         # Activity digest tracking for change detection.
         self._last_activity_focus: str = ""
         self._last_activity_post: datetime | None = None
@@ -181,27 +182,8 @@ class OrchestratorLoop:
                 # 1b. Post activity digest to #nexus if focus changed.
                 await self._maybe_post_activity_digest(state)
 
-                # 2. Ask a swarm model what to do about it.
-                try:
-                    actions: list[dict[str, Any]] = await asyncio.wait_for(
-                        self._decide(state), timeout=60.0,
-                    )
-                except asyncio.TimeoutError:
-                    log.warning("Decision phase timed out after 60s -- skipping dispatch.")
-                    actions = []
-
-                # 2b. Guardrail 3: suppress dispatch if topics are recycling.
-                if actions and self._idle_detector.check_cycle(actions, state):
-                    await self._post_idle_notice()
-                    actions = []
-
-                # 3. Dispatch each action through the autonomy gate.
-                dispatched = 0
-                for action in actions:
-                    dispatched += await self._gate_and_dispatch(action)
-
-                # 3b. Dispatch ready tasks from the goal queue.
-                dispatched += await self._dispatch_goal_queue_tasks()
+                # 2-3. Decision + dispatch via LangGraph or manual path.
+                dispatched = await self._decide_and_dispatch(state)
 
                 # 4. Full cycle only: run night-cycle maintenance via C2
                 #    and prune stale goals.
@@ -220,7 +202,7 @@ class OrchestratorLoop:
                 )
 
                 # Record cycle in history for temporal context.
-                self._record_cycle(cycle_type, dispatched, elapsed, actions)
+                self._record_cycle(cycle_type, dispatched, elapsed, [])
 
                 # Log cycle completion to C2
                 await self._log_to_c2(
@@ -276,6 +258,9 @@ class OrchestratorLoop:
 
         result = await self.bot.dispatcher.dispatch(action)
         if result is not None:
+            # Record result for circuit breaker.
+            self._circuit_breaker.record_result(result.success)
+
             # Log dispatch to C2
             await self._log_to_c2(
                 actor="orchestrator",
@@ -284,7 +269,7 @@ class OrchestratorLoop:
                 out=str(result)[:500],
                 tags=["task", action.get("type", "unknown")],
             )
-            return 1
+            return 1 if result.success else 0
         return 0
 
     async def _consensus_check(self, action: dict[str, Any]) -> bool:
@@ -468,6 +453,124 @@ class OrchestratorLoop:
             log.debug(
                 "Failed to post activity digest.", exc_info=True,
             )
+
+    # ------------------------------------------------------------------
+    # Decision + dispatch (LangGraph or manual)
+    # ------------------------------------------------------------------
+
+    async def _decide_and_dispatch(self, state: dict[str, Any]) -> int:
+        """Run the decide+dispatch pipeline.
+
+        When ``LANGGRAPH_ENABLED`` is true and the graph is available,
+        delegates to the LangGraph orchestrator graph.  Otherwise falls
+        back to the original manual decide -> guardrail -> dispatch flow.
+
+        Returns the number of actions successfully dispatched.
+        """
+        graph = getattr(self.bot, "_orchestrator_graph", None)
+        if self.bot.settings.LANGGRAPH_ENABLED and graph is not None:
+            return await self._langgraph_cycle(state, graph)
+        return await self._manual_cycle(state)
+
+    async def _langgraph_cycle(
+        self,
+        state: dict[str, Any],
+        graph: Any,
+    ) -> int:
+        """Run a single cycle through the LangGraph orchestrator graph."""
+        # Serialise ActivityDigest if present.
+        activity = state.get("activity")
+        activity_dict = None
+        if activity is not None and hasattr(activity, "summary"):
+            activity_dict = {
+                "summary": getattr(activity, "summary", ""),
+                "recent_focus": getattr(activity, "recent_focus", ""),
+                "projects": getattr(activity, "projects", []),
+                "active_apps": getattr(activity, "active_apps", []),
+                "is_stale": getattr(activity, "is_stale", False),
+                "age_description": getattr(activity, "age_description", ""),
+            }
+
+        initial_state = {
+            "timestamp": state.get("timestamp", ""),
+            "cycle_count": self._cycle_count,
+            "recent_messages": state.get("recent_messages", []),
+            "memories": state.get("memories", []),
+            "activity": activity_dict,
+            "curiosity": state.get("curiosity"),
+            "task_results": state.get("task_results", []),
+            "active_goals": state.get("active_goals", ""),
+            "c2_context": "",
+            "proposed_actions": [],
+            "approved_actions": [],
+            "agent_results": [],
+            "tool_log": [],
+            "pending_action_index": 0,
+            "should_stop": False,
+        }
+
+        config = {"configurable": {"thread_id": f"cycle-{self._cycle_count}"}}
+
+        try:
+            result = await asyncio.wait_for(
+                graph.ainvoke(initial_state, config),
+                timeout=300.0,
+            )
+            agent_results = result.get("agent_results", [])
+            dispatched = sum(
+                1 for r in agent_results if r.get("success")
+            )
+            tool_calls = result.get("tool_log", [])
+            log.info(
+                "LangGraph cycle complete: %d dispatched, %d tool calls.",
+                dispatched,
+                len(tool_calls),
+            )
+            return dispatched
+        except asyncio.TimeoutError:
+            log.warning("LangGraph cycle timed out after 300s.")
+            return 0
+        except Exception:
+            log.error("LangGraph cycle failed.", exc_info=True)
+            return 0
+
+    async def _manual_cycle(self, state: dict[str, Any]) -> int:
+        """Run the original manual decide -> guardrail -> dispatch flow."""
+        # Circuit breaker: skip dispatch if too many consecutive failures.
+        if self._circuit_breaker.should_suppress():
+            return 0
+
+        # 2. Ask a swarm model what to do about it.
+        try:
+            actions: list[dict[str, Any]] = await asyncio.wait_for(
+                self._decide(state), timeout=60.0,
+            )
+        except asyncio.TimeoutError:
+            log.warning(
+                "Decision phase timed out after 60s -- skipping dispatch.",
+            )
+            actions = []
+
+        # 2b. Guardrail 4: drop tasks requiring impossible capabilities.
+        if actions:
+            from nexus.orchestrator.guardrails import check_capability
+
+            actions = check_capability(actions)
+
+        # 2c. Guardrail 3: suppress dispatch if topics are recycling.
+        if actions and self._idle_detector.check_cycle(actions, state):
+            await self._post_idle_notice()
+            actions = []
+
+        # 3. Dispatch each action through the autonomy gate.
+        dispatched = 0
+        for action in actions:
+            dispatched += await self._gate_and_dispatch(action)
+
+        # 3b. Dispatch ready tasks from the goal queue.
+        dispatched += await self._dispatch_goal_queue_tasks()
+
+        return dispatched
 
     # ------------------------------------------------------------------
     # Night cycle
@@ -1070,6 +1173,27 @@ class OrchestratorLoop:
         "infra-level intervention",
         "infra-level review",
         "escalation message",
+        # Self-diagnosis / hallucination spiral patterns
+        "empty result",
+        "empty extraction",
+        "diagnose the bug",
+        "root cause analysis",
+        "root cause of the",
+        "investigate the failure",
+        "investigate why the",
+        "trace the data flow",
+        "audit the findings",
+        "cross-reference the",
+        "synthesize the findings",
+        "analyze the task",
+        "taskresult",
+        "validation logic",
+        "extraction code",
+        "extraction tool",
+        "agent cannot access",
+        "agent returned empty",
+        "context caching hypothesis",
+        "holding pattern",
     ]
 
     def _is_meta_goal(self, description: str) -> bool:

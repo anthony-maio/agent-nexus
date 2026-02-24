@@ -1,7 +1,9 @@
 """Tests for anti-hallucination guardrails."""
 
 from nexus.orchestrator.guardrails import (
+    FailureCircuitBreaker,
     IdleLoopDetector,
+    check_capability,
     check_entity_grounding,
     validate_task_output,
 )
@@ -267,3 +269,143 @@ class TestIdleLoopDetector:
         detector.reset()
         assert detector.staleness_counter == 0
         assert not detector.is_suppressed
+
+
+# =====================================================================
+# Capability Filtering
+# =====================================================================
+
+
+class TestCapabilityFiltering:
+    def test_passes_normal_tasks(self):
+        actions = [
+            {"type": "research", "description": "Summarize recent security trends"},
+            {"type": "analyze", "description": "Evaluate the conversation patterns"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 2
+
+    def test_drops_file_access_tasks(self):
+        actions = [
+            {"type": "code", "description": "Analyze code in tools/extraction.py"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_drops_file_inspect_task(self):
+        actions = [
+            {"type": "extract", "description": "Read the configuration from config.yaml"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_drops_database_inspection(self):
+        actions = [
+            {"type": "analyze", "description": "Query the Neo4j database for recent events"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_drops_log_inspection(self):
+        actions = [
+            {"type": "extract", "description": "Check the logs for error patterns"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_drops_command_execution(self):
+        actions = [
+            {"type": "code", "description": "Run the test suite and report failures"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_drops_self_diagnosis(self):
+        actions = [
+            {"type": "analyze", "description": "Diagnose the bug in the extraction tool"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_drops_root_cause_analysis(self):
+        actions = [
+            {"type": "research", "description": "Root cause analysis of empty results"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_drops_trace_data_flow(self):
+        actions = [
+            {"type": "analyze", "description": "Trace the data flow from extraction to reasoning"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_drops_cross_reference(self):
+        actions = [
+            {"type": "analyze", "description": "Cross-reference the two audit findings"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 0
+
+    def test_mixed_actions_partial_filter(self):
+        actions = [
+            {"type": "research", "description": "Summarize Python best practices for async"},
+            {"type": "code", "description": "Inspect the extraction code in parser.py"},
+            {"type": "analyze", "description": "Evaluate user's architectural approach"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 2
+        descriptions = [a["description"] for a in result]
+        assert any("best practices" in d for d in descriptions)
+        assert any("architectural" in d for d in descriptions)
+
+    def test_empty_actions_unchanged(self):
+        assert check_capability([]) == []
+
+
+# =====================================================================
+# Failure Circuit Breaker
+# =====================================================================
+
+
+class TestFailureCircuitBreaker:
+    def test_not_tripped_initially(self):
+        breaker = FailureCircuitBreaker()
+        assert not breaker.is_tripped
+        assert not breaker.should_suppress()
+
+    def test_trips_after_threshold(self):
+        breaker = FailureCircuitBreaker(failure_threshold=3, cooldown_cycles=2)
+        breaker.record_result(False)
+        breaker.record_result(False)
+        assert not breaker.is_tripped
+        breaker.record_result(False)
+        assert breaker.is_tripped
+
+    def test_success_resets_counter(self):
+        breaker = FailureCircuitBreaker(failure_threshold=3)
+        breaker.record_result(False)
+        breaker.record_result(False)
+        breaker.record_result(True)  # Reset
+        assert breaker.consecutive_failures == 0
+        assert not breaker.is_tripped
+
+    def test_cooldown_suppresses_then_resumes(self):
+        breaker = FailureCircuitBreaker(failure_threshold=2, cooldown_cycles=2)
+        breaker.record_result(False)
+        breaker.record_result(False)
+        assert breaker.is_tripped
+
+        assert breaker.should_suppress()   # cooldown 1
+        assert breaker.should_suppress()   # cooldown 0
+        assert not breaker.should_suppress()  # expired -- resumed
+
+    def test_reset_clears_all(self):
+        breaker = FailureCircuitBreaker(failure_threshold=2)
+        breaker.record_result(False)
+        breaker.record_result(False)
+        assert breaker.is_tripped
+        breaker.reset()
+        assert not breaker.is_tripped
+        assert breaker.consecutive_failures == 0

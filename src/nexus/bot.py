@@ -230,6 +230,11 @@ class NexusBot(commands.Bot):
         else:
             log.info("C2 not available - cognitive memory features disabled")
 
+        # Initialize LangGraph orchestrator (behind feature flag)
+        self._orchestrator_graph = None
+        if self.settings.LANGGRAPH_ENABLED:
+            await self._init_langgraph()
+
         # Build system prompts for all swarm models
         model_ids = list(self.swarm_models.keys())
         for model_id in model_ids:
@@ -282,6 +287,71 @@ class NexusBot(commands.Bot):
             "redis" if self.goal_store.is_connected else "memory",
             len(self.trigger_manager._triggers),
         )
+
+    async def _init_langgraph(self) -> None:
+        """Initialize the LangGraph orchestrator graph.
+
+        Creates LangChain LLMs, builds tools, sets up checkpointing,
+        and compiles the graph.  Falls back gracefully on failure.
+        """
+        try:
+            from nexus.models.langchain_adapter import (
+                create_agent_llm,
+                create_orchestrator_llm,
+            )
+            from nexus.orchestrator.graph import build_orchestrator_graph
+            from nexus.orchestrator.tools import build_tools
+
+            orchestrator_llm = create_orchestrator_llm(
+                api_key=self.settings.OPENROUTER_API_KEY,
+                model=self.settings.ORCHESTRATOR_MODEL,
+            )
+            agent_llm = create_agent_llm(
+                api_key=self.settings.OPENROUTER_API_KEY,
+                model=self.settings.TASK_AGENT_MODEL,
+            )
+            tools = build_tools(self)
+
+            # Redis checkpointer (reuse existing nexus-redis).
+            checkpointer = None
+            try:
+                from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+
+                checkpointer = AsyncRedisSaver.from_conn_string(
+                    self.settings.REDIS_URL,
+                )
+                await checkpointer.setup()
+                log.info("LangGraph: Redis checkpointer initialized.")
+            except Exception as exc:
+                log.info(
+                    "LangGraph: Redis checkpointer unavailable (%s), "
+                    "using in-memory fallback.",
+                    exc,
+                )
+                from langgraph.checkpoint.memory import MemorySaver
+
+                checkpointer = MemorySaver()
+
+            self._orchestrator_graph = build_orchestrator_graph(
+                bot=self,
+                orchestrator_llm=orchestrator_llm,
+                agent_llm=agent_llm,
+                tools=tools,
+                checkpointer=checkpointer,
+            )
+            log.info(
+                "LangGraph orchestrator initialized "
+                "(orchestrator=%s, agent=%s).",
+                self.settings.ORCHESTRATOR_MODEL,
+                self.settings.TASK_AGENT_MODEL,
+            )
+        except Exception:
+            log.error(
+                "LangGraph initialization failed -- "
+                "falling back to manual orchestrator.",
+                exc_info=True,
+            )
+            self._orchestrator_graph = None
 
     def _setup_triggers(self) -> None:
         """Register all trigger sources with the trigger manager."""

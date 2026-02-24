@@ -1,19 +1,27 @@
 """Anti-hallucination guardrails for the Agent Nexus orchestrator.
 
-Three automated safeguards that prevent LLM hallucination from
+Five automated safeguards that prevent LLM hallucination from
 propagating through the swarm feedback loop:
 
 1. **Entity Grounding** -- Drops decision actions that reference specific
    external entities (PR numbers, Jira tickets, URLs) not found in the
    actual gathered state.
 
-2. **Task Output Validation** -- Screens task agent (1.2B model) outputs
-   for hallucination signals: off-topic content, fabricated specifics,
+2. **Task Output Validation** -- Screens task agent outputs for
+   hallucination signals: off-topic content, fabricated specifics,
    generic filler, unsubstantiated confidence claims.
 
 3. **Idle-Loop Detection** -- Tracks topic similarity across consecutive
    orchestrator cycles and suppresses auto-dispatch when the swarm is
    recycling the same content with no new external input.
+
+4. **Capability Filtering** -- Rejects tasks that require capabilities
+   task agents don't have: filesystem access, database queries, running
+   commands, inspecting infrastructure.
+
+5. **Failure Circuit Breaker** -- Tracks consecutive task failures and
+   suppresses further dispatches when the failure rate signals a
+   hallucination spiral.
 """
 
 from __future__ import annotations
@@ -380,3 +388,233 @@ class IdleLoopDetector:
     def is_suppressed(self) -> bool:
         """Whether dispatch is currently suppressed."""
         return self._suppressed
+
+
+# =====================================================================
+# Guardrail 4: Capability Filtering
+# =====================================================================
+
+# Patterns that indicate a task requires capabilities agents don't have.
+_IMPOSSIBLE_TASK_PATTERNS: list[re.Pattern[str]] = [
+    # File access: "analyze code in X.py", "read/inspect/check file"
+    re.compile(
+        r"\b(?:analyze|read|inspect|check|examine|open|access|review)\b"
+        r".*\b\w+\.(?:py|js|ts|go|rs|java|yaml|yml|json|toml|cfg|conf|txt|md|log)\b",
+        re.IGNORECASE,
+    ),
+    # Explicit file paths
+    re.compile(
+        r"\b(?:in|from|at)\s+(?:[\w./\\-]+/)?[\w-]+\.(?:py|js|ts|go|rs|java|yaml|json|toml)\b",
+        re.IGNORECASE,
+    ),
+    # Infrastructure commands
+    re.compile(
+        r"\b(?:run|execute|invoke|call)\s+(?:the\s+)?(?:command|script|query|pipeline|test|build)\b",
+        re.IGNORECASE,
+    ),
+    # Database operations
+    re.compile(
+        r"\b(?:query|check|inspect|access)\s+(?:the\s+)?"
+        r"(?:database|neo4j|redis|qdrant|postgres|mongo)\b",
+        re.IGNORECASE,
+    ),
+    # Log/metric inspection
+    re.compile(
+        r"\b(?:check|inspect|read|tail|parse)\s+(?:the\s+)?(?:logs?|metrics?|traces?)\b",
+        re.IGNORECASE,
+    ),
+    # Process/system inspection
+    re.compile(
+        r"\b(?:check|inspect|monitor)\s+(?:the\s+)?"
+        r"(?:process|container|pod|service|server|instance)\b",
+        re.IGNORECASE,
+    ),
+]
+
+# Patterns that indicate self-diagnosis / swarm navel-gazing.
+_SELF_DIAGNOSIS_PATTERNS: list[str] = [
+    # Bug investigation in own systems
+    "empty result",
+    "empty extraction",
+    "result is empty",
+    "result=''",
+    "success=true",
+    "success=false",
+    "root cause analysis",
+    "root cause of",
+    "diagnose the",
+    "diagnostic",
+    # Investigating own failures
+    "task agent fail",
+    "task agent error",
+    "agent returned empty",
+    "agent cannot",
+    "why the agent",
+    "why the task",
+    "why did the",
+    # Infrastructure self-inspection
+    "locate the extraction",
+    "locate the code",
+    "find the bug",
+    "find the source of",
+    "trace the data flow",
+    "audit the",
+    "cross-reference",
+    # Swarm self-commentary
+    "holding pattern",
+    "waiting on",
+    "report back",
+    "i'll inspect",
+    "i'll locate",
+    "i'll check the",
+    "i'll analyze the",
+    "let me check",
+    "diagnostic blind",
+]
+
+
+def check_capability(
+    actions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove actions that require capabilities task agents don't have.
+
+    Task agents are LLMs called via API. They cannot access files, run
+    commands, query databases, or inspect infrastructure. This filter
+    catches tasks that ask for those things.
+
+    Also catches self-diagnosis patterns where the swarm tries to debug
+    its own internal systems.
+
+    Args:
+        actions: Parsed action list from the decision engine.
+
+    Returns:
+        Filtered list with impossible/self-referential actions removed.
+    """
+    capable: list[dict[str, Any]] = []
+
+    for action in actions:
+        description = action.get("description", "")
+        desc_lower = description.lower()
+        reasons: list[str] = []
+
+        # Check impossible task patterns.
+        for pattern in _IMPOSSIBLE_TASK_PATTERNS:
+            if pattern.search(description):
+                reasons.append(f"requires capability agents lack: {pattern.pattern[:60]}")
+                break
+
+        # Check self-diagnosis patterns.
+        for pattern_str in _SELF_DIAGNOSIS_PATTERNS:
+            if pattern_str in desc_lower:
+                reasons.append(f"self-diagnosis: '{pattern_str}'")
+                break
+
+        if reasons:
+            log.warning(
+                "GUARDRAIL: Dropping impossible/self-referential action: "
+                "'%.100s' -- %s",
+                description,
+                reasons[0],
+            )
+        else:
+            capable.append(action)
+
+    dropped = len(actions) - len(capable)
+    if dropped:
+        log.info(
+            "GUARDRAIL: Capability filter dropped %d of %d action(s).",
+            dropped,
+            len(actions),
+        )
+
+    return capable
+
+
+# =====================================================================
+# Guardrail 5: Failure Circuit Breaker
+# =====================================================================
+
+
+class FailureCircuitBreaker:
+    """Suppresses dispatch after too many consecutive task failures.
+
+    When the swarm enters a hallucination spiral, it dispatches tasks
+    that are impossible or self-referential. These fail consistently.
+    This breaker detects the pattern and pauses dispatch.
+
+    Args:
+        failure_threshold: Consecutive failures before tripping (default: 3).
+        cooldown_cycles: How many orchestrator cycles to skip after
+            tripping (default: 2).
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 3,
+        cooldown_cycles: int = 2,
+    ) -> None:
+        self.failure_threshold = failure_threshold
+        self.cooldown_cycles = cooldown_cycles
+        self._consecutive_failures: int = 0
+        self._cooldown_remaining: int = 0
+        self._tripped: bool = False
+
+    def record_result(self, success: bool) -> None:
+        """Record a task dispatch result."""
+        if success:
+            self._consecutive_failures = 0
+            self._tripped = False
+        else:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.failure_threshold:
+                if not self._tripped:
+                    log.warning(
+                        "GUARDRAIL: Circuit breaker tripped after %d "
+                        "consecutive failures. Pausing dispatch for %d cycles.",
+                        self._consecutive_failures,
+                        self.cooldown_cycles,
+                    )
+                self._tripped = True
+                self._cooldown_remaining = self.cooldown_cycles
+
+    def should_suppress(self) -> bool:
+        """Whether dispatch should be suppressed.
+
+        Call at the start of each cycle. Decrements the cooldown counter.
+        Returns ``True`` if the breaker is tripped and cooldown hasn't
+        expired.
+        """
+        if not self._tripped:
+            return False
+
+        if self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+            log.info(
+                "GUARDRAIL: Circuit breaker active -- skipping dispatch "
+                "(cooldown=%d cycles remaining).",
+                self._cooldown_remaining,
+            )
+            return True
+
+        # Cooldown expired -- reset and allow dispatch.
+        log.info("GUARDRAIL: Circuit breaker cooldown expired, resuming dispatch.")
+        self._tripped = False
+        self._consecutive_failures = 0
+        return False
+
+    def reset(self) -> None:
+        """Manually reset the circuit breaker."""
+        self._consecutive_failures = 0
+        self._cooldown_remaining = 0
+        self._tripped = False
+
+    @property
+    def is_tripped(self) -> bool:
+        """Whether the breaker is currently tripped."""
+        return self._tripped
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Current count of consecutive failures."""
+        return self._consecutive_failures

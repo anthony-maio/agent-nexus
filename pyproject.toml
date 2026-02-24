@@ -29,6 +29,10 @@ dependencies = [
     "neo4j>=5.23",
     "psycopg[binary]>=3.1",
     "requests>=2.32",
+    # LangGraph orchestrator
+    "langgraph>=0.2",
+    "langchain-openai>=0.3",
+    "langchain-core>=0.3",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +44,10 @@ dev = [
 local = [
     # For local embeddings via sentence-transformers
     "sentence-transformers>=2.7",
+]
+langgraph = [
+    # Redis checkpointing for LangGraph (optional -- falls back to in-memory)
+    "langgraph-checkpoint-redis>=0.1",
 ]
 
 [project.scripts]

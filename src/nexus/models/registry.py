@@ -276,6 +276,41 @@ DEFAULT_EMBEDDING_ID: str = "qwen/qwen3-embedding-8b"
 
 
 # ---------------------------------------------------------------------------
+# Orchestrator Model (dedicated, not part of swarm)
+# ---------------------------------------------------------------------------
+#
+# The orchestrator model handles decision-making for the LangGraph pipeline.
+# It must support structured JSON output and tool calling.
+
+ORCHESTRATOR_MODEL = ModelSpec(
+    id="google/gemini-2.5-flash",
+    name="Gemini 2.5 Flash",
+    provider=ModelProvider.OPENROUTER,
+    tier=ModelTier.TASK,
+    context_window=1_000_000,
+    cost_input_per_m=0.15,
+    cost_output_per_m=3.50,
+    strengths=[
+        "structured-output", "tool-calling", "speed",
+        "long-context", "reasoning",
+    ],
+    requires_api_key="OPENROUTER_API_KEY",
+)
+
+ORCHESTRATOR_FALLBACK = ModelSpec(
+    id="bytedance-research/seed1.6-flash",
+    name="Seed 1.6 Flash",
+    provider=ModelProvider.OPENROUTER,
+    tier=ModelTier.TASK,
+    context_window=256_000,
+    cost_input_per_m=0.07,
+    cost_output_per_m=0.30,
+    strengths=["speed", "cost-effective", "multimodal", "reasoning"],
+    requires_api_key="OPENROUTER_API_KEY",
+)
+
+
+# ---------------------------------------------------------------------------
 # Selection helpers
 # ---------------------------------------------------------------------------
 

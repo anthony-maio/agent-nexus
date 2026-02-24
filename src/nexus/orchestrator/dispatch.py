@@ -296,10 +296,27 @@ class TaskDispatcher:
                 self._route_to_provider(task_model, messages), timeout=120.0,
             )
 
+            content = (response.content or "").strip()
+            if not content:
+                log.warning(
+                    "Task agent '%s' returned empty result for: %.100s",
+                    role,
+                    prompt,
+                )
+                return TaskResult(
+                    action_type=role,
+                    description=prompt[:200],
+                    result="Task agent returned empty result.",
+                    model_used=task_model.id,
+                    success=False,
+                    timestamp=datetime.now(timezone.utc),
+                    priority=priority,
+                )
+
             return TaskResult(
                 action_type=role,
                 description=prompt[:200],
-                result=response.content,
+                result=content,
                 model_used=task_model.id,
                 success=True,
                 timestamp=datetime.now(timezone.utc),

@@ -226,6 +226,27 @@ class NexusSettings(BaseSettings):
     # ------------------------------------------------------------------
     # Orchestrator
     # ------------------------------------------------------------------
+    LANGGRAPH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable the LangGraph-based orchestrator with tool-enabled agents. "
+            "When False, the original manual decide+dispatch loop is used."
+        ),
+    )
+    ORCHESTRATOR_MODEL: str = Field(
+        default="google/gemini-2.5-flash",
+        description=(
+            "Dedicated orchestrator model for decision-making. "
+            "Used only when LANGGRAPH_ENABLED is True."
+        ),
+    )
+    TASK_AGENT_MODEL: str = Field(
+        default="z-ai/glm-4.7-flash",
+        description=(
+            "Model used for tool-enabled task agents in the LangGraph pipeline. "
+            "Used only when LANGGRAPH_ENABLED is True."
+        ),
+    )
     ORCHESTRATOR_INTERVAL: int = Field(
         default=3600,
         ge=10,
