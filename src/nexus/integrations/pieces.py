@@ -95,9 +95,9 @@ class ActivityDigest:
 
     @property
     def is_stale(self) -> bool:
-        """True if the most recent summary is older than 24 hours."""
+        """True if the most recent summary is older than 6 hours."""
         hours = self.age_hours
-        return hours is not None and hours > 24
+        return hours is not None and hours > 6
 
 
 # Regex for "### Core Tasks & Projects" section items and TL;DR project names.

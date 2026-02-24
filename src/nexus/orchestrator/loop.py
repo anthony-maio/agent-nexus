@@ -1049,6 +1049,34 @@ class OrchestratorLoop:
         )
         return None
 
+    # Phrases that indicate meta/self-referential busywork.
+    _META_GOAL_PATTERNS: list[str] = [
+        "summarize all completed goals",
+        "summarize all goals",
+        "compile escalation",
+        "compile status report",
+        "cycle completion summary",
+        "cycle #",
+        "status report for cycle",
+        "review the compiled",
+        "dispatch the compiled",
+        "decommission the agent",
+        "task agent failure",
+        "task agent non-functional",
+        "output path failure",
+        "output serialization",
+        "swarm cannot self-repair",
+        "swarm self-diagnosis",
+        "infra-level intervention",
+        "infra-level review",
+        "escalation message",
+    ]
+
+    def _is_meta_goal(self, description: str) -> bool:
+        """Return True if the description is self-referential busywork."""
+        desc_lower = description.lower()
+        return any(p in desc_lower for p in self._META_GOAL_PATTERNS)
+
     def _validate_action_list(
         self, parsed: list[Any], model_id: str,
     ) -> list[dict[str, Any]]:
@@ -1072,6 +1100,15 @@ class OrchestratorLoop:
             description = str(item.get("description", "")).strip()
             if not description:
                 continue
+
+            # Hard filter: reject meta-goals and self-referential tasks.
+            if self._is_meta_goal(description):
+                log.warning(
+                    "GUARDRAIL: Dropping meta-goal: '%.100s'",
+                    description,
+                )
+                continue
+
             action: dict[str, Any] = {
                 "type": action_type,
                 "description": description,
