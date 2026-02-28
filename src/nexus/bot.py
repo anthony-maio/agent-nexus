@@ -11,6 +11,7 @@ from discord.ext import commands
 from nexus.channels.router import ChannelRouter
 from nexus.config import get_settings
 from nexus.integrations.c2_engine import C2Engine
+from nexus.integrations.email_monitor import EmailMonitor
 from nexus.memory.context import ContextBuilder
 from nexus.memory.store import MemoryStore
 from nexus.models.embeddings import EmbeddingProvider
@@ -36,6 +37,8 @@ from nexus.swarm.consensus import ConsensusProtocol
 from nexus.swarm.conversation import ConversationManager
 from nexus.swarm.crosstalk import CrosstalkManager
 from nexus.swarm.initiative import SwarmInitiative
+from nexus.swarm.sentiment import SentimentTracker
+from nexus.swarm.session import SessionManager
 from nexus.synthesis.tdd_engine import NexusLLMAdapter, TDDEngine
 
 log = logging.getLogger(__name__)
@@ -134,7 +137,7 @@ class NexusBot(commands.Bot):
 
         # --- Synthesis TDD Engine ---
         self.tdd = TDDEngine(
-            llm=NexusLLMAdapter(self.openrouter),
+            llm=NexusLLMAdapter(self.openrouter, model="qwen/qwen3-coder-next"),
         )
 
         # --- Autonomy Gate (with dynamic risk scoring) ---
@@ -163,6 +166,13 @@ class NexusBot(commands.Bot):
 
         # --- Integrations ---
         self.pieces = None
+        self.email_monitor = EmailMonitor(self)
+
+        # --- Sentiment tracking ---
+        self.sentiment = SentimentTracker()
+
+        # --- Session lifecycle ---
+        self.session = SessionManager(self)
 
         # --- System prompt cache ---
         self._system_prompts: dict[str, str] = {}
@@ -230,6 +240,9 @@ class NexusBot(commands.Bot):
         else:
             log.info("C2 not available - cognitive memory features disabled")
 
+        # Restore previous session context from C2
+        await self.session.on_startup()
+
         # Initialize LangGraph orchestrator (behind feature flag)
         self._orchestrator_graph = None
         if self.settings.LANGGRAPH_ENABLED:
@@ -263,6 +276,13 @@ class NexusBot(commands.Bot):
         logging.getLogger("nexus").addHandler(self._discord_log_handler)
         self._discord_log_handler.start()
 
+        # Auto-ingest configured paths into C2 (background)
+        if self.c2.is_running and self.settings.INGEST_PATHS:
+            self._spawn(self._auto_ingest(self.settings.INGEST_PATHS))
+
+        # Start email monitor (if configured)
+        await self.email_monitor.start()
+
         # Announce in #nexus
         from nexus.personality.identities import format_name
 
@@ -274,10 +294,58 @@ class NexusBot(commands.Bot):
         features.append(f"c2={'on' if self.c2.is_running else 'off'}")
         features.append("tdd=on")
         features.append(f"triggers={len(self.trigger_manager._triggers)}")
+        if self.email_monitor.is_configured:
+            features.append("email=on")
 
         await self.router.nexus.send(
             f"**Agent Nexus online.** Swarm: {', '.join(model_names)} [{', '.join(features)}]"
         )
+
+        # Post command reference for discoverability.
+        cmd_embed = discord.Embed(title="Available Commands", color=0x3498DB)
+        cmd_embed.add_field(
+            name="Interaction",
+            value=(
+                "`!ask <model> <prompt>` — Ask a specific model\n"
+                "`!think <prompt>` — Multi-perspective from all models\n"
+                "`!memory <query>` — Search swarm memory\n"
+                "`!remember <text>` — Store in memory\n"
+                "`!forget <id>` — Delete a memory"
+            ),
+            inline=False,
+        )
+        cmd_embed.add_field(
+            name="Monitoring",
+            value=(
+                "`!status` — Swarm health overview\n"
+                "`!models` — List active models\n"
+                "`!costs` — Session cost breakdown\n"
+                "`!config` — Show configuration\n"
+                "`!goals` — List active goals\n"
+                "`!session` — Session info + mood\n"
+                "`!pieces [query]` — Query PiecesOS activity"
+            ),
+            inline=False,
+        )
+        cmd_embed.add_field(
+            name="Admin",
+            value=(
+                "`!crosstalk on/off` — Toggle crosstalk\n"
+                "`!autonomy observe|escalate|autopilot` — Set autonomy\n"
+                "`!curiosity` — Trigger epistemic scan\n"
+                "`!c2status` — C2 backend health\n"
+                "`!c2events [n]` — Recent C2 events\n"
+                "`!discuss` — Trigger curiosity discussion\n"
+                "`!ingest [paths]` — Ingest files into C2\n"
+                "`!email [poll]` — Email monitor status"
+            ),
+            inline=False,
+        )
+        await self.router.nexus.send(embed=cmd_embed)
+
+        # Announce previous session context if available
+        await self.session.announce_restore()
+
         log.info(
             "Agent Nexus ready with %d swarm models (autonomy=%s, c2=%s, "
             "goals=%s, triggers=%d, health=on)",
@@ -415,16 +483,29 @@ class NexusBot(commands.Bot):
         """Handle a non-command message from #human. Forward to swarm."""
         from nexus.channels.formatter import MessageFormatter
 
-        # Record human message in conversation
-        await self.conversation.add_message("human", message.content, is_human=True)
+        # Extract text from attachments (PDFs, images, office docs).
+        content = message.content
+        attachment_text = await self._extract_attachments(message)
+        if attachment_text:
+            content = (
+                f"{message.content}\n\n---\n"
+                f"**Attached Document:**\n{attachment_text}"
+            )
 
-        # Log to C2
+        # Analyse sentiment so models can adapt their tone.
+        self.sentiment.analyze(content)
+        current_mood = self.sentiment.current_mood
+
+        # Record human message in conversation (with extracted attachment text).
+        await self.conversation.add_message("human", content, is_human=True)
+
+        # Log to C2 (with mood tag for searchable mood history).
         self._spawn(
             self._log_to_c2(
                 actor="human",
                 intent="message",
-                inp=message.content[:500],
-                tags=["human", "input"],
+                inp=content[:1500],
+                tags=["human", "input", f"mood:{current_mood.value}"],
             )
         )
 
@@ -452,6 +533,17 @@ class NexusBot(commands.Bot):
             await self.conversation.add_message(primary_model, response.content)
 
             embed = MessageFormatter.format_response(primary_model, response.content)
+
+            # Flag potential fabrication in swarm output
+            from nexus.orchestrator.guardrails import check_swarm_fabrication
+
+            fab_warnings = check_swarm_fabrication(response.content)
+            if fab_warnings:
+                footer = embed.footer.text or ""
+                embed.set_footer(
+                    text=f"{footer} | Unverified claims detected".strip(" |")
+                )
+
             last_msg = await self.router.nexus.send(embed=embed)
 
             # Store primary response in memory (background)
@@ -463,7 +555,7 @@ class NexusBot(commands.Bot):
                 self._log_to_c2(
                     actor=primary_model,
                     intent="response",
-                    out=response.content[:500],
+                    out=response.content[:1500],
                     tags=["swarm", "nexus"],
                 )
             )
@@ -481,6 +573,47 @@ class NexusBot(commands.Bot):
             except Exception:
                 pass
 
+    async def _extract_attachments(self, message: discord.Message) -> str | None:
+        """Extract text from supported message attachments (PDFs, images, etc.).
+
+        Downloads each attachment, runs text extraction via pymupdf (with
+        docling OCR fallback for scanned documents), and returns the
+        combined text.  Returns ``None`` if there are no supported
+        attachments or extraction fails.
+        """
+        if not message.attachments:
+            return None
+
+        from pathlib import Path
+
+        from nexus.integrations.ocr import SUPPORTED_EXTENSIONS, DocumentExtractor
+
+        extractor = DocumentExtractor()
+        parts: list[str] = []
+
+        for attachment in message.attachments[:3]:  # Max 3 attachments
+            ext = Path(attachment.filename).suffix.lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                continue
+
+            try:
+                await message.channel.send(
+                    f"Reading attachment: *{attachment.filename}*..."
+                )
+                text = await extractor.extract_from_url(
+                    attachment.url, attachment.filename,
+                )
+                if text:
+                    parts.append(f"### {attachment.filename}\n{text}")
+            except Exception:
+                log.warning(
+                    "Failed to extract attachment: %s",
+                    attachment.filename,
+                    exc_info=True,
+                )
+
+        return "\n\n".join(parts) if parts else None
+
     async def _run_reaction_round(
         self, primary_model: str, model_ids: list[str], last_msg: discord.Message
     ) -> None:
@@ -490,9 +623,15 @@ class NexusBot(commands.Bot):
         Capped at 2 reactions so the channel doesn't get flooded.
         """
         from nexus.channels.formatter import MessageFormatter
+        from nexus.orchestrator.guardrails import check_swarm_fabrication
         from nexus.swarm.crosstalk import CrosstalkManager
 
-        reaction_order = self.crosstalk.build_reaction_order(primary_model, model_ids)
+        reaction_order = self.crosstalk.build_reaction_order(
+            primary_model,
+            model_ids,
+            mood=self.sentiment.current_mood.value,
+            model_specs=self.swarm_models,
+        )
         reaction_suffix = CrosstalkManager.get_reaction_suffix()
         reactions_posted = 0
         max_reactions = 2  # Cap to keep conversations tight
@@ -517,6 +656,14 @@ class NexusBot(commands.Bot):
 
                 await self.conversation.add_message(reactor_id, reaction.content)
                 embed = MessageFormatter.format_response(reactor_id, reaction.content)
+
+                fab_warnings = check_swarm_fabrication(reaction.content)
+                if fab_warnings:
+                    footer = embed.footer.text or ""
+                    embed.set_footer(
+                        text=f"{footer} | Unverified claims detected".strip(" |")
+                    )
+
                 last_msg = await last_msg.reply(embed=embed, mention_author=False)
                 reactions_posted += 1
 
@@ -528,7 +675,7 @@ class NexusBot(commands.Bot):
                     self._log_to_c2(
                         actor=reactor_id,
                         intent="response",
-                        out=reaction.content[:500],
+                        out=reaction.content[:1500],
                         tags=["swarm", "nexus"],
                     )
                 )
@@ -542,14 +689,48 @@ class NexusBot(commands.Bot):
         """Store a response in vector memory (background task)."""
         try:
             vector = await self.embeddings.embed_one(content)
+            metadata: dict[str, str] = {}
+            tracker = getattr(self, "sentiment", None)
+            if tracker is not None:
+                metadata["mood"] = tracker.current_mood.value
+                metadata["mood_score"] = str(round(tracker.average_score, 3))
             await self.memory_store.store(
                 content=content,
                 vector=vector,
                 source=source,
                 channel="nexus",
+                metadata=metadata if metadata else None,
             )
         except Exception as e:
             log.warning(f"Failed to store response in memory: {e}")
+
+    async def _auto_ingest(self, paths: list[str]) -> None:
+        """Background task: ingest configured filesystem paths into C2."""
+        try:
+            from continuity_core.ingest.pipeline import IngestPipeline
+
+            pipeline = IngestPipeline(
+                chunk_size=self.settings.INGEST_CHUNK_SIZE,
+                max_bytes=self.settings.INGEST_MAX_FILE_BYTES,
+            )
+            result = await asyncio.to_thread(pipeline.ingest_paths, paths)
+            log.info(
+                "Auto-ingest complete: %d files, %d docs, %d chunks (%.1fs)",
+                result.files_seen,
+                result.docs_ingested,
+                result.chunks_ingested,
+                result.duration_sec,
+            )
+            if result.docs_ingested > 0:
+                await self._log_to_c2(
+                    actor="system",
+                    intent="auto_ingest",
+                    inp=", ".join(paths)[:500],
+                    out=f"docs={result.docs_ingested} chunks={result.chunks_ingested}",
+                    tags=["ingest", "startup"],
+                )
+        except Exception:
+            log.warning("Auto-ingest failed.", exc_info=True)
 
     async def _log_to_c2(
         self,
@@ -568,12 +749,26 @@ class NexusBot(commands.Bot):
             pass
 
     def get_system_prompt(self, model_id: str) -> str:
-        """Get the system prompt for a model."""
+        """Get the system prompt for a model, with mood and session context."""
         if model_id not in self._system_prompts:
             self._system_prompts[model_id] = build_system_prompt(
                 model_id, list(self.swarm_models.keys())
             )
-        return self._system_prompts[model_id]
+        parts = [self._system_prompts[model_id]]
+
+        # Inject previous session context for continuity
+        prev = self.session.last_session_summary
+        if prev:
+            parts.append(
+                f"\n\n## Previous Session\n{prev[:500]}\n"
+            )
+
+        # Inject current user mood
+        mood_ctx = self.sentiment.mood_context_for_prompt()
+        if mood_ctx:
+            parts.append(mood_ctx)
+
+        return "".join(parts)
 
     def _spawn(self, coro) -> asyncio.Task:
         """Create a tracked background task with error logging."""
@@ -600,6 +795,9 @@ class NexusBot(commands.Bot):
     async def close(self) -> None:
         """Clean shutdown."""
         log.info("Shutting down Agent Nexus...")
+        # Persist session summary before stopping subsystems
+        await self.session.on_shutdown()
+        await self.email_monitor.stop()
         await self.health_monitor.stop()
         await self.trigger_manager.stop()
         await self.activity_monitor.stop()

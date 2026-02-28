@@ -68,6 +68,6 @@ def create_agent_llm(
         api_key=api_key,
         model=model,
         temperature=0.3,
-        max_tokens=1024,
+        max_tokens=4096,
         default_headers=_DEFAULT_HEADERS,
     )

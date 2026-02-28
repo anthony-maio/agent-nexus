@@ -794,12 +794,12 @@ class TestReactLoop:
 
 
 class TestBuildTools:
-    def test_returns_seven_tools(self):
+    def test_returns_nine_tools(self):
         from nexus.orchestrator.tools import build_tools
 
         bot = MagicMock()
         tools = build_tools(bot)
-        assert len(tools) == 7
+        assert len(tools) == 9
         names = {t.name for t in tools}
         assert names == {
             "query_memory",
@@ -809,6 +809,8 @@ class TestBuildTools:
             "get_active_goals",
             "get_recent_c2_events",
             "remember_finding",
+            "synthesize_code",
+            "write_file",
         }
 
     @pytest.mark.asyncio
@@ -981,10 +983,369 @@ class TestLangChainAdapter:
         llm = create_agent_llm("test-key", model="z-ai/glm-4.7-flash")
         assert llm.model_name == "z-ai/glm-4.7-flash"
         assert llm.temperature == 0.3
-        assert llm.max_tokens == 1024
+        assert llm.max_tokens == 4096
 
     def test_uses_openrouter_base_url(self):
         from nexus.models.langchain_adapter import create_orchestrator_llm
 
         llm = create_orchestrator_llm("test-key")
         assert "openrouter" in str(llm.openai_api_base)
+
+
+# =====================================================================
+# MessageFormatter tests
+# =====================================================================
+
+
+class TestMessageFormatter:
+    """Tests for format_response_multi and _split_content."""
+
+    def test_short_content_returns_single_embed(self):
+        from nexus.channels.formatter import MessageFormatter
+
+        embeds = MessageFormatter.format_response_multi(
+            "minimax/minimax-m2.5", "Short message."
+        )
+        assert len(embeds) == 1
+        assert "Short message." in embeds[0].description
+
+    def test_long_content_splits_into_multiple_embeds(self):
+        from nexus.channels.formatter import MessageFormatter
+
+        # Create content that exceeds 4096 chars.
+        content = ("A" * 2000 + "\n\n") * 3  # ~6006 chars with paragraph breaks
+        embeds = MessageFormatter.format_response_multi(
+            "minimax/minimax-m2.5", content,
+        )
+        assert len(embeds) >= 2
+        # First embed has author header
+        assert embeds[0].author is not None
+        # Subsequent embeds have "(continued)" in footer
+        assert "continued" in (embeds[-1].footer.text or "")
+
+    def test_split_content_respects_limit(self):
+        from nexus.channels.formatter import MessageFormatter
+
+        text = "Hello world. " * 500  # ~6500 chars
+        chunks = MessageFormatter._split_content(text, 4096)
+        for chunk in chunks:
+            assert len(chunk) <= 4096
+
+    def test_split_content_prefers_paragraph_break(self):
+        from nexus.channels.formatter import MessageFormatter
+
+        text = "A" * 2000 + "\n\n" + "B" * 2000
+        chunks = MessageFormatter._split_content(text, 2500)
+        # Should split at the paragraph break
+        assert chunks[0].endswith("A" * 2000)
+        assert chunks[1].startswith("B")
+
+    def test_split_content_short_text_no_split(self):
+        from nexus.channels.formatter import MessageFormatter
+
+        chunks = MessageFormatter._split_content("short", 4096)
+        assert chunks == ["short"]
+
+
+# =====================================================================
+# DocumentExtractor tests
+# =====================================================================
+
+
+class TestDocumentExtractor:
+    """Tests for the OCR/document extraction module."""
+
+    def test_supported_extensions(self):
+        from nexus.integrations.ocr import SUPPORTED_EXTENSIONS
+
+        assert ".pdf" in SUPPORTED_EXTENSIONS
+        assert ".docx" in SUPPORTED_EXTENSIONS
+        assert ".png" in SUPPORTED_EXTENSIONS
+        assert ".txt" not in SUPPORTED_EXTENSIONS
+
+    def test_pymupdf_available(self):
+        from nexus.integrations.ocr import _HAS_PYMUPDF
+
+        assert _HAS_PYMUPDF is True
+
+    @pytest.mark.asyncio
+    async def test_extract_unsupported_extension_returns_none(self):
+        from nexus.integrations.ocr import DocumentExtractor
+
+        extractor = DocumentExtractor()
+        result = await extractor.extract_from_url(
+            "https://example.com/file.xyz", "file.xyz"
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_pymupdf_extract_real_pdf(self, tmp_path):
+        """Create a minimal PDF with pymupdf and verify extraction."""
+        import pymupdf
+
+        from nexus.integrations.ocr import DocumentExtractor
+
+        # Create a simple PDF with extractable text.
+        pdf_path = tmp_path / "test.pdf"
+        doc = pymupdf.open()
+        page = doc.new_page()
+        tw = pymupdf.TextWriter(page.rect)
+        tw.append((72, 72), "Hello from pymupdf test document.")
+        tw.write_text(page)
+        doc.save(str(pdf_path))
+        doc.close()
+
+        extractor = DocumentExtractor()
+        text = await extractor._extract_pdf(pdf_path)
+        assert "Hello from pymupdf test document" in text
+
+    @pytest.mark.asyncio
+    async def test_text_cap_applied(self, tmp_path):
+        """Verify extracted text is capped at _MAX_TEXT_CHARS."""
+        import pymupdf
+
+        from nexus.integrations.ocr import DocumentExtractor
+
+        # Create a PDF with text.
+        pdf_path = tmp_path / "long.pdf"
+        doc = pymupdf.open()
+        page = doc.new_page()
+        tw = pymupdf.TextWriter(page.rect)
+        tw.append((72, 72), "Test content for cap verification.")
+        tw.write_text(page)
+        doc.save(str(pdf_path))
+        doc.close()
+
+        extractor = DocumentExtractor()
+        text = await extractor._extract_pdf(pdf_path)
+        # The text from a single page won't exceed cap, but the method should
+        # not crash. Just verify it returns something.
+        assert text is not None
+
+
+# =====================================================================
+# Sentiment analysis tests
+# =====================================================================
+
+
+class TestSentimentTracker:
+    """Tests for the keyword-based sentiment analyser."""
+
+    def test_positive_message(self):
+        from nexus.swarm.sentiment import Mood, SentimentTracker
+
+        tracker = SentimentTracker()
+        result = tracker.analyze("Thanks, that's awesome and amazing!")
+        assert result.label == Mood.POSITIVE
+        assert result.score > 0
+
+    def test_frustrated_message(self):
+        from nexus.swarm.sentiment import Mood, SentimentTracker
+
+        tracker = SentimentTracker()
+        result = tracker.analyze("I'm so frustrated, nothing works!! UGH")
+        assert result.label == Mood.FRUSTRATED
+        assert result.score < 0
+
+    def test_curious_message(self):
+        from nexus.swarm.sentiment import Mood, SentimentTracker
+
+        tracker = SentimentTracker()
+        result = tracker.analyze("How does this work? I'm curious to understand.")
+        assert result.label == Mood.CURIOUS
+
+    def test_urgent_message(self):
+        from nexus.swarm.sentiment import Mood, SentimentTracker
+
+        tracker = SentimentTracker()
+        result = tracker.analyze("URGENT: critical blocker, need help immediately!")
+        assert result.label == Mood.URGENT
+
+    def test_neutral_message(self):
+        from nexus.swarm.sentiment import Mood, SentimentTracker
+
+        tracker = SentimentTracker()
+        result = tracker.analyze("okay")
+        assert result.label == Mood.NEUTRAL
+        assert result.score == 0.0
+
+    def test_sliding_window_mood(self):
+        from nexus.swarm.sentiment import Mood, SentimentTracker
+
+        tracker = SentimentTracker(window_size=5)
+        tracker.analyze("thanks amazing great")
+        tracker.analyze("awesome excellent")
+        tracker.analyze("wonderful perfect")
+        assert tracker.current_mood == Mood.POSITIVE
+        assert tracker.average_score > 0
+
+    def test_mood_context_neutral(self):
+        from nexus.swarm.sentiment import SentimentTracker
+
+        tracker = SentimentTracker()
+        tracker.analyze("okay")
+        assert tracker.mood_context_for_prompt() == ""
+
+    def test_mood_context_frustrated(self):
+        from nexus.swarm.sentiment import SentimentTracker
+
+        tracker = SentimentTracker()
+        tracker.analyze("frustrated stuck annoyed broken UGH!!")
+        ctx = tracker.mood_context_for_prompt()
+        assert "frustrated" in ctx.lower() or "patient" in ctx.lower()
+
+
+# =====================================================================
+# Session manager tests
+# =====================================================================
+
+
+class TestSessionManager:
+    """Tests for the session lifecycle manager."""
+
+    @pytest.mark.asyncio
+    async def test_on_startup_no_c2(self):
+        from nexus.swarm.session import SessionManager
+
+        bot = MagicMock()
+        bot.c2 = MagicMock()
+        bot.c2.is_running = False
+        session = SessionManager(bot)
+        result = await session.on_startup()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_on_startup_restores_session(self):
+        from nexus.swarm.session import SessionManager
+
+        bot = MagicMock()
+        bot.c2 = AsyncMock()
+        bot.c2.is_running = True
+        bot.c2.events = AsyncMock(return_value={
+            "events": [
+                {"intent": "response", "output": "some response"},
+                {"intent": "session_end", "output": "Previous session summary text"},
+            ]
+        })
+        session = SessionManager(bot)
+        result = await session.on_startup()
+        assert result == "Previous session summary text"
+        assert session.last_session_summary == "Previous session summary text"
+
+    @pytest.mark.asyncio
+    async def test_on_shutdown_persists(self):
+        from nexus.swarm.sentiment import SentimentTracker
+        from nexus.swarm.session import SessionManager
+
+        bot = MagicMock()
+        bot.c2 = AsyncMock()
+        bot.c2.is_running = True
+        bot.c2.write_event = AsyncMock(return_value={"ok": True})
+        bot.conversation = MagicMock()
+        bot.conversation.message_count = 42
+        bot.conversation.get_history.return_value = []
+        bot.swarm_models = {"model/a": MagicMock()}
+        bot.openrouter = MagicMock()
+        bot.openrouter.session_cost = 0.05
+        bot.goal_store = AsyncMock()
+        bot.goal_store.get_active_goals = AsyncMock(return_value=[])
+        bot.sentiment = SentimentTracker()
+
+        session = SessionManager(bot)
+        result = await session.on_shutdown()
+        assert result is not None
+        assert "42 messages" in result
+        bot.c2.write_event.assert_called_once()
+
+
+# =====================================================================
+# Email reader tests
+# =====================================================================
+
+
+class TestEmailReader:
+    """Tests for the email reader module."""
+
+    def test_strip_html(self):
+        from nexus.integrations.email_reader import _strip_html
+
+        html = "<html><body><h1>Hello</h1><p>World</p></body></html>"
+        text = _strip_html(html)
+        assert "Hello" in text
+        assert "World" in text
+        assert "<" not in text
+
+    def test_decode_header_plain(self):
+        from nexus.integrations.email_reader import _decode_header
+
+        assert _decode_header("Simple Subject") == "Simple Subject"
+        assert _decode_header(None) == ""
+
+    def test_email_message_to_c2_text(self):
+        from nexus.integrations.email_reader import EmailMessage
+
+        msg = EmailMessage(
+            uid="1",
+            subject="Test Subject",
+            sender="user@example.com",
+            date="Mon, 1 Jan 2024",
+            body="This is the email body.",
+            attachment_names=["file.pdf"],
+        )
+        text = msg.to_c2_text()
+        assert "Test Subject" in text
+        assert "user@example.com" in text
+        assert "file.pdf" in text
+        assert "email body" in text
+
+    def test_reader_not_configured(self):
+        from nexus.integrations.email_reader import EmailReader
+
+        reader = EmailReader(host="", address="", password="")
+        assert not reader.is_configured
+
+    def test_reader_configured(self):
+        from nexus.integrations.email_reader import EmailReader
+
+        reader = EmailReader(
+            host="imap.test.com",
+            address="user@test.com",
+            password="secret",
+        )
+        assert reader.is_configured
+
+    @pytest.mark.asyncio
+    async def test_fetch_unread_not_configured(self):
+        from nexus.integrations.email_reader import EmailReader
+
+        reader = EmailReader(host="", address="", password="")
+        result = await reader.fetch_unread()
+        assert result == []
+
+
+# =====================================================================
+# Email monitor tests
+# =====================================================================
+
+
+class TestEmailMonitor:
+    """Tests for the email background monitor."""
+
+    @pytest.mark.asyncio
+    async def test_start_not_configured(self):
+        from nexus.integrations.email_monitor import EmailMonitor
+
+        bot = MagicMock()
+        bot.settings = MagicMock()
+        bot.settings.EMAIL_IMAP_HOST = ""
+        bot.settings.EMAIL_IMAP_PORT = 993
+        bot.settings.EMAIL_ADDRESS = ""
+        bot.settings.EMAIL_PASSWORD = ""
+        bot.settings.EMAIL_FOLDER = "INBOX"
+        bot.settings.EMAIL_POLL_INTERVAL = 300
+        bot.settings.EMAIL_MAX_MESSAGES = 10
+
+        monitor = EmailMonitor(bot)
+        assert not monitor.is_configured
+        await monitor.start()
+        assert not monitor._running

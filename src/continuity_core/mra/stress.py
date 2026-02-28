@@ -106,8 +106,8 @@ class EpistemicStressMonitor:
         s2_tokens = set(s2.lower().split())
         has_neg = bool(s1_tokens & neg_words) ^ bool(s2_tokens & neg_words)
         overlap = len(s1_tokens & s2_tokens)
-        if has_neg and overlap >= 2:
-            return 0.7
+        if has_neg and overlap >= 4:
+            return 0.6
         return 0.0
 
     def _semantic_divergence(self, concept_contexts: Dict[str, List[str]]) -> float:

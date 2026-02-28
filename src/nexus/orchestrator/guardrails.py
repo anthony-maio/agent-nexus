@@ -280,6 +280,61 @@ _STOP_WORDS: set[str] = {
 }
 
 
+# =====================================================================
+# Guardrail 2b: Swarm Message Fabrication Check
+# =====================================================================
+
+# Patterns that indicate a swarm model fabricated data it cannot produce.
+# Unlike validate_task_output (which suppresses), this produces warnings
+# that are shown as footnotes — swarm messages are still posted.
+_FABRICATED_DATA_PATTERNS: list[re.Pattern[str]] = [
+    # Fabricated metrics/telemetry: "PPL=12.4", "entropy=4.82"
+    re.compile(
+        r"\b(?:PPL|perplexity|entropy|latency|throughput|accuracy|loss)"
+        r"\s*[=:]\s*\d+\.?\d*",
+        re.IGNORECASE,
+    ),
+    # Fabricated experiment results: "M=256 shows", "batch_size=32 yields"
+    re.compile(
+        r"\b(?:M|N|batch_size|lr|epochs?)\s*=\s*\d+\s+"
+        r"(?:shows?|yields?|gives?|produces?|results?)",
+        re.IGNORECASE,
+    ),
+    # Claims of running/executing: "I ran", "I executed", "I deployed"
+    re.compile(
+        r"\bI\s+(?:ran|executed|deployed|applied|configured|installed|launched)\b",
+        re.IGNORECASE,
+    ),
+    # "telemetry shows", "metrics indicate", "logs reveal"
+    re.compile(
+        r"\b(?:telemetry|metrics|logs|dashboard)\s+"
+        r"(?:shows?|indicates?|reveals?|confirms?)\b",
+        re.IGNORECASE,
+    ),
+]
+
+
+def check_swarm_fabrication(text: str) -> list[str]:
+    """Check swarm model output for fabricated data claims.
+
+    Unlike :func:`validate_task_output` which suppresses results entirely,
+    this returns a list of human-readable warning strings.  Callers can
+    append these as footnotes to Discord embeds.
+
+    Args:
+        text: The swarm model's response text.
+
+    Returns:
+        A list of warning strings (empty if no issues detected).
+    """
+    warnings: list[str] = []
+    for pattern in _FABRICATED_DATA_PATTERNS:
+        matches = pattern.findall(text)
+        if matches:
+            warnings.append(f"Possible fabrication: {matches[0]}")
+    return warnings
+
+
 class IdleLoopDetector:
     """Detects when the orchestrator is recycling the same topics.
 
@@ -379,16 +434,16 @@ class IdleLoopDetector:
         return words - _STOP_WORDS
 
     def _has_fresh_input(self, state: dict[str, Any]) -> bool:
-        """Check if the state contains genuinely new external input."""
+        """Check if the state contains genuinely new external input.
+
+        Only human messages count as fresh input for idle-loop purposes.
+        PiecesOS activity triggers orchestrator cycles (via ActivityTrigger)
+        but should NOT reset the idle detector -- an active IDE session
+        would permanently prevent loop detection otherwise.
+        """
         for msg in state.get("recent_messages", []):
             if msg.get("author") == "human":
                 return True
-
-        # Only count non-stale activity as fresh input.
-        activity = state.get("activity")
-        if activity is not None and not getattr(activity, "is_stale", False):
-            return True
-
         return False
 
     def reset(self) -> None:
@@ -512,6 +567,12 @@ def check_capability(
     capable: list[dict[str, Any]] = []
 
     for action in actions:
+        # Allow code-type actions through — they route to TDD synthesis,
+        # not to a plain LLM task agent.
+        if action.get("type") == "code":
+            capable.append(action)
+            continue
+
         description = action.get("description", "")
         desc_lower = description.lower()
         reasons: list[str] = []

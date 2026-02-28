@@ -33,6 +33,8 @@ dependencies = [
     "langgraph>=0.2",
     "langchain-openai>=0.3",
     "langchain-core>=0.3",
+    # Document extraction (PDF text)
+    "pymupdf>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -48,6 +50,10 @@ local = [
 langgraph = [
     # Redis checkpointing for LangGraph (optional -- falls back to in-memory)
     "langgraph-checkpoint-redis>=0.1",
+]
+ocr = [
+    # Full OCR for scanned PDFs and images (optional -- pymupdf handles text PDFs)
+    "docling>=2.0",
 ]
 
 [project.scripts]

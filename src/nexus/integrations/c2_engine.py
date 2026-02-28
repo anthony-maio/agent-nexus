@@ -255,8 +255,7 @@ class C2Engine:
                     if not events:
                         return None
                     statements = [
-                        f"{e.intent}: {e.input[:100]}" for e in events
-                        if e.input
+                        e.input[:300] for e in events if e.input
                     ]
                     if len(statements) < 2:
                         return None
@@ -299,7 +298,7 @@ class C2Engine:
                     lambda: self._system.event_log.tail(20)
                 )
                 statements = [
-                    f"{e.intent}: {e.input[:100]}" for e in events if e.input
+                    e.input[:300] for e in events if e.input
                 ]
                 if len(statements) >= 2:
                     await self.introspect(statements)

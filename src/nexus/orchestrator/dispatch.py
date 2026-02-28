@@ -32,6 +32,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -69,6 +72,53 @@ class TaskResult:
     success: bool
     timestamp: datetime
     priority: str = "medium"
+
+
+# ---------------------------------------------------------------------------
+# Task deduplication
+# ---------------------------------------------------------------------------
+
+
+class TaskDeduplicator:
+    """Prevents dispatching semantically identical tasks across cycles.
+
+    Normalizes task descriptions by extracting and sorting lowercase words,
+    then checks against a time-limited cache of recently dispatched tasks.
+
+    Args:
+        max_recent: Maximum number of recent task hashes to retain.
+        ttl: Time-to-live in seconds for cached entries (default: 30 min).
+    """
+
+    def __init__(self, max_recent: int = 30, ttl: int = 1800) -> None:
+        self._recent: OrderedDict[str, float] = OrderedDict()
+        self._max_recent = max_recent
+        self._ttl = ttl
+
+    def _normalize(self, description: str) -> str:
+        """Normalize a task description to a comparable key."""
+        words = sorted(set(re.findall(r"[a-z]+", description.lower())))
+        return " ".join(words)
+
+    def is_duplicate(self, description: str) -> bool:
+        """Check if a similar task was recently dispatched."""
+        self._expire()
+        key = self._normalize(description)
+        return key in self._recent
+
+    def record(self, description: str) -> None:
+        """Record a dispatched task description."""
+        self._expire()
+        key = self._normalize(description)
+        self._recent[key] = time.time()
+        while len(self._recent) > self._max_recent:
+            self._recent.popitem(last=False)
+
+    def _expire(self) -> None:
+        now = time.time()
+        expired = [k for k, t in self._recent.items() if now - t > self._ttl]
+        for k in expired:
+            del self._recent[k]
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +162,12 @@ class TaskDispatcher:
         self.bot = bot
         self._max_result_history: int = max_result_history
         self._results: list[TaskResult] = []
+        self._dedup = TaskDeduplicator()
+        self._current_mood: str = "neutral"
+
+    def set_current_mood(self, mood: str) -> None:
+        """Set the current user mood for priority adjustment."""
+        self._current_mood = mood
 
     # ------------------------------------------------------------------
     # Public API
@@ -138,9 +194,40 @@ class TaskDispatcher:
         priority: str = action.get("priority", "medium")
         goal_id: str = action.get("goal_id", "")
 
+        # Mood-based priority boost.
+        if self._current_mood == "urgent" and priority == "medium":
+            priority = "high"
+            log.debug("Priority bumped medium->high (user mood: urgent)")
+        elif (
+            self._current_mood == "frustrated"
+            and action_type in ("summarize", "research")
+            and priority == "low"
+        ):
+            priority = "medium"
+            log.debug(
+                "Priority bumped low->medium for quick-win "
+                "(user mood: frustrated)"
+            )
+
         if not description:
             log.debug("Skipping action with empty description.")
             return None
+
+        # Deduplicate: skip tasks with identical normalized descriptions
+        # dispatched within the TTL window.
+        if self._dedup.is_duplicate(description):
+            log.info(
+                "DEDUP: Skipping duplicate task: %.100s",
+                description,
+            )
+            return None
+
+        # Route code tasks to TDD synthesis instead of a plain LLM.
+        if action_type == "code" and description:
+            self._dedup.record(description)
+            return await self._dispatch_synthesis(
+                description, priority, goal_id,
+            )
 
         role = self.ROLE_MAP.get(action_type, "reasoning")
 
@@ -151,6 +238,8 @@ class TaskDispatcher:
             role,
             description,
         )
+
+        self._dedup.record(description)
 
         result = await self._call_task_agent(role, description, priority)
 
@@ -214,7 +303,7 @@ class TaskDispatcher:
         if goal_store is None:
             return
         try:
-            snippet = result.result[:100].replace("\n", " ")
+            snippet = result.result[:500].replace("\n", " ")
             await goal_store.add_progress_note(
                 goal_id,
                 f"{'OK' if result.success else 'FAIL'}: {result.description[:60]} -> {snippet}",
@@ -238,6 +327,51 @@ class TaskDispatcher:
             )
         except Exception:
             log.debug("Failed to trigger initiative from task result.")
+
+    # ------------------------------------------------------------------
+    # TDD synthesis dispatch
+    # ------------------------------------------------------------------
+
+    async def _dispatch_synthesis(
+        self,
+        description: str,
+        priority: str,
+        goal_id: str,
+    ) -> TaskResult | None:
+        """Route code tasks to the TDD engine instead of a plain LLM.
+
+        Falls back to the regular reasoning agent if the TDD engine is
+        not available or synthesis raises an exception.
+        """
+        tdd = getattr(self.bot, "tdd", None)
+        if tdd is None:
+            log.info("TDD engine unavailable — falling back to reasoning agent.")
+            return await self._call_task_agent("reasoning", description, priority)
+
+        try:
+            result = await self.bot.tdd.synthesize(description)
+            task_result = TaskResult(
+                action_type="synthesis",
+                description=description[:200],
+                result=(
+                    f"TDD {result.status.value}: "
+                    f"{result.tests_passed}/{result.total_tests} tests, "
+                    f"{result.iterations} iterations\n\n"
+                    f"{result.generated_code or ''}"
+                )[:4000],
+                model_used="qwen/qwen3-coder-next",
+                success=result.is_success,
+                timestamp=datetime.now(timezone.utc),
+                priority=priority,
+            )
+            self._store_result(task_result)
+            await self._post_result_to_nexus(task_result, description)
+            if goal_id:
+                await self._update_goal(goal_id, task_result)
+            return task_result
+        except Exception as exc:
+            log.error("Synthesis dispatch failed: %s", exc)
+            return await self._call_task_agent("reasoning", description, priority)
 
     # ------------------------------------------------------------------
     # Agent invocation
@@ -305,7 +439,7 @@ class TaskDispatcher:
                 )
                 return TaskResult(
                     action_type=role,
-                    description=prompt[:200],
+                    description=prompt[:500],
                     result="Task agent returned empty result.",
                     model_used=task_model.id,
                     success=False,
@@ -365,7 +499,7 @@ class TaskDispatcher:
                 model=task_model.id,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=1024,
+                max_tokens=4096,
             )
 
         if task_model.provider == ModelProvider.OLLAMA:
@@ -379,7 +513,7 @@ class TaskDispatcher:
                 model=task_model.id,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=1024,
+                max_tokens=4096,
             )
 
         raise RuntimeError(
@@ -408,17 +542,19 @@ class TaskDispatcher:
             # Build a combined message showing the task and its result.
             status_tag = "completed" if result.success else "FAILED"
             body_parts: list[str] = [
-                f"**Task [{status_tag}]:** {full_description[:300]}",
+                f"**Task [{status_tag}]:** {full_description[:1000]}",
                 "",
                 result.result,
             ]
             body = "\n".join(body_parts)
 
-            embed = MessageFormatter.format_response(
+            # Use multi-embed to avoid truncation of long results.
+            embeds = MessageFormatter.format_response_multi(
                 result.model_used,
                 body,
             )
-            await channel.send(embed=embed)
+            for embed in embeds:
+                await channel.send(embed=embed)
 
         except Exception:
             log.error(

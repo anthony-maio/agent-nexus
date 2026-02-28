@@ -125,6 +125,74 @@ class MessageFormatter:
         )
 
     @staticmethod
+    def format_response_multi(
+        model_id: str,
+        content: str,
+        *,
+        is_consensus: bool = False,
+    ) -> list[discord.Embed]:
+        """Format a model response, splitting into multiple embeds if needed.
+
+        When *content* fits within the 4 096-character embed description limit
+        a single-element list is returned (identical to :meth:`format_response`).
+        Longer content is split at paragraph or sentence boundaries and each
+        chunk becomes its own embed.  The first embed carries the full identity
+        header; subsequent embeds show a "(continued N/M)" footer.
+
+        Args:
+            model_id: OpenRouter model identifier.
+            content: The full text body (no artificial truncation).
+            is_consensus: Passed through to the first embed.
+
+        Returns:
+            A list of :class:`discord.Embed` objects.
+        """
+        if len(content) <= _EMBED_DESCRIPTION_LIMIT:
+            return [MessageFormatter.format_response(model_id, content, is_consensus=is_consensus)]
+
+        chunks = MessageFormatter._split_content(content, _EMBED_DESCRIPTION_LIMIT)
+        identity = get_identity(model_id)
+        embeds: list[discord.Embed] = []
+        for i, chunk in enumerate(chunks):
+            if i == 0:
+                embed = MessageFormatter.format_response(model_id, chunk, is_consensus=is_consensus)
+            else:
+                embed = discord.Embed(description=chunk, color=identity.color)
+                embed.set_footer(text=f"{identity.name} (continued {i + 1}/{len(chunks)})")
+            embeds.append(embed)
+        return embeds
+
+    @staticmethod
+    def _split_content(text: str, limit: int) -> list[str]:
+        """Split *text* into chunks that each fit within *limit* characters.
+
+        Prefers splitting at paragraph boundaries (``\\n\\n``), then sentence
+        endings (``. ``), falling back to a hard cut when neither is available.
+        """
+        if len(text) <= limit:
+            return [text]
+
+        chunks: list[str] = []
+        while text:
+            if len(text) <= limit:
+                chunks.append(text)
+                break
+
+            # Prefer paragraph break, then sentence end, then hard cut.
+            split = text.rfind("\n\n", 0, limit)
+            if split < limit // 2:
+                split = text.rfind(". ", 0, limit)
+                if split > 0:
+                    split += 1  # include the period
+            if split < limit // 4:
+                split = limit
+
+            chunks.append(text[:split])
+            text = text[split:].lstrip()
+
+        return chunks
+
+    @staticmethod
     def truncate_for_discord(text: str, limit: int = _MESSAGE_CHAR_LIMIT) -> str:
         """Truncate *text* to fit within Discord's message character limit.
 

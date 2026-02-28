@@ -48,11 +48,37 @@ class CrosstalkManager:
     # ------------------------------------------------------------------
 
     def build_reaction_order(
-        self, primary_model: str, all_models: list[str]
+        self,
+        primary_model: str,
+        all_models: list[str],
+        mood: str | None = None,
+        model_specs: dict | None = None,
     ) -> list[str]:
-        """Return the remaining models in a shuffled order for the reaction round."""
+        """Return remaining models ordered for the reaction round.
+
+        When the user is frustrated, prioritise models with reasoning/analysis
+        strengths for more helpful, direct responses.  Otherwise, shuffle
+        randomly for variety.
+        """
         others = [m for m in all_models if m != primary_model]
-        random.shuffle(others)
+
+        if mood == "frustrated" and model_specs:
+            _PREFERRED = {"reasoning", "analysis", "coding"}
+            _DEPRIORITISED = {"creativity", "general-intelligence"}
+
+            def _score(mid: str) -> int:
+                spec = model_specs.get(mid)
+                if spec is None:
+                    return 0
+                strengths = set(getattr(spec, "strengths", []))
+                return sum(
+                    1 for s in strengths if s in _PREFERRED
+                ) - sum(1 for s in strengths if s in _DEPRIORITISED)
+
+            others.sort(key=_score, reverse=True)
+        else:
+            random.shuffle(others)
+
         return others
 
     @staticmethod

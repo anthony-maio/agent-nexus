@@ -338,6 +338,62 @@ class NexusSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Filesystem ingestion
+    # ------------------------------------------------------------------
+    INGEST_PATHS: list[str] = Field(
+        default=[],
+        description=(
+            "Comma-separated file/directory paths to auto-ingest into C2 "
+            "at startup.  Leave empty to skip auto-ingestion."
+        ),
+    )
+    INGEST_CHUNK_SIZE: int = Field(
+        default=1200,
+        ge=100,
+        description="Character size for text chunks during ingestion.",
+    )
+    INGEST_MAX_FILE_BYTES: int = Field(
+        default=2_000_000,
+        ge=0,
+        description="Maximum file size in bytes for ingestion (0 = no limit).",
+    )
+
+    # ------------------------------------------------------------------
+    # Email ingestion (IMAP)
+    # ------------------------------------------------------------------
+    EMAIL_IMAP_HOST: str = Field(
+        default="",
+        description="IMAP server hostname (e.g. imap.gmail.com). Leave empty to disable.",
+    )
+    EMAIL_IMAP_PORT: int = Field(
+        default=993,
+        ge=1,
+        description="IMAP server port (993 for SSL).",
+    )
+    EMAIL_ADDRESS: str = Field(
+        default="",
+        description="Email address for IMAP login.",
+    )
+    EMAIL_PASSWORD: str = Field(
+        default="",
+        description="Email password or app-specific password for IMAP.",
+    )
+    EMAIL_FOLDER: str = Field(
+        default="INBOX",
+        description="IMAP folder to monitor.",
+    )
+    EMAIL_POLL_INTERVAL: int = Field(
+        default=300,
+        ge=30,
+        description="Seconds between email inbox checks.",
+    )
+    EMAIL_MAX_MESSAGES: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum unread emails to process per poll cycle.",
+    )
+
+    # ------------------------------------------------------------------
     # Cost tracking
     # ------------------------------------------------------------------
     SESSION_COST_LIMIT: float = Field(
@@ -349,6 +405,16 @@ class NexusSettings(BaseSettings):
     # ------------------------------------------------------------------
     # Validators
     # ------------------------------------------------------------------
+
+    @field_validator("INGEST_PATHS", mode="before")
+    @classmethod
+    def _split_comma_separated_paths(cls, value: Any) -> list[str]:
+        """Accept a comma-separated string or list for INGEST_PATHS."""
+        if isinstance(value, str):
+            return [p.strip() for p in value.split(",") if p.strip()]
+        if isinstance(value, list):
+            return value
+        return []
 
     @field_validator("SWARM_MODELS", mode="before")
     @classmethod
@@ -379,6 +445,7 @@ class NexusSettings(BaseSettings):
     _SENSITIVE_FIELDS: ClassVar[set[str]] = {
         "DISCORD_TOKEN", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY", "GOOGLE_API_KEY", "C2_NEO4J_PASSWORD",
+        "EMAIL_PASSWORD",
     }
 
     def __repr__(self) -> str:

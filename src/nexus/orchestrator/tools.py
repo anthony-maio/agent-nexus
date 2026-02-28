@@ -60,7 +60,7 @@ def build_tools(bot: Any) -> list:
             for m in results:
                 parts.append(
                     f"[{m.source}, score={m.score:.2f}]: "
-                    f"{m.content[:300]}"
+                    f"{m.content[:1000]}"
                 )
             return "\n".join(parts)
         except Exception as exc:
@@ -92,7 +92,7 @@ def build_tools(bot: Any) -> list:
             parts: list[str] = []
             for c in chosen:
                 parts.append(
-                    f"[{c.get('store', '?')}] {c.get('text', '')[:200]}"
+                    f"[{c.get('store', '?')}] {c.get('text', '')[:500]}"
                 )
             return "\n".join(parts)
         except Exception as exc:
@@ -232,6 +232,64 @@ def build_tools(bot: Any) -> list:
             log.warning("remember_finding tool failed: %s", exc)
             return f"Failed to store finding: {exc}"
 
+    @tool
+    async def synthesize_code(requirement: str) -> str:
+        """Build a Python function using TDD synthesis.
+
+        Generates tests from the requirement, writes code, runs it in a
+        sandbox, and iterates until tests pass. Returns the working code
+        or an error description.
+
+        Use this when a task requires producing working, tested code.
+
+        Args:
+            requirement: Plain English description of what the code should do.
+        """
+        tdd = getattr(bot, "tdd", None)
+        if tdd is None:
+            return "TDD engine is not available."
+        try:
+            result = await bot.tdd.synthesize(requirement)
+            if result.is_success:
+                return (
+                    f"BUILD SUCCESS ({result.iterations} iterations, "
+                    f"{result.tests_passed}/{result.total_tests} tests passed)\n\n"
+                    f"```python\n{result.generated_code}\n```"
+                )
+            errors = "; ".join(result.errors) if result.errors else "Tests did not pass"
+            return f"BUILD FAILED after {result.iterations} iterations: {errors}"
+        except Exception as exc:
+            log.warning("synthesize_code tool failed: %s", exc)
+            return f"Synthesis failed: {exc}"
+
+    @tool
+    async def write_file(filename: str, content: str) -> str:
+        """Write content to a file in the bot's workspace directory.
+
+        Use this to save generated code, documentation, or other outputs.
+        Files are written to the workspace/ directory relative to the bot.
+
+        Args:
+            filename: Name of the file (e.g. 'fibonacci.py'). No path traversal allowed.
+            content: The content to write to the file.
+        """
+        import re as _re
+        from pathlib import Path
+
+        # Sanitize filename -- no path traversal
+        if not _re.match(r"^[\w][\w.\-]*$", filename):
+            return f"Invalid filename: {filename}. Use only letters, numbers, dots, hyphens."
+
+        workspace = Path("workspace")
+        workspace.mkdir(exist_ok=True)
+        path = workspace / filename
+
+        try:
+            path.write_text(content, encoding="utf-8")
+            return f"File written: {path}"
+        except Exception as exc:
+            return f"Failed to write file: {exc}"
+
     return [
         query_memory,
         query_c2_context,
@@ -240,4 +298,6 @@ def build_tools(bot: Any) -> list:
         get_active_goals,
         get_recent_c2_events,
         remember_finding,
+        synthesize_code,
+        write_file,
     ]

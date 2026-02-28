@@ -87,6 +87,7 @@ class StateGatherer:
             "curiosity": None,
             "task_results": [],
             "active_goals": "",
+            "sentiment": None,
             "has_activity": False,
         }
 
@@ -131,6 +132,11 @@ class StateGatherer:
         if active_goals is not None:
             state["active_goals"] = active_goals
 
+        # Sentiment (synchronous, zero-cost).
+        sentiment_data = self._gather_sentiment()
+        if sentiment_data is not None:
+            state["sentiment"] = sentiment_data
+
         state["has_activity"] = bool(
             state["recent_messages"]
             or state["memories"]
@@ -140,15 +146,21 @@ class StateGatherer:
             or state["active_goals"]
         )
 
+        mood_str = (
+            state["sentiment"]["mood"]
+            if state.get("sentiment")
+            else "n/a"
+        )
         log.debug(
             "State gathered: %d message(s), %d memory(ies), %d result(s), "
-            "activity=%s, curiosity=%s, goals=%s.",
+            "activity=%s, curiosity=%s, goals=%s, mood=%s.",
             len(state["recent_messages"]),
             len(state["memories"]),
             len(state["task_results"]),
             "yes" if state["activity"] else "no",
             "yes" if state["curiosity"] else "no",
             "yes" if state["active_goals"] else "no",
+            mood_str,
         )
         return state
 
@@ -339,6 +351,59 @@ class StateGatherer:
         except Exception:
             log.warning("Failed to gather active goals.", exc_info=True)
             return None
+
+    # ------------------------------------------------------------------
+    # Sentiment (synchronous — no I/O)
+    # ------------------------------------------------------------------
+
+    def _gather_sentiment(self) -> dict[str, Any] | None:
+        """Read current sentiment from the tracker.
+
+        This is synchronous and zero-cost (in-memory keyword matching).
+
+        Returns:
+            A dict with ``mood``, ``score``, ``window_size``, and
+            ``mood_hint``, or ``None`` if the tracker is absent.
+        """
+        tracker = getattr(self.bot, "sentiment", None)
+        if tracker is None:
+            return None
+
+        from nexus.swarm.sentiment import Mood
+
+        mood = tracker.current_mood
+        score = tracker.average_score
+        window_size = len(tracker._window)
+
+        hints: dict[Mood, str] = {
+            Mood.FRUSTRATED: (
+                "User frustrated -- prefer quick-win tasks "
+                "(summarize, research). Be more careful with risky actions."
+            ),
+            Mood.URGENT: (
+                "User has urgent need -- prioritise speed, "
+                "skip low-priority tasks."
+            ),
+            Mood.CURIOUS: (
+                "User is exploratory -- research tasks welcome, "
+                "deeper analysis appreciated."
+            ),
+            Mood.NEGATIVE: (
+                "User seems dissatisfied -- focus on solutions, "
+                "avoid speculative tasks."
+            ),
+            Mood.POSITIVE: (
+                "User in good spirits -- maintain momentum, "
+                "can take on ambitious tasks."
+            ),
+        }
+
+        return {
+            "mood": mood.value,
+            "score": round(score, 3),
+            "window_size": window_size,
+            "mood_hint": hints.get(mood, ""),
+        }
 
     # ------------------------------------------------------------------
     # Dunder

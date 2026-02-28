@@ -53,7 +53,9 @@ _ORCHESTRATOR_SYSTEM_PROMPT = (
     "swarm's tool-enabled task agents. Respond with a JSON array of "
     "action objects. Each action has:\n"
     '  "type": one of "research", "code", "analyze", "summarize", '
-    '"classify", "extract"\n'
+    '"classify", "extract" ("code" generates working, tested code '
+    "via TDD synthesis — tests generated, code written, executed "
+    "in sandbox, iterated until passing)\n"
     '  "description": a clear, specific task description\n'
     '  "priority": "high", "medium", or "low"\n'
     '  "goal_id": (optional) ID of an existing goal this relates to\n'
@@ -62,8 +64,8 @@ _ORCHESTRATOR_SYSTEM_PROMPT = (
     "IMPORTANT CONSTRAINTS:\n"
     "- Task agents have tools: query_memory, query_c2_context, "
     "query_c2_curiosity, write_c2_event, get_active_goals, "
-    "get_recent_c2_events. They can query knowledge but CANNOT access "
-    "files, run commands, or interact with infrastructure.\n"
+    "get_recent_c2_events, synthesize_code, write_file. They can query "
+    "knowledge, build tested code, and save files to workspace.\n"
     "- Do NOT create meta-goals about the swarm itself (e.g. 'summarize "
     "cycle results', 'compile status report', 'review escalation').\n"
     "- Do NOT create goals about diagnosing or fixing the swarm's own "
@@ -110,6 +112,7 @@ async def gather_state_node(
         "curiosity": gathered.get("curiosity"),
         "task_results": gathered.get("task_results", []),
         "active_goals": gathered.get("active_goals", ""),
+        "sentiment": gathered.get("sentiment"),
     }
 
 
@@ -138,6 +141,15 @@ async def enrich_c2_node(
             query_parts.append(suggested)
 
     query = " ".join(query_parts)[:500] or "current tasks and priorities"
+
+    # Bias C2 query towards actionable content when user is stressed.
+    sentiment = state.get("sentiment")
+    if sentiment:
+        mood_val = sentiment.get("mood", "neutral")
+        if mood_val in ("frustrated", "urgent"):
+            query = f"priority solutions fixes {query}"
+        elif mood_val == "curious":
+            query = f"explanation context background {query}"
 
     # Stage 1: Knowledge context from C2 pipeline.
     try:
@@ -262,6 +274,11 @@ async def autonomy_gate_node(
     gate = getattr(bot, "autonomy_gate", None)
     if gate is None:
         return {}  # No gate -- all actions pass through.
+
+    # Update gate with current user mood for risk scoring.
+    sentiment = state.get("sentiment")
+    if sentiment:
+        gate.set_current_mood(sentiment.get("mood", "neutral"))
 
     approved: list[dict[str, Any]] = []
     for action in state.get("approved_actions", []):
@@ -536,7 +553,7 @@ async def _react_loop(
             log_entry: dict[str, str] = {
                 "step": str(step),
                 "tool": tool_name,
-                "args": json.dumps(tool_args, default=str)[:200],
+                "args": json.dumps(tool_args, default=str)[:1000],
             }
 
             if tool_name in tool_map:
@@ -547,7 +564,7 @@ async def _react_loop(
             else:
                 result = f"Unknown tool: {tool_name}"
 
-            log_entry["result_preview"] = str(result)[:100]
+            log_entry["result_preview"] = str(result)[:1000]
             tool_log.append(log_entry)
 
             messages.append(
@@ -607,6 +624,19 @@ def _build_decision_prompt(
     else:
         parts.append("\n--- Recent Conversation ---")
         parts.append("  (no recent messages)")
+
+    # User sentiment.
+    sentiment = state.get("sentiment")
+    if sentiment and sentiment.get("mood") != "neutral":
+        parts.append("\n--- User Sentiment ---")
+        parts.append(
+            f"  Mood: {sentiment['mood']} "
+            f"(avg score: {sentiment.get('score', 0):.2f}, "
+            f"window: {sentiment.get('window_size', 0)} messages)"
+        )
+        hint = sentiment.get("mood_hint", "")
+        if hint:
+            parts.append(f"  Guidance: {hint}")
 
     # Memories.
     memories = state.get("memories", [])
@@ -873,29 +903,32 @@ async def _post_to_nexus(bot: Any, agent_result: dict[str, Any]) -> None:
         result_text = agent_result.get("result", "")
 
         body_parts: list[str] = [
-            f"**Task [{status}]:** {action.get('description', '')[:300]}",
+            f"**Task [{status}]:** {action.get('description', '')[:1000]}",
             "",
             result_text,
         ]
         body = "\n".join(body_parts)
 
         model_id = bot.settings.TASK_AGENT_MODEL
-        embed = MessageFormatter.format_response(model_id, body)
 
-        # Add tool usage field if tools were called.
+        # Use multi-embed to avoid truncation of long results.
+        embeds = MessageFormatter.format_response_multi(model_id, body)
+
+        # Add tool usage field to the last embed if tools were called.
         tool_calls = agent_result.get("tool_calls", [])
         if tool_calls:
             tool_summary = "\n".join(
                 f"`{tc.get('tool', '?')}` -> "
-                f"{tc.get('result_preview', '...')[:60]}"
+                f"{tc.get('result_preview', '...')[:500]}"
                 for tc in tool_calls
             )
-            embed.add_field(
+            embeds[-1].add_field(
                 name=f"Tools Used ({len(tool_calls)})",
                 value=tool_summary[:1024],
                 inline=False,
             )
 
-        await router.nexus.send(embed=embed)
+        for embed in embeds:
+            await router.nexus.send(embed=embed)
     except Exception:
         log.error("Failed to post agent result to #nexus.", exc_info=True)

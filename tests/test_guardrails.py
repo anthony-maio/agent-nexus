@@ -268,15 +268,20 @@ class TestIdleLoopDetector:
         assert detector.staleness_counter == 0
         assert not detector.is_suppressed
 
-    def test_activity_resets(self):
+    def test_activity_does_not_reset(self):
+        """PiecesOS activity should NOT reset idle detection.
+
+        An active IDE session would permanently prevent loop detection
+        otherwise.  Only human messages reset the staleness counter.
+        """
         detector = IdleLoopDetector(stale_cycle_limit=3)
         actions = [{"description": "Analyze conversation patterns in the codebase"}]
         detector.check_cycle(actions, _make_state())
         detector.check_cycle(actions, _make_state())
         assert detector.staleness_counter == 1
-        # PiecesOS activity detected
+        # PiecesOS activity should NOT reset
         detector.check_cycle(actions, _make_state(has_activity=True))
-        assert detector.staleness_counter == 0
+        assert detector.staleness_counter == 2
 
     def test_stale_activity_does_not_reset(self):
         detector = IdleLoopDetector(stale_cycle_limit=3)
@@ -323,10 +328,18 @@ class TestCapabilityFiltering:
 
     def test_drops_file_access_tasks(self):
         actions = [
-            {"type": "code", "description": "Analyze code in tools/extraction.py"},
+            {"type": "analyze", "description": "Analyze code in tools/extraction.py"},
         ]
         result = check_capability(actions)
         assert len(result) == 0
+
+    def test_code_type_passes_through(self):
+        """Code-type actions bypass capability filter (routed to TDD engine)."""
+        actions = [
+            {"type": "code", "description": "Analyze code in tools/extraction.py"},
+        ]
+        result = check_capability(actions)
+        assert len(result) == 1
 
     def test_drops_file_inspect_task(self):
         actions = [
@@ -351,7 +364,7 @@ class TestCapabilityFiltering:
 
     def test_drops_command_execution(self):
         actions = [
-            {"type": "code", "description": "Run the test suite and report failures"},
+            {"type": "analyze", "description": "Run the test suite and report failures"},
         ]
         result = check_capability(actions)
         assert len(result) == 0
@@ -387,7 +400,7 @@ class TestCapabilityFiltering:
     def test_mixed_actions_partial_filter(self):
         actions = [
             {"type": "research", "description": "Summarize Python best practices for async"},
-            {"type": "code", "description": "Inspect the extraction code in parser.py"},
+            {"type": "extract", "description": "Inspect the extraction code in parser.py"},
             {"type": "analyze", "description": "Evaluate user's architectural approach"},
         ]
         result = check_capability(actions)

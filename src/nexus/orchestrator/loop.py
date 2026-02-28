@@ -449,6 +449,10 @@ class OrchestratorLoop:
                     inline=True,
                 )
             await router.nexus.send(embed=embed)
+
+            # Also post to #human so the user sees activity updates.
+            if getattr(router, "human", None) is not None:
+                await router.human.send(embed=embed)
         except Exception:
             log.debug(
                 "Failed to post activity digest.", exc_info=True,
@@ -580,7 +584,17 @@ class OrchestratorLoop:
             await self._post_idle_notice()
             actions = []
 
-        # 3. Dispatch each action through the autonomy gate.
+        # 3. Update mood on autonomy gate and dispatcher.
+        sentiment = state.get("sentiment")
+        if sentiment:
+            _mood = sentiment.get("mood", "neutral")
+            gate = getattr(self.bot, "autonomy_gate", None)
+            if gate is not None:
+                gate.set_current_mood(_mood)
+            if self.bot.dispatcher is not None:
+                self.bot.dispatcher.set_current_mood(_mood)
+
+        # 4. Dispatch each action through the autonomy gate.
         dispatched = 0
         for action in actions:
             dispatched += await self._gate_and_dispatch(action)
@@ -616,16 +630,24 @@ class OrchestratorLoop:
             if result.get("contradictions_found", 0) > 0:
                 await self._post_curiosity_findings(result)
 
-            # Trigger swarm discussion if curiosity signals are actionable.
-            should_discuss = (
-                result.get("stress_after", 0) > 0.2
-                or result.get("contradictions_found", 0) > 0
-                or result.get("voids_found", 0) > 0
-            )
-            if should_discuss:
-                curiosity_signals = await c2.curiosity()
-                if curiosity_signals is not None:
-                    await self._trigger_curiosity_discussion(curiosity_signals)
+            # Trigger swarm discussion if curiosity signals are actionable,
+            # but NOT if the idle loop detector has tripped — discussions
+            # generate new conversation content that resets the idle
+            # detector's term overlap tracking, perpetuating loops.
+            if self._idle_detector.is_suppressed:
+                log.info(
+                    "Skipping curiosity discussion — idle loop suppression active."
+                )
+            else:
+                should_discuss = (
+                    result.get("stress_after", 0) > 0.2
+                    or result.get("contradictions_found", 0) > 0
+                    or result.get("voids_found", 0) > 0
+                )
+                if should_discuss:
+                    curiosity_signals = await c2.curiosity()
+                    if curiosity_signals is not None:
+                        await self._trigger_curiosity_discussion(curiosity_signals)
 
         except Exception:
             log.warning("Night cycle maintenance failed.", exc_info=True)
@@ -953,6 +975,16 @@ class OrchestratorLoop:
                 "In 'autopilot' mode, all actions auto-execute."
             )
 
+        # Augment decision context with mood awareness.
+        sentiment = state.get("sentiment")
+        if sentiment and sentiment.get("mood") != "neutral":
+            mood_guidance = sentiment.get("mood_hint", "")
+            if mood_guidance:
+                autonomy_hint += (
+                    f"\n\nCurrent user mood: {sentiment['mood']}. "
+                    f"{mood_guidance}"
+                )
+
         try:
             response = await self.bot.openrouter.chat(
                 model=decision_model,
@@ -965,7 +997,9 @@ class OrchestratorLoop:
                             "swarm's task agents. Respond with a JSON array of action objects. "
                             "Each action has:\n"
                             '  "type": one of "research", "code", "analyze", "summarize", '
-                            '"classify", "extract"\n'
+                            '"classify", "extract" ("code" generates working, tested code '
+                            "via TDD synthesis — tests generated, code written, executed "
+                            "in sandbox, iterated until passing)\n"
                             '  "description": a clear, specific task description\n'
                             '  "priority": "high", "medium", or "low"\n'
                             '  "goal_id": (optional) ID of an existing goal this relates to\n'
@@ -1343,6 +1377,19 @@ class OrchestratorLoop:
         else:
             parts.append("\n--- Recent Conversation ---")
             parts.append("  (no recent messages)")
+
+        # User sentiment.
+        sentiment = state.get("sentiment")
+        if sentiment and sentiment.get("mood") != "neutral":
+            parts.append("\n--- User Sentiment ---")
+            parts.append(
+                f"  Mood: {sentiment['mood']} "
+                f"(avg score: {sentiment['score']:.2f}, "
+                f"window: {sentiment['window_size']} messages)"
+            )
+            hint = sentiment.get("mood_hint", "")
+            if hint:
+                parts.append(f"  Guidance: {hint}")
 
         # Relevant memories.
         memories: list[dict[str, Any]] = state.get("memories", [])

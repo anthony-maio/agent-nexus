@@ -84,6 +84,22 @@ class SwarmInitiative:
         if not self.enabled:
             return False
 
+        # Mood-aware initiative gating: don't bother frustrated/negative
+        # users with proactive chatter.
+        if not force:
+            from nexus.swarm.sentiment import Mood
+
+            tracker = getattr(self.bot, "sentiment", None)
+            if tracker is not None:
+                mood = tracker.current_mood
+                if mood in (Mood.FRUSTRATED, Mood.NEGATIVE):
+                    log.debug(
+                        "Initiative skipped (user mood: %s): reason=%s",
+                        mood.value,
+                        reason,
+                    )
+                    return False
+
         if not force and not self._cooldown_elapsed():
             log.debug(
                 "Initiative skipped (cooldown): reason=%s", reason,
@@ -113,7 +129,14 @@ class SwarmInitiative:
     def _cooldown_elapsed(self) -> bool:
         if self._last_initiative == 0.0:
             return True
-        return (time.monotonic() - self._last_initiative) >= self.cooldown_seconds
+        effective_cooldown = self.cooldown_seconds
+        # Curious/engaged users get faster proactive interaction.
+        from nexus.swarm.sentiment import Mood
+
+        tracker = getattr(self.bot, "sentiment", None)
+        if tracker is not None and tracker.current_mood == Mood.CURIOUS:
+            effective_cooldown *= 0.5
+        return (time.monotonic() - self._last_initiative) >= effective_cooldown
 
     async def _run_initiative(
         self,
@@ -264,8 +287,13 @@ class SwarmInitiative:
         from nexus.channels.formatter import MessageFormatter
         from nexus.swarm.crosstalk import CrosstalkManager
 
+        tracker = getattr(self.bot, "sentiment", None)
+        mood_val = tracker.current_mood.value if tracker else None
         reaction_order = self.bot.crosstalk.build_reaction_order(
-            primary_model, model_ids,
+            primary_model,
+            model_ids,
+            mood=mood_val,
+            model_specs=self.bot.swarm_models,
         )
         reaction_suffix = CrosstalkManager.get_reaction_suffix()
         reactions_posted = 0
@@ -323,12 +351,16 @@ class SwarmInitiative:
         """Store initiative content in vector memory."""
         try:
             vector = await self.bot.embeddings.embed_one(content)
+            metadata: dict[str, str] = {"type": "initiative"}
+            tracker = getattr(self.bot, "sentiment", None)
+            if tracker is not None:
+                metadata["mood"] = tracker.current_mood.value
             await self.bot.memory_store.store(
                 content=content,
                 vector=vector,
                 source=source,
                 channel="nexus",
-                metadata={"type": "initiative"},
+                metadata=metadata,
             )
         except Exception:
             log.warning("Failed to store initiative in memory.", exc_info=True)

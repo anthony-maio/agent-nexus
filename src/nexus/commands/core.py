@@ -23,7 +23,7 @@ import discord
 from discord.ext import commands
 
 from nexus.channels.formatter import MessageFormatter
-from nexus.personality.identities import IDENTITIES, format_name, get_identity
+from nexus.personality.identities import IDENTITIES, format_name
 
 log = logging.getLogger(__name__)
 
@@ -80,17 +80,18 @@ class CoreCommands(commands.Cog):
                 await self.bot.conversation.add_message("human", prompt, is_human=True)
                 await self.bot.conversation.add_message(model_id, response.content)
 
-                # Post to #nexus
-                embed = MessageFormatter.format_response(model_id, response.content)
-                footer_text = embed.footer.text or ""
-                embed.set_footer(
+                # Post to #nexus (multi-embed for long responses)
+                embeds = MessageFormatter.format_response_multi(model_id, response.content)
+                footer_text = embeds[0].footer.text or ""
+                embeds[0].set_footer(
                     text=(
                         f"{footer_text} | "
                         f"{response.input_tokens}+{response.output_tokens} tokens | "
                         f"${response.cost:.4f}"
                     )
                 )
-                await self.bot.router.nexus.send(embed=embed)
+                for embed in embeds:
+                    await self.bot.router.nexus.send(embed=embed)
 
                 # Trigger crosstalk -- other models may spontaneously respond
                 responders = await self.bot.crosstalk.select_responders(
@@ -99,7 +100,7 @@ class CoreCommands(commands.Cog):
                 for responder_id in responders:
                     self.bot._spawn(self._crosstalk_respond(responder_id))
 
-            except Exception as exc:
+            except Exception:
                 log.exception("!ask command failed for model %s", model_id)
                 await ctx.send("An error occurred. Check bot logs for details.")
 
@@ -130,8 +131,8 @@ class CoreCommands(commands.Cog):
                     continue
                 if result:
                     await self.bot.conversation.add_message(model_id, result.content)
-                    embed = MessageFormatter.format_response(model_id, result.content)
-                    await self.bot.router.nexus.send(embed=embed)
+                    for embed in MessageFormatter.format_response_multi(model_id, result.content):
+                        await self.bot.router.nexus.send(embed=embed)
 
     # ------------------------------------------------------------------
     # !status -- system health overview
@@ -198,6 +199,86 @@ class CoreCommands(commands.Cog):
         await ctx.send(embed=embed)
 
     # ------------------------------------------------------------------
+    # !mood -- current user mood analysis
+    # ------------------------------------------------------------------
+
+    @commands.command(name="mood")
+    async def mood(self, ctx: commands.Context) -> None:
+        """Show how the system perceives the user's current mood."""
+        tracker = getattr(self.bot, "sentiment", None)
+        if tracker is None:
+            await ctx.send("Sentiment tracking is not available.")
+            return
+
+        from nexus.swarm.sentiment import Mood
+
+        current = tracker.current_mood
+        avg = tracker.average_score
+        window = list(tracker._window)
+
+        _COLORS: dict[Mood, int] = {
+            Mood.POSITIVE: 0x2ECC71,
+            Mood.NEGATIVE: 0xE74C3C,
+            Mood.FRUSTRATED: 0xE67E22,
+            Mood.CURIOUS: 0x3498DB,
+            Mood.URGENT: 0xF1C40F,
+            Mood.NEUTRAL: 0x95A5A6,
+        }
+
+        embed = discord.Embed(
+            title="User Mood Analysis",
+            color=_COLORS.get(current, 0x95A5A6),
+        )
+        embed.add_field(
+            name="Current Mood",
+            value=f"**{current.value.upper()}**",
+            inline=True,
+        )
+        embed.add_field(
+            name="Average Score",
+            value=f"{avg:+.2f}",
+            inline=True,
+        )
+        embed.add_field(
+            name="Window Size",
+            value=f"{len(window)} / {tracker._window.maxlen}",
+            inline=True,
+        )
+
+        if window:
+            lines = []
+            for i, r in enumerate(window, 1):
+                sign = "+" if r.score > 0 else (
+                    "-" if r.score < 0 else "~"
+                )
+                lines.append(
+                    f"`{i:>2}.` {r.label.value:<12} "
+                    f"{sign}{abs(r.score):.1f} "
+                    f"(conf: {r.confidence:.0%})"
+                )
+            embed.add_field(
+                name="Recent Window",
+                value="\n".join(lines[-10:]),
+                inline=False,
+            )
+
+        hint = tracker.mood_context_for_prompt()
+        if hint:
+            embed.add_field(
+                name="Active Prompt Hint",
+                value=hint.strip()[:500],
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Active Prompt Hint",
+                value="*(neutral -- no special instructions)*",
+                inline=False,
+            )
+
+        await ctx.send(embed=embed)
+
+    # ------------------------------------------------------------------
     # !help_nexus -- command reference
     # ------------------------------------------------------------------
 
@@ -209,28 +290,45 @@ class CoreCommands(commands.Cog):
             color=0x3498DB,
         )
         embed.add_field(
-            name="!ask <model> <prompt>",
-            value="Ask a specific model",
+            name="Interaction",
+            value=(
+                "`!ask <model> <prompt>` — Ask a specific model\n"
+                "`!think <prompt>` — Multi-perspective from all models\n"
+                "`!build <requirement>` — Build code via TDD synthesis\n"
+                "`!memory <query>` — Search swarm memory\n"
+                "`!remember <text>` — Store in memory\n"
+                "`!forget <id>` — Delete a memory"
+            ),
             inline=False,
         )
         embed.add_field(
-            name="!think <prompt>",
-            value="Ask all swarm models (multi-perspective)",
+            name="Monitoring",
+            value=(
+                "`!status` — Swarm health overview\n"
+                "`!models` — List active models\n"
+                "`!costs` — Session cost breakdown\n"
+                "`!config` — Show configuration\n"
+                "`!goals` — List active goals\n"
+                "`!mood` — Current user mood analysis\n"
+                "`!session` — Session info + user mood\n"
+                "`!pieces [query]` — Query PiecesOS activity"
+            ),
             inline=False,
         )
         embed.add_field(
-            name="!memory <query>",
-            value="Search swarm memory",
+            name="Admin",
+            value=(
+                "`!crosstalk on/off` — Toggle crosstalk\n"
+                "`!autonomy observe|escalate|autopilot` — Set autonomy\n"
+                "`!curiosity` — Trigger epistemic scan\n"
+                "`!c2status` — C2 backend health\n"
+                "`!c2events [n]` — Recent C2 events\n"
+                "`!discuss` — Trigger curiosity discussion\n"
+                "`!ingest [paths]` — Ingest files into C2\n"
+                "`!email [poll]` — Email monitor status"
+            ),
             inline=False,
         )
-        embed.add_field(
-            name="!remember <text>",
-            value="Store something in memory",
-            inline=False,
-        )
-        embed.add_field(name="!models", value="List available models", inline=False)
-        embed.add_field(name="!costs", value="Show session costs", inline=False)
-        embed.add_field(name="!status", value="Show swarm status", inline=False)
 
         await ctx.send(embed=embed)
 
@@ -273,8 +371,8 @@ class CoreCommands(commands.Cog):
                 model=model_id, messages=messages
             )
             await self.bot.conversation.add_message(model_id, response.content)
-            embed = MessageFormatter.format_response(model_id, response.content)
-            await self.bot.router.nexus.send(embed=embed)
+            for embed in MessageFormatter.format_response_multi(model_id, response.content):
+                await self.bot.router.nexus.send(embed=embed)
         except Exception as exc:
             log.error("Crosstalk error from %s: %s", model_id, exc)
 

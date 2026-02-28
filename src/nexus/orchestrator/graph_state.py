@@ -33,6 +33,7 @@ class NexusOrchestratorState(TypedDict):
     curiosity: dict[str, Any] | None
     task_results: list[dict[str, Any]]
     active_goals: str
+    sentiment: dict[str, Any] | None
 
     # --- C2 shared brain context ------------------------------------------
     c2_context: str

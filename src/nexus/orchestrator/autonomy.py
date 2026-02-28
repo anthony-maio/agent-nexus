@@ -64,6 +64,7 @@ class AutonomyGate:
     ) -> None:
         self.mode: AutonomyMode = mode
         self._bot = bot
+        self._current_mood: str = "neutral"
 
     def set_mode(self, mode: AutonomyMode | str) -> None:
         """Set the autonomy mode.  Accepts enum or string."""
@@ -75,6 +76,10 @@ class AutonomyGate:
     def set_bot(self, bot: Any) -> None:
         """Set the bot reference for dynamic risk scoring."""
         self._bot = bot
+
+    def set_current_mood(self, mood: str) -> None:
+        """Update the current user mood for risk score adjustment."""
+        self._current_mood = mood
 
     # ------------------------------------------------------------------
     # Risk scoring
@@ -117,7 +122,15 @@ class AutonomyGate:
                     if failure_rate > 0.5:
                         score += 0.2
 
-        return min(score, 1.0)
+        # Mood-based risk adjustment.
+        # FRUSTRATED: +0.1 (be more careful, escalate more to human)
+        # URGENT: -0.1 (let more things auto-execute for speed)
+        if self._current_mood == "frustrated":
+            score += 0.1
+        elif self._current_mood == "urgent":
+            score -= 0.1
+
+        return max(0.0, min(score, 1.0))
 
     def is_high_risk(self, action: dict[str, Any]) -> bool:
         """Return ``True`` if the action is classified as high-risk."""

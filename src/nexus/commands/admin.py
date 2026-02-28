@@ -15,11 +15,13 @@ Usage::
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import discord
 from discord.ext import commands
 
 from nexus.orchestrator.autonomy import AutonomyMode
+from nexus.orchestrator.goals import GoalStatus
 from nexus.personality.identities import get_identity
 
 log = logging.getLogger(__name__)
@@ -453,6 +455,334 @@ class AdminCommands(commands.Cog):
             )
         if digest.most_recent_at:
             embed.set_footer(text=f"Source: {digest.most_recent_at}")
+        await ctx.send(embed=embed)
+
+
+    # ------------------------------------------------------------------
+    # !goals -- manage persistent goals
+    # ------------------------------------------------------------------
+
+    @commands.command(name="goals")
+    async def list_goals(
+        self, ctx: commands.Context, action: str = "list", goal_id: str = ""
+    ) -> None:
+        """Manage swarm goals.
+
+        Usage:
+            !goals              — List active goals
+            !goals cancel <id>  — Cancel a goal
+            !goals clear        — Cancel all active goals
+        """
+        goal_store = self.bot.orchestrator.goal_store
+
+        if action == "list":
+            goals = await goal_store.get_active_goals()
+            if not goals:
+                await ctx.send("No active goals.")
+                return
+            embed = discord.Embed(
+                title=f"Active Goals ({len(goals)})", color=0x2ECC71,
+            )
+            for g in goals[:10]:
+                completed = [
+                    tid for tid in g.task_ids
+                    if (t := await goal_store.get_task(tid))
+                    and t.status == "completed"
+                ]
+                tasks = f"{len(completed)}/{len(g.task_ids)} tasks"
+                embed.add_field(
+                    name=g.description[:100] or g.title[:100],
+                    value=f"ID: `{g.id[:8]}...` | {tasks} | {g.status}",
+                    inline=False,
+                )
+            await ctx.send(embed=embed)
+
+        elif action == "cancel" and goal_id:
+            success = await goal_store.update_goal(
+                goal_id, status=GoalStatus.CANCELLED.value,
+            )
+            if success:
+                await ctx.send(f"Goal `{goal_id[:8]}...` cancelled.")
+            else:
+                await ctx.send(f"Goal `{goal_id[:8]}...` not found.")
+
+        elif action == "clear":
+            goals = await goal_store.get_active_goals()
+            for g in goals:
+                await goal_store.update_goal(
+                    g.id, status=GoalStatus.CANCELLED.value,
+                )
+            await ctx.send(f"Cancelled {len(goals)} active goal(s).")
+
+        else:
+            await ctx.send(
+                "Usage: `!goals`, `!goals cancel <id>`, `!goals clear`"
+            )
+
+
+    # ------------------------------------------------------------------
+    # !ingest -- ingest files/directories into C2
+    # ------------------------------------------------------------------
+
+    @commands.command(name="ingest")
+    @commands.has_permissions(administrator=True)
+    async def ingest_files(
+        self, ctx: commands.Context, *, paths: str = ""
+    ) -> None:
+        """Ingest local files/directories into Continuity Core.
+
+        Usage:
+            !ingest /path/to/project          — Ingest a directory
+            !ingest /file1.py, /dir2          — Ingest multiple paths
+            !ingest                           — Ingest configured INGEST_PATHS
+        """
+        import asyncio
+
+        if not self.bot.c2.is_running:
+            await ctx.send("C2 is not running. Cannot ingest files.")
+            return
+
+        # Determine paths to ingest
+        if paths:
+            path_list = [p.strip() for p in paths.split(",") if p.strip()]
+        else:
+            from nexus.config import get_settings
+            path_list = get_settings().INGEST_PATHS
+            if not path_list:
+                await ctx.send(
+                    "No paths provided and `INGEST_PATHS` is empty.\n"
+                    "Usage: `!ingest /path/to/project`"
+                )
+                return
+
+        await ctx.send(f"Ingesting {len(path_list)} path(s)...")
+
+        try:
+            result = await asyncio.to_thread(self._run_ingest, path_list)
+
+            embed = discord.Embed(title="Ingestion Complete", color=0x2ECC71)
+            embed.add_field(name="Files Seen", value=str(result.files_seen), inline=True)
+            embed.add_field(name="Docs Ingested", value=str(result.docs_ingested), inline=True)
+            embed.add_field(name="Chunks", value=str(result.chunks_ingested), inline=True)
+            embed.add_field(name="Skipped", value=str(result.skipped), inline=True)
+            embed.add_field(name="Errors", value=str(result.errors), inline=True)
+            embed.add_field(
+                name="Duration", value=f"{result.duration_sec:.1f}s", inline=True,
+            )
+            if result.error_details:
+                errs = "\n".join(
+                    f"- {e['path']}: {e['error'][:60]}"
+                    for e in result.error_details[:5]
+                )
+                embed.add_field(name="Error Details", value=errs, inline=False)
+
+            await ctx.send(embed=embed)
+
+            # Log to C2
+            self.bot._spawn(self.bot._log_to_c2(
+                actor="human",
+                intent="ingest",
+                inp=", ".join(path_list)[:500],
+                out=(
+                    f"files={result.files_seen} docs={result.docs_ingested} "
+                    f"chunks={result.chunks_ingested}"
+                ),
+                tags=["ingest", "filesystem"],
+            ))
+
+        except Exception as exc:
+            log.error("Ingestion failed: %s", exc, exc_info=True)
+            await ctx.send(f"Ingestion failed: {exc}")
+
+    @staticmethod
+    def _run_ingest(path_list: list[str]) -> Any:
+        """Run the IngestPipeline synchronously (called via to_thread)."""
+        from continuity_core.ingest.pipeline import IngestPipeline
+        pipeline = IngestPipeline()
+        return pipeline.ingest_paths(path_list)
+
+    # ------------------------------------------------------------------
+    # !session -- show session info
+    # ------------------------------------------------------------------
+
+    @commands.command(name="session")
+    async def session_info(self, ctx: commands.Context) -> None:
+        """Show current and previous session information."""
+        import time
+
+        session = self.bot.session
+        uptime_min = (time.monotonic() - session._start_time) / 60
+
+        embed = discord.Embed(title="Session Info", color=0x3498DB)
+        embed.add_field(
+            name="Uptime", value=f"{uptime_min:.0f} minutes", inline=True,
+        )
+        embed.add_field(
+            name="Messages",
+            value=str(self.bot.conversation.message_count),
+            inline=True,
+        )
+        embed.add_field(
+            name="User Mood",
+            value=f"{self.bot.sentiment.current_mood.value} "
+                  f"(avg={self.bot.sentiment.average_score:.2f})",
+            inline=True,
+        )
+        embed.add_field(
+            name="Cost", value=f"${self.bot.openrouter.session_cost:.4f}",
+            inline=True,
+        )
+
+        prev = session.last_session_summary
+        if prev:
+            embed.add_field(
+                name="Previous Session",
+                value=prev[:1024],
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Previous Session",
+                value="No previous session data available.",
+                inline=False,
+            )
+
+        await ctx.send(embed=embed)
+
+    # ------------------------------------------------------------------
+    # !build -- synthesize code via TDD engine
+    # ------------------------------------------------------------------
+
+    @commands.command(name="build")
+    @commands.cooldown(rate=1, per=120, type=commands.BucketType.user)
+    async def build(self, ctx: commands.Context, *, requirement: str) -> None:
+        """Build code from a requirement using TDD synthesis.
+
+        Usage: !build A function that calculates fibonacci numbers
+        """
+        tdd = getattr(self.bot, "tdd", None)
+        if tdd is None:
+            await ctx.send("TDD engine is not available.")
+            return
+
+        status_msg = await ctx.send(f"Building: {requirement[:100]}...")
+
+        try:
+            result = await tdd.synthesize(requirement)
+
+            embed = discord.Embed(
+                title=f"Build: {requirement[:80]}",
+                color=0x2ECC71 if result.is_success else 0xE74C3C,
+            )
+            embed.add_field(
+                name="Status", value=result.status.value, inline=True,
+            )
+            embed.add_field(
+                name="Iterations", value=str(result.iterations), inline=True,
+            )
+            embed.add_field(
+                name="Tests",
+                value=f"{result.tests_passed}/{result.total_tests} passed",
+                inline=True,
+            )
+
+            if result.generated_code:
+                code_preview = result.generated_code[:1000]
+                embed.add_field(
+                    name="Code",
+                    value=f"```python\n{code_preview}\n```",
+                    inline=False,
+                )
+
+            await status_msg.edit(content=None, embed=embed)
+
+            # Upload full code as file attachment if successful
+            if result.is_success and result.generated_code:
+                import io
+
+                file = discord.File(
+                    io.BytesIO(result.generated_code.encode()),
+                    filename="build_output.py",
+                )
+                await ctx.send(file=file)
+
+            # Log to C2
+            self.bot._spawn(self.bot._log_to_c2(
+                actor="human", intent="build",
+                inp=requirement[:500],
+                out=(
+                    f"status={result.status.value} "
+                    f"tests={result.tests_passed}/{result.total_tests}"
+                ),
+                tags=["build", "tdd", "synthesis"],
+            ))
+
+        except Exception:
+            log.exception("!build failed for: %s", requirement[:100])
+            await status_msg.edit(content="Build failed. Check logs.")
+
+    # ------------------------------------------------------------------
+    # !email -- check email status or trigger manual poll
+    # ------------------------------------------------------------------
+
+    @commands.command(name="email")
+    async def email_status(
+        self, ctx: commands.Context, action: str = "status"
+    ) -> None:
+        """Check email ingestion status or trigger a poll.
+
+        Usage:
+            !email           — Show email monitor status
+            !email poll      — Manually trigger an email check
+        """
+        monitor = self.bot.email_monitor
+
+        if not monitor.is_configured:
+            await ctx.send(
+                "Email monitor is not configured. Set `EMAIL_IMAP_HOST`, "
+                "`EMAIL_ADDRESS`, and `EMAIL_PASSWORD` in config/.env."
+            )
+            return
+
+        if action == "poll":
+            await ctx.send("Checking for new emails...")
+            try:
+                emails = await monitor.reader.fetch_unread(
+                    limit=monitor._max_messages,
+                )
+                if not emails:
+                    await ctx.send("No new unread emails.")
+                    return
+                await ctx.send(f"Found {len(emails)} new email(s). Ingesting...")
+                for msg in emails:
+                    await monitor._ingest_email(msg)
+                await ctx.send(f"Ingested {len(emails)} email(s).")
+            except Exception as exc:
+                await ctx.send(f"Email poll failed: {exc}")
+            return
+
+        # Default: show status
+        embed = discord.Embed(title="Email Monitor", color=0xE91E63)
+        embed.add_field(
+            name="Status",
+            value="Running" if monitor._running else "Stopped",
+            inline=True,
+        )
+        embed.add_field(
+            name="Emails Ingested",
+            value=str(monitor.emails_ingested),
+            inline=True,
+        )
+        embed.add_field(
+            name="Poll Interval",
+            value=f"{monitor._interval}s",
+            inline=True,
+        )
+        embed.add_field(
+            name="Folder",
+            value=monitor.reader.folder,
+            inline=True,
+        )
         await ctx.send(embed=embed)
 
 
