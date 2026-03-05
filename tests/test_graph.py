@@ -411,13 +411,10 @@ class TestEnrichC2Node:
         result = await enrich_c2_node(state, bot=bot)
 
         ctx = result["c2_context"]
-        assert "Epistemic State" in ctx
-        assert "stress=0.420" in ctx
-        assert "Contradiction:" in ctx
-        assert "Pattern A works" in ctx
-        assert "Tension:" in ctx
-        assert "Open question:" in ctx
-        assert "Which storage backend" in ctx
+        # Phase 1C: Raw epistemic state is no longer injected into context.
+        # Verify it does NOT appear (it caused feedback cascades).
+        assert "Epistemic State" not in ctx
+        assert "Contradiction:" not in ctx
 
     @pytest.mark.asyncio
     async def test_includes_recent_events(self):
@@ -794,12 +791,12 @@ class TestReactLoop:
 
 
 class TestBuildTools:
-    def test_returns_nine_tools(self):
+    def test_returns_ten_tools(self):
         from nexus.orchestrator.tools import build_tools
 
         bot = MagicMock()
         tools = build_tools(bot)
-        assert len(tools) == 9
+        assert len(tools) == 10
         names = {t.name for t in tools}
         assert names == {
             "query_memory",
@@ -811,6 +808,7 @@ class TestBuildTools:
             "remember_finding",
             "synthesize_code",
             "write_file",
+            "resolve_contradiction",
         }
 
     @pytest.mark.asyncio

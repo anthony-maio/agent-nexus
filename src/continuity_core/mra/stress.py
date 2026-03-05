@@ -39,8 +39,11 @@ class EpistemicStressMonitor:
         self.deep_tension_multiplier = deep_tension_multiplier
 
     def compute(self, statements: List[str], concept_contexts: Dict[str, List[str]] | None = None,
-                graph_sparsity: float = 0.0) -> StressResult:
-        d_log, contradictions, deep_tensions = self._logical_dissonance(statements)
+                graph_sparsity: float = 0.0,
+                origins: List[str] | None = None) -> StressResult:
+        d_log, contradictions, deep_tensions = self._logical_dissonance(
+            statements, origins=origins,
+        )
         d_sem = self._semantic_divergence(concept_contexts or {})
         v_top = graph_sparsity
         s_omega = (self.alpha * d_log) + (self.beta * d_sem) + (self.gamma * v_top)
@@ -59,7 +62,14 @@ class EpistemicStressMonitor:
             should_trigger=s_omega > self.trigger_threshold,
         )
 
-    def _logical_dissonance(self, statements: List[str]) -> Tuple[
+    # Origins that are bot-generated (not human input).
+    _BOT_ORIGINS = frozenset({"swarm", "task_agent", "orchestrator"})
+
+    def _logical_dissonance(
+        self,
+        statements: List[str],
+        origins: List[str] | None = None,
+    ) -> Tuple[
         float, List[Tuple[str, str, float]], List[Tuple[str, str, float, float]]
     ]:
         if len(statements) < 2:
@@ -69,6 +79,13 @@ class EpistemicStressMonitor:
         deep_tensions: List[Tuple[str, str, float, float]] = []
         for i, s1 in enumerate(statements):
             for j, s2 in enumerate(statements[i + 1:], i + 1):
+                # Skip bot-vs-bot pairs — these create self-feeding cascades
+                # where model discussion is ingested and compared against itself.
+                if origins is not None:
+                    o1 = origins[i] if i < len(origins) else ""
+                    o2 = origins[j] if j < len(origins) else ""
+                    if o1 in self._BOT_ORIGINS and o2 in self._BOT_ORIGINS:
+                        continue
                 score = self._contradiction_score(s1, s2)
                 # Deep tension: high contradiction AND high semantic similarity
                 # means tightly-coupled opposing views — fundamental instability.
@@ -80,7 +97,7 @@ class EpistemicStressMonitor:
                 scores.append(score)
                 if score > 0.5:
                     contradictions.append((s1, s2, score))
-        d_log = sum(scores) / len(scores)
+        d_log = sum(scores) / len(scores) if scores else 0.0
         return d_log, contradictions, deep_tensions
 
     def _pair_similarity(self, s1: str, s2: str) -> float:

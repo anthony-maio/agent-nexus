@@ -377,6 +377,7 @@ class SwarmInitiative:
                 intent=f"initiative:{reason}",
                 out=content[:500],
                 tags=["initiative", "autonomous", reason],
+                metadata={"origin": "swarm"},
             )
         except Exception:
             pass

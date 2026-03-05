@@ -211,6 +211,7 @@ class OrchestratorLoop:
                     inp=cycle_type,
                     out=f"dispatched={dispatched} elapsed={elapsed:.1f}s",
                     tags=["orchestrator", cycle_type],
+                    metadata={"origin": "orchestrator"},
                 )
 
             except Exception:
@@ -268,6 +269,7 @@ class OrchestratorLoop:
                 inp=action.get("description", ""),
                 out=str(result)[:500],
                 tags=["task", action.get("type", "unknown")],
+                metadata={"origin": "orchestrator"},
             )
             return 1 if result.success else 0
         return 0
@@ -569,6 +571,7 @@ class OrchestratorLoop:
                         inp=summary,
                         out=f"{len(actions)} actions proposed",
                         tags=["manual", "decision"],
+                        metadata={"origin": "orchestrator"},
                     )
                 except Exception:
                     pass  # Non-critical
@@ -700,7 +703,14 @@ class OrchestratorLoop:
 
         Picks a random model, sends the curiosity prompt, posts the response
         to #nexus, runs crosstalk reactions, and posts a summary to #memory.
+
+        DISABLED: Raw curiosity discussions caused a feedback cascade where
+        model output was ingested, truncated, and created new contradictions.
+        Phase 2F will replace this with structured investigation tasks.
         """
+        log.debug("Curiosity discussion disabled (Phase 1D).")
+        return
+
         import random
 
         from nexus.channels.formatter import MessageFormatter
@@ -793,6 +803,7 @@ class OrchestratorLoop:
                 intent="curiosity_discussion",
                 out=response.content[:500],
                 tags=["curiosity", "autonomous", "swarm"],
+                metadata={"origin": "swarm"},
             )
 
             # Run crosstalk reactions if enabled
@@ -874,6 +885,7 @@ class OrchestratorLoop:
                     intent="curiosity_discussion",
                     out=reaction.content[:500],
                     tags=["curiosity", "autonomous", "swarm"],
+                    metadata={"origin": "swarm"},
                 )
 
             except asyncio.TimeoutError:
@@ -917,13 +929,17 @@ class OrchestratorLoop:
         inp: str = "",
         out: str = "",
         tags: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         """Log an event to C2 if available.  Failures are silently ignored."""
         c2 = getattr(self.bot, "c2", None)
         if c2 is None or not c2.is_running:
             return
         try:
-            await c2.write_event(actor=actor, intent=intent, inp=inp, out=out, tags=tags)
+            await c2.write_event(
+                actor=actor, intent=intent, inp=inp, out=out,
+                tags=tags, metadata=metadata,
+            )
         except Exception:
             pass  # Non-critical — don't let logging failures propagate.
 

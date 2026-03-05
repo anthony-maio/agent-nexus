@@ -290,6 +290,45 @@ def build_tools(bot: Any) -> list:
         except Exception as exc:
             return f"Failed to write file: {exc}"
 
+    @tool
+    async def resolve_contradiction(
+        verdict: str,
+        supported_statement: str,
+        evidence: str,
+    ) -> str:
+        """Record the resolution of a genuine contradiction after investigation.
+
+        Use this when you've investigated a contradiction and determined
+        which statement is accurate based on evidence from memory or context.
+
+        Args:
+            verdict: One of 'confirmed', 'refuted', or 'inconclusive'.
+            supported_statement: The statement determined to be accurate.
+            evidence: Summary of evidence supporting your verdict.
+        """
+        c2 = getattr(bot, "c2", None)
+        if c2 is None or not c2.is_running:
+            return "C2 is not running."
+        valid_verdicts = {"confirmed", "refuted", "inconclusive"}
+        if verdict not in valid_verdicts:
+            return f"Invalid verdict. Must be one of: {', '.join(valid_verdicts)}"
+        try:
+            await c2.write_event(
+                actor="task_agent",
+                intent="contradiction_resolution",
+                inp=supported_statement[:300],
+                out=evidence[:500],
+                tags=["mra", "resolution", verdict],
+                metadata={"origin": "task_agent", "verdict": verdict},
+            )
+            return (
+                f"Contradiction resolution recorded: verdict={verdict}. "
+                f"Evidence logged to C2."
+            )
+        except Exception as exc:
+            log.warning("resolve_contradiction tool failed: %s", exc)
+            return f"Resolution logging failed: {exc}"
+
     return [
         query_memory,
         query_c2_context,
@@ -300,4 +339,5 @@ def build_tools(bot: Any) -> list:
         remember_finding,
         synthesize_code,
         write_file,
+        resolve_contradiction,
     ]

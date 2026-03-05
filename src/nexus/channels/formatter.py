@@ -193,6 +193,52 @@ class MessageFormatter:
         return chunks
 
     @staticmethod
+    def split_for_storage(text: str, limit: int = 1500) -> list[str]:
+        """Split text into complete chunks for event logging.
+
+        Unlike :meth:`truncate_for_discord`, this preserves ALL content by
+        splitting at sentence boundaries.  No ``...(truncated)`` suffixes are
+        added, so re-ingested chunks don't create truncation artifacts in the
+        MRA stress monitor.
+
+        Args:
+            text: The full text to split.
+            limit: Maximum characters per chunk.
+
+        Returns:
+            A list of chunks, each ending at a sentence boundary.
+        """
+        if not text or len(text) <= limit:
+            return [text] if text else []
+
+        chunks: list[str] = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= limit:
+                chunks.append(remaining)
+                break
+
+            # Find last sentence boundary within limit
+            split = -1
+            for sep in (". ", "! ", "? ", ".\n", "!\n", "?\n"):
+                pos = remaining.rfind(sep, 0, limit)
+                if pos > split:
+                    split = pos + 1  # include the punctuation
+
+            # Fall back to newline, then space
+            if split <= 0:
+                split = remaining.rfind("\n", 0, limit)
+            if split <= 0:
+                split = remaining.rfind(" ", 0, limit)
+            if split <= 0:
+                split = limit  # hard cut as last resort
+
+            chunks.append(remaining[:split].rstrip())
+            remaining = remaining[split:].lstrip()
+
+        return chunks
+
+    @staticmethod
     def truncate_for_discord(text: str, limit: int = _MESSAGE_CHAR_LIMIT) -> str:
         """Truncate *text* to fit within Discord's message character limit.
 

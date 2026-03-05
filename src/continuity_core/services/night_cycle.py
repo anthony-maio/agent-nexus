@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from continuity_core.memory.system import TieredMemorySystem
-from continuity_core.mra.stress import EpistemicStressMonitor, StressResult
+from continuity_core.mra.stress import EpistemicStressMonitor
 from continuity_core.mra.voids import VoidDetector, VoidReport
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,9 @@ class NightCycleResult:
     contradictions_found: int = 0
     deep_tensions_found: int = 0
     voids_found: int = 0
+    auto_resolved: int = 0
+    escalated: int = 0
+    resolution_summary: str = ""
     resolutions: List[Dict[str, Any]] = field(default_factory=list)
     harmonic_reward: float = 0.0
     duration_sec: float = 0.0
@@ -101,6 +104,14 @@ class NightCycle:
             voids = void_detector.detect_voids(graph)
             result.voids_found = len(voids.void_pairs)
 
+        # 4b. Run resolution pipeline to auto-resolve artifacts
+        from continuity_core.mra.pipeline import MRAResolutionPipeline
+
+        resolution = MRAResolutionPipeline().run(stress, voids=voids)
+        result.auto_resolved = resolution.auto_resolved
+        result.escalated = resolution.escalated
+        result.resolution_summary = resolution.summary
+
         # 5. Harmonic integration — detect resolved contradictions
         if prev_contradictions:
             current_contradictions = {
@@ -118,7 +129,10 @@ class NightCycle:
         )
 
         # 6. Update MRA cache
-        self._mem.update_mra_cache(stress, voids)
+        self._mem.update_mra_cache(
+            stress, voids,
+            resolution_summary=resolution.summary,
+        )
 
         # 7. Log the maintenance event
         result.duration_sec = time.time() - t0

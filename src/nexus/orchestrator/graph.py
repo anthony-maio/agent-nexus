@@ -163,21 +163,13 @@ async def enrich_c2_node(
     except Exception:
         log.debug("C2 context enrichment failed.", exc_info=True)
 
-    # Stage 2: Epistemic state (contradictions, tensions, questions).
+    # Stage 2: Knowledge maintenance summary (resolution pipeline output).
+    # Only shows high-level outcomes, not raw contradiction pairs.
     if curiosity:
-        stress = curiosity.get("stress_level", 0)
-        if stress > 0:
-            parts.append(f"\n## Epistemic State (stress={stress:.3f})")
-            for c in curiosity.get("contradictions", [])[:3]:
-                s1 = c.get("s1", "")[:80]
-                s2 = c.get("s2", "")[:80]
-                parts.append(f"- Contradiction: {s1} vs {s2}")
-            for t in curiosity.get("deep_tensions", [])[:2]:
-                s1 = t.get("s1", "")[:80]
-                s2 = t.get("s2", "")[:80]
-                parts.append(f"- Tension: {s1} vs {s2}")
-            for q in curiosity.get("bridging_questions", [])[:2]:
-                parts.append(f"- Open question: {q[:100]}")
+        resolution = curiosity.get("resolution") if isinstance(curiosity, dict) else None
+        if resolution and resolution.get("summary"):
+            parts.append("\n## Knowledge Maintenance")
+            parts.append(resolution["summary"])
 
     # Stage 3: Recent C2 events (what just happened).
     try:
@@ -224,6 +216,7 @@ async def orchestrator_decide_node(
                         inp=summary,
                         out=f"{len(actions)} actions proposed",
                         tags=["langgraph", "decision"],
+                        metadata={"origin": "orchestrator"},
                     )
                 except Exception:
                     pass  # Non-critical
@@ -400,6 +393,7 @@ async def post_results_node(
                 inp=description[:200],
                 out=result_text[:300],
                 tags=["langgraph", action.get("type", "unknown")],
+                metadata={"origin": "task_agent"},
             )
         except Exception:
             pass
@@ -674,19 +668,29 @@ def _build_decision_prompt(
         parts.append("\n--- C2 Knowledge Context ---")
         parts.append(f"  {c2_context[:800]}")
 
-    # C2 curiosity signals.
+    # Resolution summary (replaces raw epistemic signals).
     curiosity = state.get("curiosity")
     if curiosity:
-        parts.append("\n--- Epistemic Signals (C2 Curiosity) ---")
-        stress = curiosity.get("stress_level", 0)
-        parts.append(f"  Stress level: {stress:.3f}")
-        contradictions = curiosity.get("contradictions", [])
-        if contradictions:
-            parts.append(f"  Contradictions ({len(contradictions)}):")
-            for c in contradictions[:3]:
-                parts.append(
-                    f"    - {c.get('s1', '')[:80]} vs {c.get('s2', '')[:80]}"
-                )
+        resolution = curiosity.get("resolution") if isinstance(curiosity, dict) else None
+        if resolution and resolution.get("summary"):
+            parts.append("\n--- Knowledge Maintenance ---")
+            parts.append(f"  {resolution['summary']}")
+
+        # Inject escalated contradictions as structured investigation tasks.
+        if resolution:
+            escalations = resolution.get("escalations", [])
+            if escalations:
+                parts.append("\n--- Contradictions Requiring Investigation ---")
+                for esc in escalations[:3]:
+                    s1 = esc.get("s1", "")[:120]
+                    s2 = esc.get("s2", "")[:120]
+                    score = esc.get("score", 0)
+                    parts.append(
+                        f"  Investigate: Which is accurate? "
+                        f'(1) "{s1}" or (2) "{s2}" '
+                        f"(confidence: {score:.2f}). "
+                        f"Query memory for evidence."
+                    )
 
     parts.append("\n=== End State ===")
     parts.append(

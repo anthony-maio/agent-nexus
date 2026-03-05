@@ -40,13 +40,15 @@ class CandidateGatherer:
             text = f"{event.intent}: {event.output}"
             candidates.append(_candidate_from_text("event", text, now, base_relevance=0.4))
 
-        # Inject MRA signals (contradictions, voids, deep tensions) so the
-        # pilot agent sees epistemic pressure in its context window.
+        # Inject MRA resolution summary (not raw contradictions) at low
+        # salience so models see "3 issues auto-resolved" rather than the
+        # contradiction pairs themselves.
         mra = self._memory.get_mra_signals()
-        if mra is not None:
-            candidates.extend(self._mra_candidates(mra, now))
-            # Reduce confidence for candidates that appear in contradictions.
-            self._adjust_confidence_from_mra(candidates, mra)
+        if mra is not None and mra.resolution_summary:
+            candidates.append(_candidate_from_text(
+                "mra", mra.resolution_summary, now,
+                base_relevance=0.5, salience=0.5, confidence=0.9,
+            ))
 
         return candidates, working_context
 

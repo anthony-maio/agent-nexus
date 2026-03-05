@@ -506,6 +506,7 @@ class NexusBot(commands.Bot):
                 intent="message",
                 inp=content[:1500],
                 tags=["human", "input", f"mood:{current_mood.value}"],
+                metadata={"origin": "human"},
             )
         )
 
@@ -550,15 +551,24 @@ class NexusBot(commands.Bot):
             if self.memory_store.is_connected:
                 self._spawn(self._store_in_memory(response.content, primary_model))
 
-            # Log model response to C2
-            self._spawn(
-                self._log_to_c2(
-                    actor=primary_model,
-                    intent="response",
-                    out=response.content[:1500],
-                    tags=["swarm", "nexus"],
+            # Log model response to C2 — split at sentence boundaries
+            # to avoid truncation artifacts in the MRA stress monitor.
+            from nexus.channels.formatter import MessageFormatter
+
+            chunks = MessageFormatter.split_for_storage(response.content)
+            for ci, chunk in enumerate(chunks):
+                self._spawn(
+                    self._log_to_c2(
+                        actor=primary_model,
+                        intent="response",
+                        out=chunk,
+                        tags=["swarm", "nexus"],
+                        metadata={
+                            "origin": "swarm",
+                            "chunk": f"{ci + 1}/{len(chunks)}",
+                        },
+                    )
                 )
-            )
 
             # --- Reaction round: sequential + organic, but non-blocking ---
             if self.crosstalk.is_enabled:
@@ -670,15 +680,23 @@ class NexusBot(commands.Bot):
                 if self.memory_store.is_connected:
                     self._spawn(self._store_in_memory(reaction.content, reactor_id))
 
-                # Log reaction to C2
-                self._spawn(
-                    self._log_to_c2(
-                        actor=reactor_id,
-                        intent="response",
-                        out=reaction.content[:1500],
-                        tags=["swarm", "nexus"],
+                # Log reaction to C2 — sentence-boundary split
+                from nexus.channels.formatter import MessageFormatter
+
+                r_chunks = MessageFormatter.split_for_storage(reaction.content)
+                for ci, chunk in enumerate(r_chunks):
+                    self._spawn(
+                        self._log_to_c2(
+                            actor=reactor_id,
+                            intent="response",
+                            out=chunk,
+                            tags=["swarm", "nexus"],
+                            metadata={
+                                "origin": "swarm",
+                                "chunk": f"{ci + 1}/{len(r_chunks)}",
+                            },
+                        )
                     )
-                )
 
             except asyncio.TimeoutError:
                 log.warning(f"Reaction from {reactor_id} timed out (30s)")
@@ -728,6 +746,7 @@ class NexusBot(commands.Bot):
                     inp=", ".join(paths)[:500],
                     out=f"docs={result.docs_ingested} chunks={result.chunks_ingested}",
                     tags=["ingest", "startup"],
+                    metadata={"origin": "ingest"},
                 )
         except Exception:
             log.warning("Auto-ingest failed.", exc_info=True)
@@ -739,12 +758,16 @@ class NexusBot(commands.Bot):
         inp: str = "",
         out: str = "",
         tags: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         """Log an event to C2 if available.  Failures are silently ignored."""
         if not self.c2.is_running:
             return
         try:
-            await self.c2.write_event(actor=actor, intent=intent, inp=inp, out=out, tags=tags)
+            await self.c2.write_event(
+                actor=actor, intent=intent, inp=inp, out=out,
+                tags=tags, metadata=metadata,
+            )
         except Exception:
             pass
 

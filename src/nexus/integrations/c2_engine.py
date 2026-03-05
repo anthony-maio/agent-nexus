@@ -165,6 +165,7 @@ class C2Engine:
         statements: list[str],
         concept_contexts: dict[str, Any] | None = None,
         graph: dict[str, Any] | None = None,
+        origins: list[str] | None = None,
     ) -> dict[str, Any] | None:
         """Run MRA stress and void detection."""
         if not self.is_running:
@@ -207,12 +208,36 @@ class C2Engine:
                     statements,
                     concept_contexts=concept_contexts,
                     graph_sparsity=sparsity,
+                    origins=origins,
                 )
 
                 voids = VoidDetector().detect_voids(graph_dict) if graph_dict else None
 
-                # Update MRA cache
-                self._system.update_mra_cache(stress, voids)
+                # Run the resolution pipeline (Section 3 of MRA theory).
+                from continuity_core.mra.pipeline import MRAResolutionPipeline
+
+                pipeline = MRAResolutionPipeline()
+                resolution = pipeline.run(stress, voids=voids)
+
+                # Apply graph updates from resolved contradictions.
+                neo4j = getattr(self._system, "_neo4j", None)
+                if neo4j is not None and resolution.graph_ops:
+                    for op in resolution.graph_ops:
+                        try:
+                            if op.get("op") == "supersede":
+                                neo4j.supersede_node(
+                                    op["superseded_text"],
+                                    op["superseding_text"],
+                                    reason=op.get("reason", ""),
+                                )
+                        except Exception:
+                            pass  # Best-effort graph updates
+
+                # Update MRA cache with resolution summary
+                self._system.update_mra_cache(
+                    stress, voids,
+                    resolution_summary=resolution.summary,
+                )
 
                 result: dict[str, Any] = {
                     "stress": {
@@ -228,6 +253,22 @@ class C2Engine:
                         "deep_tensions": [
                             {"s1": s1, "s2": s2, "score": sc, "similarity": sim}
                             for s1, s2, sc, sim in stress.deep_tensions
+                        ],
+                    },
+                    "resolution": {
+                        "auto_resolved": resolution.auto_resolved,
+                        "escalated": resolution.escalated,
+                        "total_processed": resolution.total_processed,
+                        "summary": resolution.summary,
+                        "graph_ops": resolution.graph_ops,
+                        "escalations": [
+                            {
+                                "s1": e.contradiction.s1[:200],
+                                "s2": e.contradiction.s2[:200],
+                                "score": e.contradiction.score,
+                                "type": e.contradiction.type.value,
+                            }
+                            for e in resolution.escalations
                         ],
                     },
                 }
@@ -300,8 +341,13 @@ class C2Engine:
                 statements = [
                     e.input[:300] for e in events if e.input
                 ]
+                event_origins = [
+                    (e.metadata or {}).get("origin", "")
+                    if hasattr(e, "metadata") else ""
+                    for e in events if e.input
+                ]
                 if len(statements) >= 2:
-                    await self.introspect(statements)
+                    await self.introspect(statements, origins=event_origins)
                     sync_result = await asyncio.to_thread(_curiosity)
 
             return sync_result

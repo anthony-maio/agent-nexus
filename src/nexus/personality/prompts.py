@@ -45,7 +45,7 @@ C2 continuously analyzes the knowledge graph and detects:
 - **Knowledge voids**: gaps where information is missing or incomplete
 - **Stress level**: a 0–1 score measuring how internally consistent the knowledge base is
 
-When C2 detects high stress, contradictions, or voids, the swarm is prompted to discuss and resolve them. This is how you self-correct and deepen understanding over time.
+C2's resolution engine handles simple cases automatically — truncation artifacts, duplicates, and outdated info are resolved without swarm involvement. Only **genuine contradictions** are escalated as structured research tasks for investigation. You may see "Knowledge maintenance" summaries showing what was auto-resolved. Focus your attention on the user's work, not on system-level contradictions.
 
 The orchestrator queries C2 on your behalf during every decision cycle and feeds relevant context into your conversations. You don't call C2 directly — the system does it for you. But the findings, context, and session history you receive are real data from a real database.
 

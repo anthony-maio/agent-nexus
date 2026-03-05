@@ -30,6 +30,7 @@ class MRACache:
     """Holds the most recent MRA stress and void results."""
     last_stress: Optional[StressResult] = None
     last_voids: Optional[VoidReport] = None
+    resolution_summary: str = ""
     updated_at: float = 0.0
     staleness_sec: float = 300.0
 
@@ -95,9 +96,15 @@ class TieredMemorySystem:
 
     # -- MRA cache ---------------------------------------------------------
 
-    def update_mra_cache(self, stress: StressResult, voids: Optional[VoidReport] = None) -> None:
+    def update_mra_cache(
+        self,
+        stress: StressResult,
+        voids: Optional[VoidReport] = None,
+        resolution_summary: str = "",
+    ) -> None:
         self._mra_cache.last_stress = stress
         self._mra_cache.last_voids = voids
+        self._mra_cache.resolution_summary = resolution_summary
         self._mra_cache.updated_at = time.time()
 
     def get_mra_signals(self) -> Optional[MRACache]:

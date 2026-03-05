@@ -37,14 +37,12 @@ def _make_bot_mock():
 
 
 @pytest.mark.asyncio
-async def test_trigger_curiosity_discussion_posts_to_nexus():
-    """_trigger_curiosity_discussion posts model response to #nexus."""
+async def test_trigger_curiosity_discussion_is_disabled():
+    """_trigger_curiosity_discussion is disabled (Phase 1D) — early return."""
     from nexus.orchestrator.loop import OrchestratorLoop
 
     bot = _make_bot_mock()
-    response_mock = MagicMock()
-    response_mock.content = "Interesting tension between X and Y."
-    bot.openrouter.chat = AsyncMock(return_value=response_mock)
+    bot.openrouter.chat = AsyncMock()
 
     loop = OrchestratorLoop(bot, interval=3600)
 
@@ -58,12 +56,9 @@ async def test_trigger_curiosity_discussion_posts_to_nexus():
 
     await loop._trigger_curiosity_discussion(curiosity_result)
 
-    # Verify a model was called
-    bot.openrouter.chat.assert_called_once()
-    # Verify response posted to #nexus
-    bot.router.nexus.send.assert_called()
-    # Verify summary posted to #memory
-    bot.router.memory.send.assert_called()
+    # Disabled — no model should be called, nothing posted
+    bot.openrouter.chat.assert_not_called()
+    bot.router.nexus.send.assert_not_called()
 
 
 @pytest.mark.asyncio
