@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Iterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -32,7 +32,7 @@ from nexus_api.schemas import (
 )
 from nexus_api.service import ApiContext, build_context, default_steps_for_objective
 from nexus_core.engine import RunEngine
-from nexus_core.models import RunMode
+from nexus_core.models import RunMode, RunStatus
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,19 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         return {"id": user.id, "username": user.username}
+
+    def parse_optional_datetime(raw: str, field_name: str) -> datetime | None:
+        value = raw.strip()
+        if not value:
+            return None
+        normalized = value.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid {field_name} datetime: {raw}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -138,6 +151,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             events=ctx.events,
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
+            adaptive_planner=ctx.adaptive_planner,
         )
         run = await engine.create_run(
             objective=request.objective,
@@ -151,12 +165,39 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
     def list_runs(
         limit: int = Query(default=25, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
+        status: str = Query(default=""),
+        mode: str = Query(default=""),
+        search: str = Query(default=""),
+        created_after: str = Query(default=""),
+        created_before: str = Query(default=""),
         user: dict[str, Any] = Depends(current_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         _ = user
+        normalized_status = ""
+        if status.strip():
+            normalized_status = RunStatus(status.strip()).value
+        normalized_mode = ""
+        if mode.strip():
+            normalized_mode = RunMode(mode.strip()).value
+        parsed_after = parse_optional_datetime(created_after, "created_after")
+        parsed_before = parse_optional_datetime(created_before, "created_before")
         repo = SqlRunRepository(session)
-        return {"items": repo.list_runs(limit=limit, offset=offset)}
+        items, total = repo.list_runs(
+            limit=limit,
+            offset=offset,
+            status=normalized_status,
+            mode=normalized_mode,
+            search=search.strip(),
+            created_after=parsed_after,
+            created_before=parsed_before,
+        )
+        return {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     @app.get("/runs/{run_id}")
     def get_run(
@@ -203,6 +244,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             events=ctx.events,
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
+            adaptive_planner=ctx.adaptive_planner,
         )
         run = await engine.decide_approval(
             run_id=run_id,
@@ -228,6 +270,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             events=ctx.events,
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
+            adaptive_planner=ctx.adaptive_planner,
         )
         return await engine.resume_run(run_id=run_id)
 
@@ -246,6 +289,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             events=ctx.events,
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
+            adaptive_planner=ctx.adaptive_planner,
         )
         return await engine.retry_run(run_id=run_id)
 
@@ -271,6 +315,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             events=ctx.events,
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
+            adaptive_planner=ctx.adaptive_planner,
         )
         return await engine.promote_artifact(
             run_id=run_id,

@@ -19,7 +19,7 @@ from nexus_core.models import (
     StepExecutionResult,
     StepStatus,
 )
-from nexus_core.planner import plan_follow_up_steps
+from nexus_core.planner import AdaptivePlanner, RuleAdaptivePlanner, apply_follow_up_policy
 from nexus_core.policy import is_high_risk_action
 
 log = logging.getLogger(__name__)
@@ -95,11 +95,13 @@ class RunEngine:
         events: RunEventBus,
         canonical_workspace: Path,
         sandbox_artifacts_root: Path | None = None,
+        adaptive_planner: AdaptivePlanner | None = None,
     ) -> None:
         self.repo = repository
         self.execution = execution
         self.interaction = interaction
         self.events = events
+        self.adaptive_planner = adaptive_planner or RuleAdaptivePlanner()
         self.canonical_workspace = canonical_workspace
         self.sandbox_artifacts_root = (
             sandbox_artifacts_root.resolve() if sandbox_artifacts_root else None
@@ -420,11 +422,19 @@ class RunEngine:
         completed_step: dict[str, Any],
         result: StepExecutionResult,
     ) -> None:
-        follow_up_steps = plan_follow_up_steps(
+        completed_action = str(completed_step.get("action_type", "")).strip().lower()
+        if completed_action not in {"extract", "inspect", "scroll"}:
+            return
+
+        proposed_steps = await self.adaptive_planner.propose_follow_up(
             objective=run["objective"],
             completed_step=completed_step,
             result=result,
             existing_steps=self.repo.list_steps(run["id"]),
+        )
+        follow_up_steps = apply_follow_up_policy(
+            proposed_steps,
+            mode=RunMode(run["mode"]),
         )
         if not follow_up_steps:
             return

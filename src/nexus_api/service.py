@@ -9,12 +9,17 @@ from typing import Any
 from sqlalchemy.orm import Session, sessionmaker
 
 from nexus_api.adapters import SandboxExecutionAdapter, WebInteractionAdapter
+from nexus_api.adaptive_planner import OpenRouterAdaptivePlanner
 from nexus_api.config import ApiSettings
 from nexus_api.db import build_engine, build_session_factory
 from nexus_api.migrator import run_migrations
 from nexus_core.events import RunEventBus
 from nexus_core.models import StepDefinition
-from nexus_core.planner import plan_steps_for_objective
+from nexus_core.planner import (
+    CompositeAdaptivePlanner,
+    RuleAdaptivePlanner,
+    plan_steps_for_objective,
+)
 
 
 def default_steps_for_objective(objective: str) -> list[StepDefinition]:
@@ -32,6 +37,7 @@ class ApiContext:
     db_engine: Any
     session_factory: sessionmaker[Session]
     events: RunEventBus
+    adaptive_planner: Any
 
 
 def build_context(settings: ApiSettings | None = None) -> ApiContext:
@@ -50,6 +56,17 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
         auth_token=settings.SANDBOX_RUNNER_TOKEN,
     )
     interaction_adapter = WebInteractionAdapter()
+    rule_planner = RuleAdaptivePlanner()
+    adaptive_planner: Any = rule_planner
+    if settings.APP_ENABLE_MODEL_REPLANNER and settings.OPENROUTER_API_KEY.strip():
+        model_planner = OpenRouterAdaptivePlanner(
+            api_key=settings.OPENROUTER_API_KEY,
+            model=settings.OPENROUTER_MODEL,
+            base_url=settings.OPENROUTER_BASE_URL,
+            timeout_sec=settings.APP_REPLANNER_TIMEOUT_SEC,
+            max_steps=settings.APP_REPLANNER_MAX_STEPS,
+        )
+        adaptive_planner = CompositeAdaptivePlanner([model_planner, rule_planner])
     return ApiContext(
         settings=settings,
         execution_adapter=execution_adapter,
@@ -57,4 +74,5 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
         db_engine=db_engine,
         session_factory=session_factory,
         events=events,
+        adaptive_planner=adaptive_planner,
     )

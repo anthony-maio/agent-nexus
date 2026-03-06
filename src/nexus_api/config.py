@@ -30,6 +30,12 @@ class ApiSettings(BaseSettings):
     APP_SANDBOX_ARTIFACT_ROOT: str = Field(default="data/sandbox")
     APP_CONFIG_PATH: str = Field(default="config/.env")
     APP_BOOTSTRAP_EXIT_AFTER_CONFIGURE: bool = Field(default=True)
+    APP_ENABLE_MODEL_REPLANNER: bool = Field(default=True)
+    APP_REPLANNER_MAX_STEPS: int = Field(default=4)
+    APP_REPLANNER_TIMEOUT_SEC: float = Field(default=12.0)
+    OPENROUTER_API_KEY: str = Field(default="")
+    OPENROUTER_BASE_URL: str = Field(default="https://openrouter.ai/api/v1")
+    OPENROUTER_MODEL: str = Field(default="openai/gpt-4.1-mini")
     SANDBOX_RUNNER_URL: str = Field(default="http://localhost:8020")
     SANDBOX_RUNNER_TOKEN: str = Field(
         default="",

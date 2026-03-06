@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-from nexus_core.models import StepDefinition, StepExecutionResult
+from nexus_core.models import RunMode, StepDefinition, StepExecutionResult
+from nexus_core.policy import is_high_risk_action
+
+log = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s)>]+", re.IGNORECASE)
 _WORKFLOW_HINTS: tuple[str, ...] = (
@@ -30,6 +34,30 @@ _WORKFLOW_HINTS: tuple[str, ...] = (
     "buy",
     "form",
 )
+_ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
+    {
+        "navigate",
+        "inspect",
+        "scroll",
+        "extract",
+        "read",
+        "click",
+        "type",
+        "wait",
+        "write",
+        "export",
+        "submit",
+    }
+)
+_BLOCKED_MODEL_ACTIONS: frozenset[str] = frozenset(
+    {
+        "delete",
+        "purchase",
+        "promote",
+        "send",
+    }
+)
+_MAX_FOLLOW_UP_STEPS = 4
 
 
 def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
@@ -79,6 +107,87 @@ def plan_follow_up_steps(
             ),
         ),
     ]
+
+
+class AdaptivePlanner(Protocol):
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, Any],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, Any]],
+    ) -> list[StepDefinition]:
+        """Return proposed follow-up steps for current run context."""
+
+
+class RuleAdaptivePlanner:
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, Any],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, Any]],
+    ) -> list[StepDefinition]:
+        return plan_follow_up_steps(
+            objective=objective,
+            completed_step=completed_step,
+            result=result,
+            existing_steps=existing_steps,
+        )
+
+
+class CompositeAdaptivePlanner:
+    def __init__(self, planners: list[AdaptivePlanner]) -> None:
+        self.planners = planners
+
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, Any],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, Any]],
+    ) -> list[StepDefinition]:
+        for planner in self.planners:
+            try:
+                proposed = await planner.propose_follow_up(
+                    objective=objective,
+                    completed_step=completed_step,
+                    result=result,
+                    existing_steps=existing_steps,
+                )
+            except Exception as exc:
+                log.warning("Adaptive planner failed (%s): %s", type(planner).__name__, exc)
+                continue
+            if proposed:
+                return proposed
+        return []
+
+
+def apply_follow_up_policy(
+    steps: list[StepDefinition],
+    mode: RunMode,
+) -> list[StepDefinition]:
+    """Enforce hard policy checks for follow-up steps before insertion."""
+    sanitized: list[StepDefinition] = []
+    for step in steps:
+        action = step.action_type.strip().lower()
+        instruction = step.instruction.strip()
+        if not instruction:
+            continue
+        if action not in _ALLOWED_FOLLOW_UP_ACTIONS:
+            continue
+        if action in _BLOCKED_MODEL_ACTIONS:
+            continue
+        if mode != RunMode.AUTOPILOT and action == "write":
+            # Keep write paths explicit in v1 via type/click/submit+approval.
+            continue
+        if mode == RunMode.MANUAL and is_high_risk_action(action, instruction):
+            # Manual mode should not add extra risky actions autonomously.
+            continue
+        sanitized.append(StepDefinition(action_type=action, instruction=instruction))
+        if len(sanitized) >= _MAX_FOLLOW_UP_STEPS:
+            break
+    return sanitized
 
 
 def _looks_like_workflow(objective: str) -> bool:

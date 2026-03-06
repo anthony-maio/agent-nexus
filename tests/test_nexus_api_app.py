@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from nexus_api.app import create_app
 from nexus_api.config import ApiSettings
 from nexus_api.service import build_context
-from nexus_core.models import ArtifactRecord, CitationRecord, StepExecutionResult
+from nexus_core.models import ArtifactRecord, CitationRecord, StepDefinition, StepExecutionResult
 
 
 class FakeExecutionAdapter:
@@ -95,6 +95,27 @@ class FlakyExportExecutionAdapter(FakeExecutionAdapter):
         return await super().execute_step(run_id, step_id, action_type, instruction)
 
 
+class ModelSuggestionPlanner:
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, str],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, str]],
+    ) -> list[StepDefinition]:
+        _ = objective, completed_step, result, existing_steps
+        return [
+            StepDefinition(
+                action_type="delete",
+                instruction="delete all source documents",
+            ),
+            StepDefinition(
+                action_type="submit",
+                instruction="submit the prepared workflow changes",
+            ),
+        ]
+
+
 def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = None) -> TestClient:
     settings = ApiSettings(
         APP_DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}",
@@ -103,9 +124,30 @@ def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = Non
         APP_ADMIN_USERNAME="admin",
         APP_ADMIN_PASSWORD="secret",
         APP_SESSION_TTL_HOURS=24,
+        APP_ENABLE_MODEL_REPLANNER=False,
     )
     ctx = build_context(settings)
     ctx.execution_adapter = execution_adapter or FakeExecutionAdapter(tmp_path)
+    return TestClient(create_app(ctx))
+
+
+def _client_with_planner(
+    tmp_path: Path,
+    adaptive_planner: object,
+    execution_adapter: FakeExecutionAdapter | None = None,
+) -> TestClient:
+    settings = ApiSettings(
+        APP_DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}",
+        APP_CANONICAL_WORKSPACE=str(tmp_path / "workspace"),
+        APP_SANDBOX_ARTIFACT_ROOT=str(tmp_path / "sandbox"),
+        APP_ADMIN_USERNAME="admin",
+        APP_ADMIN_PASSWORD="secret",
+        APP_SESSION_TTL_HOURS=24,
+        APP_ENABLE_MODEL_REPLANNER=False,
+    )
+    ctx = build_context(settings)
+    ctx.execution_adapter = execution_adapter or FakeExecutionAdapter(tmp_path)
+    ctx.adaptive_planner = adaptive_planner
     return TestClient(create_app(ctx))
 
 
@@ -479,6 +521,52 @@ def test_list_runs_returns_recent_first(tmp_path: Path) -> None:
     assert items[0]["status"] == "completed"
 
 
+def test_list_runs_supports_filters_search_and_pagination(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    first = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "alpha invoice reconciliation",
+            "mode": "manual",
+            "steps": [],
+        },
+    )
+    assert first.status_code == 200
+    second = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "beta workflow submit",
+            "mode": "supervised",
+            "steps": [{"action_type": "type", "instruction": "enter draft values"}],
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["status"] == "pending_approval"
+
+    pending = client.get("/runs?status=pending_approval", headers=headers)
+    assert pending.status_code == 200
+    pending_payload = pending.json()
+    assert pending_payload["total"] == 1
+    assert pending_payload["items"][0]["id"] == second.json()["id"]
+
+    filtered = client.get("/runs?mode=manual&search=invoice", headers=headers)
+    assert filtered.status_code == 200
+    filtered_payload = filtered.json()
+    assert filtered_payload["total"] == 1
+    assert filtered_payload["items"][0]["id"] == first.json()["id"]
+
+    paged = client.get("/runs?limit=1&offset=1", headers=headers)
+    assert paged.status_code == 200
+    paged_payload = paged.json()
+    assert paged_payload["limit"] == 1
+    assert paged_payload["offset"] == 1
+    assert len(paged_payload["items"]) == 1
+
+
 def test_resume_run_continues_after_rejected_step(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)
@@ -547,3 +635,33 @@ def test_retry_failed_steps_reexecutes_run(tmp_path: Path) -> None:
     assert retry.status_code == 200
     assert retry.json()["status"] == "completed"
     assert retry.json()["steps"][1]["status"] == "completed"
+
+
+def test_model_replanner_proposals_are_policy_checked_and_gated(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=ModelSuggestionPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Review workflow and continue",
+            "mode": "supervised",
+            "steps": [
+                {"action_type": "navigate", "instruction": "open start page"},
+                {"action_type": "extract", "instruction": "summarize current state"},
+                {"action_type": "export", "instruction": "export report artifact"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "pending_approval"
+    assert [step["action_type"] for step in run["steps"]] == [
+        "navigate",
+        "extract",
+        "submit",
+        "export",
+    ]
+    assert run["steps"][2]["status"] == "pending_approval"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from nexus_api.models import Approval, Artifact, Citation, Promotion, Run, RunStep
@@ -43,9 +43,40 @@ class SqlRunRepository:
         self.session.flush()
         return self.get_run(run.id) or {"id": run.id}
 
-    def list_runs(self, limit: int = 25, offset: int = 0) -> list[dict[str, Any]]:
+    def list_runs(
+        self,
+        limit: int = 25,
+        offset: int = 0,
+        status: str = "",
+        mode: str = "",
+        search: str = "",
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        base_stmt = select(Run)
+        count_stmt = select(func.count()).select_from(Run)
+        filters = []
+        normalized_status = status.strip()
+        if normalized_status:
+            filters.append(Run.status == normalized_status)
+        normalized_mode = mode.strip()
+        if normalized_mode:
+            filters.append(Run.mode == normalized_mode)
+        normalized_search = search.strip().lower()
+        if normalized_search:
+            filters.append(func.lower(Run.objective).like(f"%{normalized_search}%"))
+        if created_after is not None:
+            filters.append(Run.created_at >= created_after)
+        if created_before is not None:
+            filters.append(Run.created_at <= created_before)
+
+        if filters:
+            base_stmt = base_stmt.where(*filters)
+            count_stmt = count_stmt.where(*filters)
+
+        total = int(self.session.scalar(count_stmt) or 0)
         rows = self.session.scalars(
-            select(Run)
+            base_stmt
             .order_by(Run.created_at.desc(), Run.id.desc())
             .limit(max(1, min(limit, 100)))
             .offset(max(0, offset))
@@ -70,7 +101,7 @@ class SqlRunRepository:
                     ),
                 }
             )
-        return items
+        return items, total
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         run = self.session.get(Run, run_id)
