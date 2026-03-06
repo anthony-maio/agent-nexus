@@ -47,6 +47,7 @@ src/
 # App-first stack
 python -m nexus_sandbox_runner
 python -m nexus_api
+alembic upgrade head
 
 # Optional legacy/bridge services
 python -m nexus_discord_bridge
@@ -75,6 +76,8 @@ ruff format src/
   - `ExecutionAdapter` for sandbox step execution.
 - Risk-tier policy gates high-impact actions (`submit`, `write`, `export`, `promote`, etc.) behind supervised approvals.
 - Canonical outputs are promoted from sandbox artifact paths into app workspace only via explicit promote actions.
+- App control-plane schema is managed via Alembic in `alembic/`; avoid re-introducing `metadata.create_all` startup behavior.
+- Sandbox runner supports optional shared-token auth via `SANDBOX_RUNNER_TOKEN`; keep API and runner tokens aligned.
 - `continuity_core/` is part of this monorepo. It was originally a separate project but is now maintained here. Edit freely.
 
 ## Environment Variables

@@ -28,6 +28,10 @@ class ApiSettings(BaseSettings):
     APP_SESSION_TTL_HOURS: int = Field(default=24)
     APP_CANONICAL_WORKSPACE: str = Field(default="workspace/app")
     SANDBOX_RUNNER_URL: str = Field(default="http://localhost:8020")
+    SANDBOX_RUNNER_TOKEN: str = Field(
+        default="",
+        description="Optional shared token for API->sandbox runner authentication.",
+    )
 
     @property
     def canonical_workspace_path(self) -> Path:

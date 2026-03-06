@@ -57,7 +57,10 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
     session_factory = build_session_factory(db_engine)
 
     events = RunEventBus()
-    execution_adapter = SandboxExecutionAdapter(base_url=settings.SANDBOX_RUNNER_URL)
+    execution_adapter = SandboxExecutionAdapter(
+        base_url=settings.SANDBOX_RUNNER_URL,
+        auth_token=settings.SANDBOX_RUNNER_TOKEN,
+    )
     interaction_adapter = WebInteractionAdapter()
     return ApiContext(
         settings=settings,

@@ -48,3 +48,42 @@ def test_execute_step_no_artifact_for_navigate(tmp_path: Path, monkeypatch) -> N
     data = resp.json()
     assert data["artifacts"] == []
     assert len(data["citations"]) == 1
+
+
+def test_execute_step_rejects_unsupported_action(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    client = TestClient(create_app())
+
+    resp = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step125",
+            "action_type": "delete",
+            "instruction": "remove production data",
+        },
+    )
+    assert resp.status_code == 400
+    assert "Unsupported action_type" in resp.json()["detail"]
+
+
+def test_execute_step_requires_token_when_configured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SANDBOX_RUNNER_TOKEN", "sandbox-secret")
+    client = TestClient(create_app())
+
+    payload = {
+        "run_id": "run123",
+        "step_id": "step126",
+        "action_type": "extract",
+        "instruction": "summarize sources",
+    }
+    unauthorized = client.post("/execute-step", json=payload)
+    assert unauthorized.status_code == 401
+
+    authorized = client.post(
+        "/execute-step",
+        json=payload,
+        headers={"X-Sandbox-Token": "sandbox-secret"},
+    )
+    assert authorized.status_code == 200

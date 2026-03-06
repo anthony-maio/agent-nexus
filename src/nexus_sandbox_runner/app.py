@@ -4,17 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+
+_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+_ALLOWED_ACTIONS: frozenset[str] = frozenset(
+    {
+        "navigate",
+        "extract",
+        "read",
+        "write",
+        "export",
+        "submit",
+    }
+)
 
 
 class ExecuteStepRequest(BaseModel):
-    run_id: str = Field(min_length=1, max_length=64)
-    step_id: str = Field(min_length=1, max_length=64)
+    run_id: str = Field(pattern=_ID_PATTERN)
+    step_id: str = Field(pattern=_ID_PATTERN)
     action_type: str = Field(min_length=1, max_length=64)
     instruction: str = Field(min_length=1, max_length=2000)
 
@@ -29,6 +42,7 @@ class ExecuteStepResponse(BaseModel):
 def create_app() -> FastAPI:
     app = FastAPI(title="Agent Nexus Sandbox Runner", version="0.1.0")
     sandbox_root = Path("data/sandbox").resolve()
+    sandbox_token = os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip()
     sandbox_root.mkdir(parents=True, exist_ok=True)
 
     @app.get("/health")
@@ -36,10 +50,20 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.post("/execute-step", response_model=ExecuteStepResponse)
-    def execute_step(request: ExecuteStepRequest) -> ExecuteStepResponse:
+    def execute_step(
+        request: ExecuteStepRequest,
+        x_sandbox_token: str | None = Header(default=None, alias="X-Sandbox-Token"),
+    ) -> ExecuteStepResponse:
+        if sandbox_token and x_sandbox_token != sandbox_token:
+            raise HTTPException(status_code=401, detail="Invalid sandbox token")
         run_dir = sandbox_root / request.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         action = request.action_type.strip().lower()
+        if action not in _ALLOWED_ACTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported action_type: {action}",
+            )
 
         ts = datetime.now(timezone.utc).isoformat()
         output = _step_output(action, request.instruction)

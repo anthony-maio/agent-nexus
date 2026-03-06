@@ -40,9 +40,10 @@ class WebInteractionAdapter:
 class SandboxExecutionAdapter:
     """Execution adapter that delegates steps to sandbox-runner service."""
 
-    def __init__(self, base_url: str, timeout_sec: float = 60.0) -> None:
+    def __init__(self, base_url: str, timeout_sec: float = 60.0, auth_token: str = "") -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
+        self.auth_token = auth_token.strip()
 
     async def execute_step(
         self, run_id: str, step_id: str, action_type: str, instruction: str
@@ -53,8 +54,13 @@ class SandboxExecutionAdapter:
             "action_type": action_type,
             "instruction": instruction,
         }
+        headers = {"X-Sandbox-Token": self.auth_token} if self.auth_token else None
         async with httpx.AsyncClient(timeout=self.timeout_sec) as client:
-            resp = await client.post(f"{self.base_url}/execute-step", json=payload)
+            resp = await client.post(
+                f"{self.base_url}/execute-step",
+                json=payload,
+                headers=headers,
+            )
             resp.raise_for_status()
             data = resp.json()
 
