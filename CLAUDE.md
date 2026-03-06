@@ -56,6 +56,9 @@ python -m nexus
 # Infra
 docker compose -f docker/docker-compose.yml up -d
 
+# Docker sandbox backend (ephemeral containers per step)
+SANDBOX_EXECUTION_BACKEND=docker docker compose -f docker/docker-compose.yml --profile sandbox-docker up -d
+
 # Development (without Docker)
 pip install -e ".[dev]"
 
@@ -103,6 +106,7 @@ Infrastructure services can be mixed with external equivalents via environment o
 
 - `nexus-api` - App control plane (FastAPI)
 - `nexus-sandbox-runner` - Isolated execution service
+- `nexus-sandbox-dind` - Optional Docker daemon for sandbox backend (profile: sandbox-docker)
 - `nexus-discord-bridge` - Optional remote approval/status bridge
 - `nexus-bot` - Legacy Discord bot runtime (optional)
 - `nexus-qdrant` - Vector memory (port 6333, profile: qdrant)

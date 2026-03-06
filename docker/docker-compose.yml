@@ -39,7 +39,7 @@ services:
   nexus-sandbox-runner:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.bot
+      dockerfile: docker/Dockerfile.sandbox
     container_name: nexus-sandbox-runner
     restart: unless-stopped
     env_file:
@@ -49,6 +49,7 @@ services:
       SANDBOX_EXECUTION_BACKEND: "${SANDBOX_EXECUTION_BACKEND:-local}"
       SANDBOX_DOCKER_IMAGE: "${SANDBOX_DOCKER_IMAGE:-python:3.13-slim}"
       SANDBOX_DOCKER_BIN: "${SANDBOX_DOCKER_BIN:-docker}"
+      SANDBOX_DOCKER_HOST: "${SANDBOX_DOCKER_HOST:-tcp://nexus-sandbox-dind:2375}"
       SANDBOX_DOCKER_NETWORK: "${SANDBOX_DOCKER_NETWORK:-none}"
       SANDBOX_DOCKER_MEMORY: "${SANDBOX_DOCKER_MEMORY:-512m}"
       SANDBOX_DOCKER_CPUS: "${SANDBOX_DOCKER_CPUS:-1.0}"
@@ -66,6 +67,25 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  nexus-sandbox-dind:
+    image: docker:27-dind
+    container_name: nexus-sandbox-dind
+    restart: unless-stopped
+    profiles: [sandbox-docker]
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: ["--host=tcp://0.0.0.0:2375", "--tls=false"]
+    volumes:
+      - sandbox_dind_data:/var/lib/docker
+    networks:
+      - nexus-net
+    healthcheck:
+      test: ["CMD-SHELL", "docker info >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
 
   nexus-discord-bridge:
     build:
@@ -190,6 +210,7 @@ volumes:
   redis_data:
   neo4j_data:
   postgres_data:
+  sandbox_dind_data:
 
 networks:
   nexus-net:

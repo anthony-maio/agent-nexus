@@ -26,6 +26,18 @@ def test_build_executor_from_env_docker_requires_image() -> None:
         build_executor_from_env({"SANDBOX_EXECUTION_BACKEND": "docker"})
 
 
+def test_build_executor_from_env_docker_includes_docker_host() -> None:
+    executor = build_executor_from_env(
+        {
+            "SANDBOX_EXECUTION_BACKEND": "docker",
+            "SANDBOX_DOCKER_IMAGE": "python:3.13-slim",
+            "SANDBOX_DOCKER_HOST": "tcp://nexus-sandbox-dind:2375",
+        }
+    )
+    assert isinstance(executor, DockerEphemeralExecutor)
+    assert executor.docker_host == "tcp://nexus-sandbox-dind:2375"
+
+
 def test_docker_executor_build_command_contains_isolation_flags(tmp_path: Path) -> None:
     executor = DockerEphemeralExecutor(
         image="python:3.13-slim",
@@ -105,6 +117,59 @@ def test_docker_executor_execute_collects_artifacts(
     artifact_path = Path(result.artifacts[0]["sandbox_path"])
     assert artifact_path.exists()
     assert artifact_path.name == "step123-export.txt"
+
+
+def test_docker_executor_sets_docker_host_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executor = DockerEphemeralExecutor(
+        image="python:3.13-slim",
+        docker_host="tcp://nexus-sandbox-dind:2375",
+    )
+    request = StepRequest(
+        run_id="run123",
+        step_id="step123",
+        action_type="export",
+        instruction="export report",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["kwargs"] = kwargs
+        mount = cmd[cmd.index("-v") + 1]
+        host_workspace = Path(mount.rsplit(":", 1)[0])
+        host_workspace.mkdir(parents=True, exist_ok=True)
+        artifact_name = "step123-export.txt"
+        (host_workspace / artifact_name).write_text("artifact", encoding="utf-8")
+        (host_workspace / "result.json").write_text(
+            json.dumps(
+                {
+                    "output_text": "done:export",
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "kind": "text",
+                            "name": artifact_name,
+                            "path": artifact_name,
+                            "workspace": str(host_workspace),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: "docker")
+    result = executor.execute(request, tmp_path / "sandbox")
+
+    assert result.output_text == "done:export"
+    run_kwargs = captured["kwargs"]
+    assert isinstance(run_kwargs, dict)
+    env = run_kwargs.get("env")
+    assert isinstance(env, dict)
+    assert env.get("DOCKER_HOST") == "tcp://nexus-sandbox-dind:2375"
 
 
 def test_docker_executor_ignores_artifacts_outside_workspace(

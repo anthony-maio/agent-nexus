@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -100,6 +101,7 @@ class DockerEphemeralExecutor:
         image: str,
         timeout_sec: int = 120,
         docker_bin: str = "docker",
+        docker_host: str = "",
         network: str = "none",
         memory_limit: str = "512m",
         cpu_limit: str = "1.0",
@@ -108,6 +110,7 @@ class DockerEphemeralExecutor:
         self.image = image.strip()
         self.timeout_sec = timeout_sec
         self.docker_bin = docker_bin
+        self.docker_host = docker_host.strip()
         self.network = network.strip()
         self.memory_limit = memory_limit.strip()
         self.cpu_limit = cpu_limit.strip()
@@ -132,12 +135,17 @@ class DockerEphemeralExecutor:
             result_file = step_workspace / "result.json"
             command = self.build_command(request, step_workspace, result_file)
             try:
+                env = None
+                if self.docker_host:
+                    env = dict(os.environ)
+                    env["DOCKER_HOST"] = self.docker_host
                 proc = subprocess.run(
                     command,
                     check=False,
                     capture_output=True,
                     text=True,
                     timeout=self.timeout_sec,
+                    env=env,
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
@@ -266,6 +274,7 @@ def build_executor_from_env(env: dict[str, str]) -> StepExecutor:
             image=env.get("SANDBOX_DOCKER_IMAGE", "").strip(),
             timeout_sec=int(env.get("SANDBOX_STEP_TIMEOUT_SEC", "120")),
             docker_bin=env.get("SANDBOX_DOCKER_BIN", "docker").strip() or "docker",
+            docker_host=env.get("SANDBOX_DOCKER_HOST", "").strip(),
             network=env.get("SANDBOX_DOCKER_NETWORK", "none").strip() or "none",
             memory_limit=env.get("SANDBOX_DOCKER_MEMORY", "512m").strip() or "512m",
             cpu_limit=env.get("SANDBOX_DOCKER_CPUS", "1.0").strip() or "1.0",
