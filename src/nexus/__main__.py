@@ -27,6 +27,10 @@ def _preprocess_env() -> None:
             )
 
 
+def _env_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip() == "1"
+
+
 def main() -> None:
     # Load .env from canonical locations before anything else.
     load_dotenv("config/.env")  # Primary (Docker + local)
@@ -49,7 +53,7 @@ def main() -> None:
 
     if not has_config():
         log.warning("No configuration found for the legacy Discord runtime.")
-        if os.environ.get("NEXUS_ENABLE_LEGACY_SETUP", "").strip() == "1":
+        if _env_enabled("NEXUS_ENABLE_LEGACY_SETUP"):
             log.info("Legacy Discord-first setup has been explicitly enabled.")
             log.info("Starting web setup wizard on http://127.0.0.1:8090 ...")
             try:
@@ -65,6 +69,12 @@ def main() -> None:
         log.error("Recommended: scripts/prod-up.ps1 -SandboxBackend docker")
         log.error("Or on Unix: ./scripts/prod-up.sh docker")
         log.error("Set NEXUS_ENABLE_LEGACY_SETUP=1 only if you intentionally want the old wizard.")
+        sys.exit(1)
+
+    if not _env_enabled("NEXUS_ENABLE_LEGACY_RUNTIME"):
+        log.error("Legacy Discord runtime is disabled by default in app-first mode.")
+        log.error("Set NEXUS_ENABLE_LEGACY_RUNTIME=1 only for intentional legacy bot runs.")
+        log.error("Recommended default: run nexus-api + frontend, with optional discord bridge.")
         sys.exit(1)
 
     # Validate config early

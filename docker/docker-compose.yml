@@ -125,6 +125,8 @@ services:
     env_file:
       - path: ../config/.env
         required: false
+    environment:
+      NEXUS_ENABLE_LEGACY_RUNTIME: "${NEXUS_ENABLE_LEGACY_RUNTIME:-1}"
     ports:
       - "${SETUP_PORT:-8090}:8090"
     volumes:
