@@ -106,9 +106,19 @@ if ($SandboxBackend -eq "docker-host") {
 
 Wait-HttpOk -Url "http://localhost:8020/health" -TimeoutSec 180
 Wait-HttpOk -Url "http://localhost:8000/health" -TimeoutSec 180
+$bootstrapStatusUrl = "http://localhost:8000/bootstrap/status"
+$bootstrapStatus = $null
+try {
+    $bootstrapStatus = Invoke-RestMethod -Uri $bootstrapStatusUrl -UseBasicParsing -TimeoutSec 5
+} catch {
+    $bootstrapStatus = $null
+}
 
 Write-Host ""
 Write-Host "Agent Nexus is up."
 Write-Host "API:      http://localhost:8000/health"
 Write-Host "Sandbox:  http://localhost:8020/health"
 Write-Host "Admin user defaults come from config/.env (APP_ADMIN_USERNAME / APP_ADMIN_PASSWORD)."
+if ($bootstrapStatus -and $bootstrapStatus.setup_required) {
+    Write-Host "First-run setup is required. Launch the frontend stack (prod-up) and complete bootstrap in the web app."
+}

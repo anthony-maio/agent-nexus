@@ -75,9 +75,14 @@ wait_http_ok() {
 }
 
 wait_http_ok "$api_health_url" 240
+bootstrap_status_url="${app_url}/api/bootstrap/status"
+bootstrap_json="$(curl -kfsSL "$bootstrap_status_url" 2>/dev/null || true)"
 
 echo
 echo "Agent Nexus production stack is up."
 echo "App URL:  $app_url"
 echo "API URL:  $app_url/api"
+if [[ "$bootstrap_json" == *"\"setup_required\":true"* ]]; then
+  echo "First-run setup is required. Open ${app_url} and complete bootstrap before login."
+fi
 echo "Set NEXUS_PUBLIC_HOST and ACME_EMAIL in config/.env for automatic TLS certificates."

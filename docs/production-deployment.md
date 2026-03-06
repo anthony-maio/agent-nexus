@@ -3,6 +3,7 @@
 This deployment path targets the app-first stack with the web UI fronted by Caddy.
 
 On a fresh install, open the web app first. If `config/.env` is missing, the app presents a bootstrap screen that writes the initial config and restarts the API.
+The `prod-up` helper scripts now check `/api/bootstrap/status` and print a first-run setup hint automatically.
 
 ## Prerequisites
 

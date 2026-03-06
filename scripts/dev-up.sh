@@ -72,8 +72,13 @@ wait_http_ok() {
 wait_http_ok "http://localhost:8020/health" 180
 wait_http_ok "http://localhost:8000/health" 180
 
+bootstrap_json="$(curl -fsS "http://localhost:8000/bootstrap/status" 2>/dev/null || true)"
+
 echo
 echo "Agent Nexus is up."
 echo "API:      http://localhost:8000/health"
 echo "Sandbox:  http://localhost:8020/health"
 echo "Admin user defaults come from config/.env (APP_ADMIN_USERNAME / APP_ADMIN_PASSWORD)."
+if [[ "$bootstrap_json" == *"\"setup_required\":true"* ]]; then
+  echo "First-run setup is required. Launch the frontend stack (prod-up) and complete bootstrap in the web app."
+fi

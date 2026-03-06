@@ -109,9 +109,19 @@ if ($SandboxBackend -eq "docker-host") {
 & docker @upArgs
 
 Wait-HttpOk -Url $apiHealthUrl -TimeoutSec 240
+$bootstrapStatusUrl = "$appUrl/api/bootstrap/status"
+$bootstrapStatus = $null
+try {
+    $bootstrapStatus = Invoke-RestMethod -Uri $bootstrapStatusUrl -UseBasicParsing -TimeoutSec 5
+} catch {
+    $bootstrapStatus = $null
+}
 
 Write-Host ""
 Write-Host "Agent Nexus production stack is up."
 Write-Host "App URL:  $appUrl"
 Write-Host "API URL:  $appUrl/api"
+if ($bootstrapStatus -and $bootstrapStatus.setup_required) {
+    Write-Host "First-run setup is required. Open $appUrl and complete bootstrap before login."
+}
 Write-Host "Set NEXUS_PUBLIC_HOST and ACME_EMAIL in config/.env for automatic TLS certificates."
