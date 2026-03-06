@@ -1,6 +1,6 @@
 """Tests for prompt building and injection safety."""
 
-from nexus.personality.prompts import build_task_prompt, build_system_prompt
+from nexus.personality.prompts import build_system_prompt, build_task_prompt
 
 
 def test_task_prompt_escapes_braces():

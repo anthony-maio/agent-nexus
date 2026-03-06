@@ -8,8 +8,22 @@ from continuity_core.event_log import Event
 def test_events_returns_recent_events():
     """c2.events returns recent events as a list of dicts."""
     mock_events = [
-        Event(timestamp=1000.0, actor="human", intent="message", input="hello", output="", tags=["human"]),
-        Event(timestamp=1001.0, actor="model", intent="response", input="", output="hi there", tags=["swarm"]),
+        Event(
+            timestamp=1000.0,
+            actor="human",
+            intent="message",
+            input="hello",
+            output="",
+            tags=["human"],
+        ),
+        Event(
+            timestamp=1001.0,
+            actor="model",
+            intent="response",
+            input="",
+            output="hi there",
+            tags=["swarm"],
+        ),
     ]
     mock_mem = MagicMock()
     mock_mem.event_log.tail.return_value = mock_events

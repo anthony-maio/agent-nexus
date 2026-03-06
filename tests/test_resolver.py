@@ -1,15 +1,13 @@
 """Tests for MRA ContradictionClassifier, ResolutionEngine, and Pipeline."""
 
-import pytest
 
+from continuity_core.mra.pipeline import MRAResolutionPipeline
 from continuity_core.mra.resolver import (
     ContradictionClassifier,
     ContradictionType,
     ResolutionEngine,
 )
-from continuity_core.mra.pipeline import MRAResolutionPipeline, MRAResolutionReport
 from continuity_core.mra.stress import StressResult
-
 
 # ── Classifier ──────────────────────────────────────────────────────
 
@@ -36,7 +34,10 @@ class TestContradictionClassifier:
 
     def test_truncation_marker(self):
         s1 = "The system processes requests through a pipeline that..."
-        s2 = "The system processes requests through a pipeline that handles auth, validation, routing, and response formatting"
+        s2 = (
+            "The system processes requests through a pipeline that handles auth, "
+            "validation, routing, and response formatting"
+        )
         result = self.clf.classify(s1, s2, score=0.4, similarity=0.7)
         assert result.type == ContradictionType.TRUNCATION
 
