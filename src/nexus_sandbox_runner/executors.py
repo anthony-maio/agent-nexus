@@ -355,6 +355,8 @@ def run_executor_preflight(executor: StepExecutor) -> dict[str, str]:
 
 def _parse_allowed_images(raw: str) -> list[str]:
     items = [part.strip() for part in raw.split(",") if part.strip()]
+    if not items:
+        return [DEFAULT_DOCKER_IMAGE]
     return items
 
 

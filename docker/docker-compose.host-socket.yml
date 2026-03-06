@@ -1,0 +1,9 @@
+services:
+  nexus-sandbox-runner:
+    environment:
+      SANDBOX_EXECUTION_BACKEND: "${SANDBOX_EXECUTION_BACKEND:-docker}"
+      SANDBOX_DOCKER_HOST: "${SANDBOX_DOCKER_HOST:-unix:///var/run/docker.sock}"
+      SANDBOX_DOCKER_TLS_VERIFY: "${SANDBOX_DOCKER_TLS_VERIFY:-0}"
+      SANDBOX_DOCKER_CERT_PATH: "${SANDBOX_DOCKER_CERT_PATH:-}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -40,6 +40,18 @@ def test_build_executor_from_env_docker_includes_docker_host() -> None:
     assert executor.docker_host == "tcp://nexus-sandbox-dind:2375"
 
 
+def test_build_executor_from_env_docker_empty_allowlist_uses_default() -> None:
+    executor = build_executor_from_env(
+        {
+            "SANDBOX_EXECUTION_BACKEND": "docker",
+            "SANDBOX_DOCKER_IMAGE": DEFAULT_DOCKER_IMAGE,
+            "SANDBOX_DOCKER_ALLOWED_IMAGES": "",
+        }
+    )
+    assert isinstance(executor, DockerEphemeralExecutor)
+    assert DEFAULT_DOCKER_IMAGE in executor.allowed_images
+
+
 def test_docker_executor_rejects_unpinned_image() -> None:
     with pytest.raises(ValueError, match="pinned by digest"):
         DockerEphemeralExecutor(image="python:3.13-slim")

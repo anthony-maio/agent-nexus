@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("local", "docker")]
+    [ValidateSet("local", "docker", "docker-host")]
     [string]$SandboxBackend = "local",
     [switch]$NoBuild
 )
@@ -36,6 +36,9 @@ if (-not (Test-Command "docker")) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $composeFile = Join-Path $repoRoot "docker/docker-compose.yml"
+$hostSocketComposeFile = Join-Path $repoRoot "docker/docker-compose.host-socket.yml"
+
+$composeArgs = @("-f", $composeFile)
 
 $profileArgs = @()
 if ($SandboxBackend -eq "docker") {
@@ -50,16 +53,31 @@ if ($SandboxBackend -eq "docker") {
         $env:SANDBOX_DOCKER_CERT_PATH = "/certs/client"
     }
     $profileArgs = @("--profile", "sandbox-docker")
+} elseif ($SandboxBackend -eq "docker-host") {
+    $env:SANDBOX_EXECUTION_BACKEND = "docker"
+    if (-not $env:SANDBOX_DOCKER_HOST) {
+        $env:SANDBOX_DOCKER_HOST = "unix:///var/run/docker.sock"
+    }
+    if (-not $env:SANDBOX_DOCKER_TLS_VERIFY) {
+        $env:SANDBOX_DOCKER_TLS_VERIFY = "0"
+    }
+    if (-not $env:SANDBOX_DOCKER_CERT_PATH) {
+        $env:SANDBOX_DOCKER_CERT_PATH = ""
+    }
+    $composeArgs += @("-f", $hostSocketComposeFile)
 } else {
     $env:SANDBOX_EXECUTION_BACKEND = "local"
 }
 
-$upArgs = @("compose", "-f", $composeFile) + $profileArgs + @("up", "-d")
+$upArgs = @("compose") + $composeArgs + $profileArgs + @("up", "-d")
 if (-not $NoBuild) {
     $upArgs += "--build"
 }
 
 Write-Host "Starting Agent Nexus stack (sandbox backend: $SandboxBackend)..."
+if ($SandboxBackend -eq "docker-host") {
+    Write-Host "Warning: host-socket mode grants sandbox runner broad access to host Docker daemon."
+}
 & docker @upArgs
 
 Wait-HttpOk -Url "http://localhost:8020/health" -TimeoutSec 180
