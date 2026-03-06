@@ -87,6 +87,8 @@ pip install -e ".[dev]"
 pytest tests/
 
 # Lint
+scripts/lint-touched.ps1
+./scripts/lint-touched.sh
 ruff check src/
 ruff format src/
 ```
