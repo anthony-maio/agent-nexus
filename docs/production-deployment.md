@@ -61,3 +61,4 @@ Optional host-socket mode additionally applies:
 - Promotion safety checks require artifacts to stay under `APP_SANDBOX_ARTIFACT_ROOT`.
 - `docker` and `docker-host` helper scripts auto-build `agent-nexus-sandbox-step:local`, a Playwright-capable step image used for real browser execution.
 - Adaptive replanning is optional and policy-gated; set `OPENROUTER_API_KEY` plus `APP_ENABLE_MODEL_REPLANNER=1` to enable model proposals, or `APP_ENABLE_MODEL_REPLANNER=0` to force rule-only follow-up planning.
+- `nexus-discord-bridge` can authenticate with `APP_API_TOKEN`, or by creating API sessions via `APP_ADMIN_USERNAME`/`APP_ADMIN_PASSWORD` when no token is set.

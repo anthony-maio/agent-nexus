@@ -128,6 +128,7 @@ Optional/secondary:
 - `OPENROUTER_API_KEY` (for model-backed execution paths)
 - `APP_ENABLE_MODEL_REPLANNER` (enable/disable model-assisted follow-up proposals)
 - `APP_REPLANNER_MAX_STEPS` and `APP_REPLANNER_TIMEOUT_SEC` (adaptive replanner limits)
+- `APP_API_TOKEN` (optional for Discord bridge; otherwise bridge uses admin session auth)
 
 See `config/.env.example` for full list.
 

@@ -17,9 +17,70 @@ log = logging.getLogger(__name__)
 class BridgeApiClient:
     """Thin async client for Nexus API endpoints used by bridge."""
 
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str = "",
+        username: str = "",
+        password: str = "",
+        timeout_sec: float = 30.0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.token = token
+        self.token = token.strip()
+        self.username = username.strip()
+        self.password = password
+        self.timeout_sec = timeout_sec
+        self._session_token = ""
+
+    def _can_create_session(self) -> bool:
+        return bool(self.username and self.password)
+
+    async def _create_session_token(
+        self,
+        client: httpx.AsyncClient | None = None,
+    ) -> str:
+        if not self._can_create_session():
+            raise RuntimeError(
+                "Bridge API auth requires APP_API_TOKEN, or "
+                "APP_ADMIN_USERNAME and APP_ADMIN_PASSWORD."
+            )
+        body = {
+            "username": self.username,
+            "password": self.password,
+        }
+        if client is not None:
+            resp = await client.request(
+                method="POST",
+                url=f"{self.base_url}/sessions",
+                json=body,
+            )
+        else:
+            async with httpx.AsyncClient(timeout=self.timeout_sec) as standalone_client:
+                resp = await standalone_client.request(
+                    method="POST",
+                    url=f"{self.base_url}/sessions",
+                    json=body,
+                )
+        resp.raise_for_status()
+        data = resp.json()
+        session_token = str(data.get("token", "")).strip()
+        if not session_token:
+            raise RuntimeError("Nexus API /sessions response did not include a token.")
+        return session_token
+
+    async def _resolve_bearer_token(
+        self,
+        *,
+        force_refresh: bool = False,
+        client: httpx.AsyncClient | None = None,
+    ) -> str:
+        if self.token:
+            return self.token
+        if force_refresh:
+            self._session_token = ""
+        if not self._session_token:
+            self._session_token = await self._create_session_token(client=client)
+        return self._session_token
 
     async def _request(
         self,
@@ -27,14 +88,27 @@ class BridgeApiClient:
         path: str,
         json_body: dict[str, Any] | None = None,
     ) -> Any:
-        headers = {"Authorization": f"Bearer {self.token}"}
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_sec) as client:
+            bearer = await self._resolve_bearer_token(client=client)
+            headers = {"Authorization": f"Bearer {bearer}"}
             resp = await client.request(
                 method=method,
                 url=f"{self.base_url}{path}",
                 json=json_body,
                 headers=headers,
             )
+            if resp.status_code == 401 and not self.token and self._can_create_session():
+                bearer = await self._resolve_bearer_token(
+                    force_refresh=True,
+                    client=client,
+                )
+                headers = {"Authorization": f"Bearer {bearer}"}
+                resp = await client.request(
+                    method=method,
+                    url=f"{self.base_url}{path}",
+                    json=json_body,
+                    headers=headers,
+                )
             resp.raise_for_status()
             return resp.json()
 
@@ -177,8 +251,23 @@ def run_bridge() -> None:
         raise RuntimeError("DISCORD_TOKEN is required for nexus-discord-bridge")
     api_base = os.environ.get("APP_API_URL", "http://localhost:8000")
     api_token = os.environ.get("APP_API_TOKEN", "").strip()
+    api_username = os.environ.get("APP_ADMIN_USERNAME", "").strip()
+    api_password = os.environ.get("APP_ADMIN_PASSWORD", "")
+    if not api_token and not (api_username and api_password):
+        raise RuntimeError(
+            "Set APP_API_TOKEN, or set APP_ADMIN_USERNAME and APP_ADMIN_PASSWORD for "
+            "nexus-discord-bridge."
+        )
     if not api_token:
-        raise RuntimeError("APP_API_TOKEN is required for nexus-discord-bridge")
+        log.info("Discord bridge auth mode: /sessions (admin credentials).")
     channel_name = os.environ.get("DISCORD_BRIDGE_CHANNEL", "human")
-    bridge = NexusDiscordBridge(api=BridgeApiClient(api_base, api_token), channel_name=channel_name)
+    bridge = NexusDiscordBridge(
+        api=BridgeApiClient(
+            base_url=api_base,
+            token=api_token,
+            username=api_username,
+            password=api_password,
+        ),
+        channel_name=channel_name,
+    )
     bridge.run(token, log_handler=None)
