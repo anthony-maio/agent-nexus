@@ -124,6 +124,8 @@ App-first required:
 Optional/secondary:
 - `DISCORD_TOKEN` (for bridge or legacy bot runtime)
 - `OPENROUTER_API_KEY` (for model-backed execution paths)
+- `APP_ENABLE_MODEL_REPLANNER` (enable/disable model-assisted follow-up proposals)
+- `APP_REPLANNER_MAX_STEPS` and `APP_REPLANNER_TIMEOUT_SEC` (adaptive replanner limits)
 
 See `config/.env.example` for full list.
 

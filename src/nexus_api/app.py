@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Iterator
+from enum import Enum
+from typing import Any, AsyncIterator, Iterator, TypeVar
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -35,6 +36,8 @@ from nexus_core.engine import RunEngine
 from nexus_core.models import RunMode, RunStatus
 
 log = logging.getLogger(__name__)
+
+_EnumT = TypeVar("_EnumT", bound=Enum)
 
 
 def create_app(context: ApiContext | None = None) -> FastAPI:
@@ -91,6 +94,19 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
+
+    def parse_optional_enum(raw: str, enum_type: type[_EnumT], field_name: str) -> str:
+        value = raw.strip()
+        if not value:
+            return ""
+        try:
+            parsed = enum_type(value)
+        except ValueError as exc:
+            allowed = ", ".join(item.value for item in enum_type)
+            raise ValueError(
+                f"Invalid {field_name} value: {raw}. Allowed values: {allowed}"
+            ) from exc
+        return str(parsed.value)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -174,12 +190,8 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         _ = user
-        normalized_status = ""
-        if status.strip():
-            normalized_status = RunStatus(status.strip()).value
-        normalized_mode = ""
-        if mode.strip():
-            normalized_mode = RunMode(mode.strip()).value
+        normalized_status = parse_optional_enum(status, RunStatus, "status")
+        normalized_mode = parse_optional_enum(mode, RunMode, "mode")
         parsed_after = parse_optional_datetime(created_after, "created_after")
         parsed_before = parse_optional_datetime(created_before, "created_before")
         repo = SqlRunRepository(session)

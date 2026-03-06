@@ -567,6 +567,58 @@ def test_list_runs_supports_filters_search_and_pagination(tmp_path: Path) -> Non
     assert len(paged_payload["items"]) == 1
 
 
+def test_list_runs_supports_created_at_range_filters(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "created range objective",
+            "mode": "manual",
+            "steps": [],
+        },
+    )
+    assert create.status_code == 200
+    run_id = create.json()["id"]
+
+    baseline = client.get("/runs?created_after=2000-01-01T00:00:00Z", headers=headers)
+    assert baseline.status_code == 200
+    baseline_payload = baseline.json()
+    assert baseline_payload["total"] >= 1
+    assert any(item["id"] == run_id for item in baseline_payload["items"])
+
+    future = client.get("/runs?created_after=2100-01-01T00:00:00Z", headers=headers)
+    assert future.status_code == 200
+    assert future.json()["total"] == 0
+
+    past = client.get("/runs?created_before=2000-01-01T00:00:00Z", headers=headers)
+    assert past.status_code == 200
+    assert past.json()["total"] == 0
+
+
+def test_list_runs_rejects_invalid_filters(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    invalid_status = client.get("/runs?status=invalid-status", headers=headers)
+    assert invalid_status.status_code == 400
+    assert "status" in invalid_status.json()["detail"]
+
+    invalid_mode = client.get("/runs?mode=invalid-mode", headers=headers)
+    assert invalid_mode.status_code == 400
+    assert "mode" in invalid_mode.json()["detail"]
+
+    invalid_after = client.get("/runs?created_after=not-a-date", headers=headers)
+    assert invalid_after.status_code == 400
+    assert "created_after" in invalid_after.json()["detail"]
+
+    invalid_before = client.get("/runs?created_before=still-not-a-date", headers=headers)
+    assert invalid_before.status_code == 400
+    assert "created_before" in invalid_before.json()["detail"]
+
+
 def test_resume_run_continues_after_rejected_step(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)
