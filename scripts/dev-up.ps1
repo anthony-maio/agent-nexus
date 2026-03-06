@@ -25,7 +25,9 @@ function Wait-HttpOk {
             }
         } catch {
             Start-Sleep -Seconds 2
+        }
     }
+    throw "Timed out waiting for $Url"
 }
 
 function Ensure-SandboxStepImage {
@@ -39,14 +41,15 @@ function Ensure-SandboxStepImage {
     if (-not $env:SANDBOX_DOCKER_ALLOWED_IMAGES) {
         $env:SANDBOX_DOCKER_ALLOWED_IMAGES = $env:SANDBOX_DOCKER_IMAGE
     }
-    if ($env:SANDBOX_DOCKER_IMAGE -eq "agent-nexus-sandbox-step:local" -and -not $env:SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL) {
+    if (
+        $env:SANDBOX_DOCKER_IMAGE -eq "agent-nexus-sandbox-step:local" `
+            -and -not $env:SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL
+    ) {
         $env:SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL = "1"
     }
     if (-not $env:SANDBOX_BROWSER_MODE) {
         $env:SANDBOX_BROWSER_MODE = "auto"
     }
-}
-    throw "Timed out waiting for $Url"
 }
 
 if (-not (Test-Command "docker")) {
