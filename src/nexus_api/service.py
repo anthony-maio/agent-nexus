@@ -14,26 +14,12 @@ from nexus_api.db import build_engine, build_session_factory
 from nexus_api.migrator import run_migrations
 from nexus_core.events import RunEventBus
 from nexus_core.models import StepDefinition
+from nexus_core.planner import plan_steps_for_objective
 
 
 def default_steps_for_objective(objective: str) -> list[StepDefinition]:
-    """Generate baseline browser-first steps for v1."""
-    return [
-        StepDefinition(
-            action_type="navigate",
-            instruction=f"Open a browser session and research: {objective}",
-        ),
-        StepDefinition(
-            action_type="extract",
-            instruction="Extract key evidence and summarize with citations.",
-        ),
-        StepDefinition(
-            action_type="export",
-            instruction=(
-                "Prepare exportable report artifact for promotion into canonical workspace."
-            ),
-        ),
-    ]
+    """Generate browser-first baseline steps for app-first execution."""
+    return plan_steps_for_objective(objective)
 
 
 @dataclass

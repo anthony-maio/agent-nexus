@@ -16,7 +16,7 @@ from typing import Protocol
 from urllib.parse import quote_plus
 
 _ARTIFACT_ACTIONS: frozenset[str] = frozenset({"extract", "write", "export"})
-_CITATION_ACTIONS: frozenset[str] = frozenset({"navigate", "extract"})
+_CITATION_ACTIONS: frozenset[str] = frozenset({"navigate", "inspect", "scroll", "extract"})
 DEFAULT_DOCKER_IMAGE = (
     "python:3.13-slim@sha256:8bc60ca09afaa8ea0d6d1220bde073bacfedd66a4bf8129cbdc8ef0e16c8a952"
 )
@@ -450,21 +450,39 @@ def _container_script() -> str:
 
         if action == "navigate":
             output = f"[sandbox-browser] Navigated and collected candidate pages for: {instruction}"
+        elif action == "inspect":
+            output = (
+                "[sandbox-browser] Inspected page structure and identified "
+                f"relevant targets for: {instruction}"
+            )
+        elif action == "scroll":
+            output = (
+                "[sandbox-browser] Scrolled additional page content and captured "
+                f"more context for: {instruction}"
+            )
         elif action == "extract":
             output = (
                 "[sandbox-browser] Evidence summary with citations prepared. "
                 f"Focus: {instruction}"
             )
+        elif action == "click":
+            output = f"[sandbox-browser] Clicked the requested control for: {instruction}"
+        elif action == "type":
+            output = f"[sandbox-browser] Typed requested draft input for: {instruction}"
+        elif action == "wait":
+            output = f"[sandbox-browser] Waited for the page state to settle for: {instruction}"
         elif action == "export":
             output = (
                 "[sandbox-browser] Export artifact prepared for workspace promotion. "
                 f"Request: {instruction}"
             )
+        elif action == "submit":
+            output = f"[sandbox-browser] Submitted the requested workflow for: {instruction}"
         else:
             output = f"[sandbox-browser] Executed action `{action}`: {instruction}"
 
         citations = []
-        if action in {"navigate", "extract"}:
+        if action in {"navigate", "inspect", "scroll", "extract"}:
             query = urllib.parse.quote_plus(instruction[:120])
             citations.append(
                 {
@@ -476,7 +494,7 @@ def _container_script() -> str:
 
         artifacts = []
         target_url = first_url(instruction)
-        wants_browser = action in {"navigate", "extract"} and target_url
+        wants_browser = action in {"navigate", "inspect", "scroll", "extract"} and target_url
         if wants_browser and browser_mode != "simulated":
             try:
                 from playwright.sync_api import sync_playwright
@@ -484,11 +502,26 @@ def _container_script() -> str:
                     browser = p.chromium.launch(headless=True)
                     page = browser.new_page()
                     page.goto(target_url, wait_until="domcontentloaded", timeout=browser_timeout_ms)
+                    if action == "scroll":
+                        page.mouse.wheel(0, 1600)
+                    if action == "inspect":
+                        with contextlib.suppress(Exception):
+                            page.locator("body").first.wait_for(timeout=browser_timeout_ms)
                     title = page.title() or "Untitled"
                     body = ""
                     with contextlib.suppress(Exception):
                         body = page.inner_text("body")[:1200]
-                    output = f"[sandbox-browser-real] Visited {target_url} ({title})"
+                    if action == "navigate":
+                        output = f"[sandbox-browser-real] Visited {target_url} ({title})"
+                    elif action == "inspect":
+                        output = f"[sandbox-browser-real] Inspected {target_url} ({title})"
+                    elif action == "scroll":
+                        output = f"[sandbox-browser-real] Scrolled {target_url} ({title})"
+                    else:
+                        output = (
+                            "[sandbox-browser-real] Extracted evidence from "
+                            f"{target_url} ({title})"
+                        )
                     citations = [
                         {
                             "url": target_url,
@@ -542,16 +575,34 @@ def _container_script() -> str:
 def _step_output(action: str, instruction: str) -> str:
     if action == "navigate":
         return f"[sandbox-browser] Navigated and collected candidate pages for: {instruction}"
+    if action == "inspect":
+        return (
+            "[sandbox-browser] Inspected page structure and identified "
+            f"relevant targets for: {instruction}"
+        )
+    if action == "scroll":
+        return (
+            "[sandbox-browser] Scrolled additional page content and captured "
+            f"more context for: {instruction}"
+        )
     if action == "extract":
         return (
             "[sandbox-browser] Evidence summary with citations prepared. "
             f"Focus: {instruction}"
         )
+    if action == "click":
+        return f"[sandbox-browser] Clicked the requested control for: {instruction}"
+    if action == "type":
+        return f"[sandbox-browser] Typed requested draft input for: {instruction}"
+    if action == "wait":
+        return f"[sandbox-browser] Waited for the page state to settle for: {instruction}"
     if action == "export":
         return (
             "[sandbox-browser] Export artifact prepared for workspace promotion. "
             f"Request: {instruction}"
         )
+    if action == "submit":
+        return f"[sandbox-browser] Submitted the requested workflow for: {instruction}"
     return f"[sandbox-browser] Executed action `{action}`: {instruction}"
 
 

@@ -302,3 +302,80 @@ def test_approved_step_failure_marks_run_failed(tmp_path: Path) -> None:
     )
     assert approve.status_code == 200
     assert approve.json()["status"] == "failed"
+
+
+def test_default_research_run_uses_richer_browser_plan(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research payroll automation competitors and capture citations",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "navigate",
+        "inspect",
+        "scroll",
+        "extract",
+        "export",
+    ]
+    assert [step["status"] for step in run["steps"]] == [
+        "completed",
+        "completed",
+        "completed",
+        "completed",
+        "pending_approval",
+    ]
+    assert run["status"] == "pending_approval"
+
+
+def test_default_workflow_run_gates_on_first_write_action(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Fill out the contact form at https://example.com/contact",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "navigate",
+        "inspect",
+        "extract",
+        "type",
+        "click",
+        "wait",
+        "submit",
+        "export",
+    ]
+    assert [step["status"] for step in run["steps"]] == [
+        "completed",
+        "completed",
+        "completed",
+        "pending_approval",
+        "pending",
+        "pending",
+        "pending",
+        "pending",
+    ]
+    assert run["status"] == "pending_approval"
+
+    pending = client.get("/approvals/pending", headers=headers)
+    assert pending.status_code == 200
+    items = pending.json()["items"]
+    assert len(items) == 1
+    assert items[0]["run_id"] == run["id"]
+    assert items[0]["action_type"] == "type"

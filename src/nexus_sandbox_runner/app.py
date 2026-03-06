@@ -18,8 +18,13 @@ _ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
     {
         "navigate",
+        "inspect",
+        "scroll",
         "extract",
         "read",
+        "click",
+        "type",
+        "wait",
         "write",
         "export",
         "submit",

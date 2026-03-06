@@ -29,7 +29,7 @@ class SqlRunRepository:
         self.session.flush()
 
         for idx, step in enumerate(steps):
-            risk = risk_tier_for_action(step.action_type)
+            risk = risk_tier_for_action(step.action_type, step.instruction)
             self.session.add(
                 RunStep(
                     run_id=run.id,

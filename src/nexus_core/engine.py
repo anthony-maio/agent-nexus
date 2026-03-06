@@ -186,7 +186,10 @@ class RunEngine:
             raise ValueError("Artifact step not found")
         if step["status"] != StepStatus.COMPLETED.value:
             raise ValueError("Artifact step is not completed")
-        if is_high_risk_action(step["action_type"]) and run.get("mode") != RunMode.AUTOPILOT.value:
+        if (
+            is_high_risk_action(step["action_type"], step["instruction"])
+            and run.get("mode") != RunMode.AUTOPILOT.value
+        ):
             approval = self.repo.latest_approval_for_step(run_id, step["id"])
             if approval is None or approval.get("decision") != ApprovalDecision.APPROVE.value:
                 raise PermissionError("High-risk artifact requires approved step before promotion")
@@ -259,7 +262,7 @@ class RunEngine:
             mode = RunMode(run["mode"])
             if (
                 mode == RunMode.SUPERVISED
-                and is_high_risk_action(step["action_type"])
+                and is_high_risk_action(step["action_type"], step["instruction"])
                 and step["status"] == StepStatus.PENDING.value
             ):
                 self.repo.mark_step_status(step["id"], StepStatus.PENDING_APPROVAL.value)

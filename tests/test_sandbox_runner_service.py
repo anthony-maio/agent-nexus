@@ -52,6 +52,46 @@ def test_execute_step_no_artifact_for_navigate(tmp_path: Path, monkeypatch) -> N
     assert len(data["citations"]) == 1
 
 
+def test_execute_step_supports_inspect_action(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    client = TestClient(create_app())
+
+    resp = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step124b",
+            "action_type": "inspect",
+            "instruction": "inspect the current page structure",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["artifacts"] == []
+    assert len(data["citations"]) == 1
+    assert "inspect" in data["output_text"].lower()
+
+
+def test_execute_step_supports_type_action(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    client = TestClient(create_app())
+
+    resp = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step124c",
+            "action_type": "type",
+            "instruction": "enter a draft response into the first field",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["artifacts"] == []
+    assert data["citations"] == []
+    assert "type" in data["output_text"].lower()
+
+
 def test_execute_step_rejects_unsupported_action(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     client = TestClient(create_app())
