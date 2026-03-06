@@ -1,0 +1,112 @@
+:root {
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --line: #d5deeb;
+  --text: #0f1728;
+  --muted: #4b5a76;
+  --accent: #0d66d0;
+  --danger: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  background: radial-gradient(circle at 10% 0%, #e7f0ff, #f4f7fb 45%, #edf3ff 100%);
+  color: var(--text);
+}
+
+.app-shell {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+header h1 {
+  margin: 0;
+}
+
+header p {
+  margin-top: 0.4rem;
+  color: var(--muted);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.primary textarea,
+label input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.65rem;
+  margin-top: 0.4rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.8rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: #eef5ff;
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  cursor: pointer;
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: #fff2f1;
+}
+
+.result {
+  border-left: 4px solid var(--accent);
+  padding-left: 0.8rem;
+}
+
+.approval {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem;
+  margin-top: 0.7rem;
+}
+
+.error {
+  margin-top: 1rem;
+  background: #fff2f1;
+  border: 1px solid #f4c7c3;
+  color: #8b1e16;
+  padding: 0.8rem;
+  border-radius: 10px;
+}
+
+@media (max-width: 960px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}

@@ -18,6 +18,11 @@ build/
 .venv/
 venv/
 env/
+uv.lock
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
 
 # Environment / secrets
 .env

@@ -1,29 +1,27 @@
 services:
-  nexus-bot:
+  nexus-api:
     build:
       context: ..
       dockerfile: docker/Dockerfile.bot
-    container_name: nexus-bot
+    container_name: nexus-api
     restart: unless-stopped
     env_file:
-      # Optional: if config/.env doesn't exist yet, the web setup wizard
-      # launches on port 8090 instead of crashing.
       - path: ../config/.env
         required: false
     ports:
-      # Setup wizard UI (only active when config is missing)
-      - "${SETUP_PORT:-8090}:8090"
+      - "${APP_PORT:-8000}:8000"
     volumes:
-      # Mount config dir so the web setup wizard can write .env
       - ../config:/app/config
       - ../data:/app/data
+      - ../workspace:/app/workspace
+    command: ["python", "-m", "nexus_api"]
     networks:
       - nexus-net
-    # For PiecesOS MCP on host machine
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - nexus-postgres
+      - nexus-sandbox-runner
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import sys; sys.exit(0)'"]
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\")'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -37,6 +35,71 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  nexus-sandbox-runner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bot
+    container_name: nexus-sandbox-runner
+    restart: unless-stopped
+    env_file:
+      - path: ../config/.env
+        required: false
+    ports:
+      - "${SANDBOX_PORT:-8020}:8020"
+    volumes:
+      - ../data:/app/data
+    command: ["python", "-m", "nexus_sandbox_runner"]
+    networks:
+      - nexus-net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8020/health\")'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nexus-discord-bridge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bot
+    container_name: nexus-discord-bridge
+    restart: unless-stopped
+    profiles: [discord-bridge]
+    env_file:
+      - path: ../config/.env
+        required: false
+    environment:
+      APP_API_URL: "http://nexus-api:8000"
+    command: ["python", "-m", "nexus_discord_bridge"]
+    networks:
+      - nexus-net
+    depends_on:
+      - nexus-api
+
+  nexus-bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bot
+    container_name: nexus-bot
+    restart: unless-stopped
+    profiles: [discord-bot]
+    env_file:
+      - path: ../config/.env
+        required: false
+    ports:
+      - "${SETUP_PORT:-8090}:8090"
+    volumes:
+      - ../config:/app/config
+      - ../data:/app/data
+    networks:
+      - nexus-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import sys; sys.exit(0)'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   nexus-qdrant:
     image: qdrant/qdrant:latest

@@ -1,0 +1,277 @@
+"""FastAPI app for app-first Agent Nexus control plane."""
+
+from __future__ import annotations
+
+import logging
+from datetime import timezone
+from typing import Any, Iterator
+
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from nexus_api.auth import (
+    authenticate_user,
+    create_session_token,
+    ensure_admin_user,
+    validate_bearer_token,
+)
+from nexus_api.repository import SqlRunRepository
+from nexus_api.schemas import (
+    ApprovalRequest,
+    PendingApprovalItem,
+    PromotionRequest,
+    RunCreateRequest,
+    SessionCreateRequest,
+    SessionCreateResponse,
+)
+from nexus_api.service import ApiContext, build_context, default_steps_for_objective
+from nexus_core.engine import RunEngine
+from nexus_core.models import RunMode
+
+log = logging.getLogger(__name__)
+
+
+def create_app(context: ApiContext | None = None) -> FastAPI:
+    """Create configured FastAPI app."""
+    ctx = context or build_context()
+    app = FastAPI(title="Agent Nexus API", version="0.1.0")
+    app.state.ctx = ctx
+
+    @app.on_event("startup")
+    def _startup() -> None:
+        with ctx.session_factory() as session:
+            ensure_admin_user(
+                session,
+                username=ctx.settings.APP_ADMIN_USERNAME,
+                password=ctx.settings.APP_ADMIN_PASSWORD,
+            )
+            session.commit()
+        log.info("Nexus API started with single-admin auth enabled.")
+
+    def get_session() -> Iterator[Session]:
+        session = ctx.session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def current_user(
+        authorization: str = Header(default=""),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing bearer token")
+        token = authorization.split(" ", 1)[1].strip()
+        user = validate_bearer_token(session, token)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        return {"id": user.id, "username": user.username}
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.post("/sessions", response_model=SessionCreateResponse)
+    def create_session(
+        request: SessionCreateRequest,
+        session: Session = Depends(get_session),
+    ) -> SessionCreateResponse:
+        # Ensure configured admin exists even when startup hooks are not invoked.
+        ensure_admin_user(
+            session,
+            username=ctx.settings.APP_ADMIN_USERNAME,
+            password=ctx.settings.APP_ADMIN_PASSWORD,
+        )
+        user = authenticate_user(session, request.username, request.password)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        tok = create_session_token(session, user, ttl_hours=ctx.settings.APP_SESSION_TTL_HOURS)
+        expires = tok.expires_at.astimezone(timezone.utc).isoformat()
+        return SessionCreateResponse(
+            session_id=tok.id,
+            token=tok.token,
+            username=user.username,
+            expires_at=expires,
+        )
+
+    @app.post("/runs")
+    async def create_run(
+        request: RunCreateRequest,
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        steps = request.steps or default_steps_for_objective(request.objective)
+        repo = SqlRunRepository(session)
+        engine = RunEngine(
+            repository=repo,
+            execution=ctx.execution_adapter,
+            interaction=ctx.interaction_adapter,
+            events=ctx.events,
+            canonical_workspace=ctx.settings.canonical_workspace_path,
+        )
+        run = await engine.create_run(
+            objective=request.objective,
+            mode=RunMode(request.mode),
+            steps=steps,
+        )
+        run["created_by"] = user["username"]
+        return run
+
+    @app.get("/runs/{run_id}")
+    def get_run(
+        run_id: str,
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        _ = user
+        repo = SqlRunRepository(session)
+        run = repo.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        run["citations"] = repo.list_citations(run_id)
+        run["artifacts"] = repo.list_artifacts(run_id)
+        run["approvals"] = repo.list_approvals(run_id)
+        return run
+
+    @app.get("/runs/{run_id}/timeline")
+    def get_run_timeline(
+        run_id: str,
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        _ = user
+        repo = SqlRunRepository(session)
+        run = repo.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {"run_id": run_id, "timeline": repo.timeline(run_id)}
+
+    @app.post("/runs/{run_id}/approvals/{step_id}")
+    async def decide_approval(
+        run_id: str,
+        step_id: str,
+        request: ApprovalRequest,
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        repo = SqlRunRepository(session)
+        engine = RunEngine(
+            repository=repo,
+            execution=ctx.execution_adapter,
+            interaction=ctx.interaction_adapter,
+            events=ctx.events,
+            canonical_workspace=ctx.settings.canonical_workspace_path,
+        )
+        run = await engine.decide_approval(
+            run_id=run_id,
+            step_id=step_id,
+            decision=request.decision,
+            decided_by=user["username"],
+            reason=request.reason,
+        )
+        return run
+
+    @app.post("/runs/{run_id}/artifacts/{artifact_id}/promote")
+    async def promote_artifact(
+        run_id: str,
+        artifact_id: str,
+        request: PromotionRequest,
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        _ = user
+        repo = SqlRunRepository(session)
+        engine = RunEngine(
+            repository=repo,
+            execution=ctx.execution_adapter,
+            interaction=ctx.interaction_adapter,
+            events=ctx.events,
+            canonical_workspace=ctx.settings.canonical_workspace_path,
+        )
+        return await engine.promote_artifact(
+            run_id=run_id,
+            artifact_id=artifact_id,
+            promoted_by=request.promoted_by,
+        )
+
+    @app.get("/runs/{run_id}/citations")
+    def get_citations(
+        run_id: str,
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        _ = user
+        repo = SqlRunRepository(session)
+        if repo.get_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {"run_id": run_id, "citations": repo.list_citations(run_id)}
+
+    @app.get("/approvals/pending")
+    def pending_approvals(
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, list[PendingApprovalItem]]:
+        _ = user
+        repo = SqlRunRepository(session)
+        data = [
+            PendingApprovalItem(
+                run_id=step["run_id"],
+                step_id=step["id"],
+                action_type=step["action_type"],
+                instruction=step["instruction"],
+                risk_tier=step["risk_tier"],
+            )
+            for step in repo.list_pending_approval_steps()
+        ]
+        return {"items": data}
+
+    @app.websocket("/runs/{run_id}/stream")
+    async def stream_run(websocket: WebSocket, run_id: str, token: str = "") -> None:
+        session = ctx.session_factory()
+        try:
+            if not token:
+                await websocket.close(code=4401)
+                return
+            user = validate_bearer_token(session, token)
+            if user is None:
+                await websocket.close(code=4401)
+                return
+            repo = SqlRunRepository(session)
+            run = repo.get_run(run_id)
+            if run is None:
+                await websocket.close(code=4404)
+                return
+            await websocket.accept()
+            await websocket.send_json(
+                {
+                    "run_id": run_id,
+                    "event_type": "stream.ready",
+                    "payload": {"status": run["status"], "user": user.username},
+                }
+            )
+            queue = ctx.events.subscribe(run_id)
+            try:
+                while True:
+                    event = await queue.get()
+                    await websocket.send_json(event.model_dump())
+            except WebSocketDisconnect:
+                return
+            finally:
+                ctx.events.unsubscribe(run_id, queue)
+        finally:
+            session.close()
+
+    @app.exception_handler(ValueError)
+    async def value_error_handler(_, exc: ValueError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(FileNotFoundError)
+    async def file_not_found_handler(_, exc: FileNotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    return app
