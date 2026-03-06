@@ -20,6 +20,7 @@ _CITATION_ACTIONS: frozenset[str] = frozenset({"navigate", "extract"})
 DEFAULT_DOCKER_IMAGE = (
     "python:3.13-slim@sha256:8bc60ca09afaa8ea0d6d1220bde073bacfedd66a4bf8129cbdc8ef0e16c8a952"
 )
+VALID_BROWSER_MODES: frozenset[str] = frozenset({"simulated", "auto", "real"})
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,9 @@ class DockerEphemeralExecutor:
         docker_tls_verify: bool = False,
         docker_cert_path: str = "",
         allowed_images: list[str] | None = None,
+        browser_mode: str = "auto",
+        browser_timeout_ms: int = 15_000,
+        capture_screenshot: bool = True,
         network: str = "none",
         memory_limit: str = "512m",
         cpu_limit: str = "1.0",
@@ -126,6 +130,9 @@ class DockerEphemeralExecutor:
         self.memory_limit = memory_limit.strip()
         self.cpu_limit = cpu_limit.strip()
         self.pids_limit = pids_limit
+        self.browser_mode = browser_mode.strip().lower()
+        self.browser_timeout_ms = browser_timeout_ms
+        self.capture_screenshot = capture_screenshot
         self.allowed_images = allowed_images or []
         if not self.image:
             raise ValueError("Docker executor requires SANDBOX_DOCKER_IMAGE")
@@ -135,6 +142,8 @@ class DockerEphemeralExecutor:
             raise ValueError(
                 f"Sandbox image `{self.image}` is not in SANDBOX_DOCKER_ALLOWED_IMAGES."
             )
+        if self.browser_mode not in VALID_BROWSER_MODES:
+            raise ValueError(f"Unsupported SANDBOX_BROWSER_MODE: {self.browser_mode}")
 
     def preflight(self) -> dict[str, str]:
         if shutil.which(self.docker_bin) is None:
@@ -165,6 +174,7 @@ class DockerEphemeralExecutor:
             "backend": self.backend_name,
             "docker_server_version": version,
             "sandbox_image": self.image,
+            "browser_mode": self.browser_mode,
         }
 
     def execute(self, request: StepRequest, sandbox_root: Path) -> StepResult:
@@ -220,6 +230,7 @@ class DockerEphemeralExecutor:
             "sandbox_root": str(sandbox_root),
             "executor_backend": self.backend_name,
             "container_image": self.image,
+            "browser_mode": self.browser_mode,
         }
         return StepResult(
             output_text=output,
@@ -262,6 +273,12 @@ class DockerEphemeralExecutor:
             f"NEXUS_STEP_ID={request.step_id}",
             "-e",
             f"NEXUS_OUTPUT_JSON={result_file.name}",
+            "-e",
+            f"NEXUS_BROWSER_MODE={self.browser_mode}",
+            "-e",
+            f"NEXUS_BROWSER_TIMEOUT_MS={self.browser_timeout_ms}",
+            "-e",
+            f"NEXUS_CAPTURE_SCREENSHOT={1 if self.capture_screenshot else 0}",
             "-v",
             f"{step_workspace}:/work",
             "-w",
@@ -336,6 +353,9 @@ def build_executor_from_env(env: dict[str, str]) -> StepExecutor:
             docker_tls_verify=(env.get("SANDBOX_DOCKER_TLS_VERIFY", "1").strip() != "0"),
             docker_cert_path=env.get("SANDBOX_DOCKER_CERT_PATH", "").strip(),
             allowed_images=allowed_images,
+            browser_mode=env.get("SANDBOX_BROWSER_MODE", "auto").strip().lower() or "auto",
+            browser_timeout_ms=int(env.get("SANDBOX_BROWSER_TIMEOUT_MS", "15000")),
+            capture_screenshot=(env.get("SANDBOX_CAPTURE_SCREENSHOT", "1").strip() != "0"),
             network=env.get("SANDBOX_DOCKER_NETWORK", "none").strip() or "none",
             memory_limit=env.get("SANDBOX_DOCKER_MEMORY", "512m").strip() or "512m",
             cpu_limit=env.get("SANDBOX_DOCKER_CPUS", "1.0").strip() or "1.0",
@@ -363,14 +383,26 @@ def _parse_allowed_images(raw: str) -> list[str]:
 def _container_script() -> str:
     return dedent(
         """
+        import contextlib
         import json
         import os
+        import re
         import urllib.parse
 
         action = os.environ.get("NEXUS_ACTION", "").strip().lower()
         instruction = os.environ.get("NEXUS_INSTRUCTION", "")
         step_id = os.environ.get("NEXUS_STEP_ID", "step")
         result_path = os.environ.get("NEXUS_OUTPUT_JSON", "result.json")
+        browser_mode = os.environ.get("NEXUS_BROWSER_MODE", "auto").strip().lower()
+        browser_timeout_ms = int(os.environ.get("NEXUS_BROWSER_TIMEOUT_MS", "15000"))
+        capture_screenshot = os.environ.get("NEXUS_CAPTURE_SCREENSHOT", "1") != "0"
+
+        if browser_mode not in {"simulated", "auto", "real"}:
+            raise RuntimeError(f"Unsupported browser mode: {browser_mode}")
+
+        def first_url(text: str) -> str:
+            match = re.search(r"https?://\\S+", text)
+            return match.group(0) if match else ""
 
         if action == "navigate":
             output = f"[sandbox-browser] Navigated and collected candidate pages for: {instruction}"
@@ -399,6 +431,44 @@ def _container_script() -> str:
             )
 
         artifacts = []
+        target_url = first_url(instruction)
+        wants_browser = action in {"navigate", "extract"} and target_url
+        if wants_browser and browser_mode != "simulated":
+            try:
+                from playwright.sync_api import sync_playwright
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    page = browser.new_page()
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=browser_timeout_ms)
+                    title = page.title() or "Untitled"
+                    body = ""
+                    with contextlib.suppress(Exception):
+                        body = page.inner_text("body")[:1200]
+                    output = f"[sandbox-browser-real] Visited {target_url} ({title})"
+                    citations = [
+                        {
+                            "url": target_url,
+                            "title": title,
+                            "snippet": body[:220] or f"Captured from {target_url}",
+                        }
+                    ]
+                    if capture_screenshot:
+                        screenshot_name = f"{step_id}-screenshot.png"
+                        page.screenshot(path=screenshot_name, full_page=True)
+                        artifacts.append(
+                            {
+                                "kind": "image",
+                                "name": screenshot_name,
+                                "path": screenshot_name,
+                                "workspace": os.getcwd(),
+                            }
+                        )
+                    browser.close()
+            except Exception as exc:
+                if browser_mode == "real":
+                    raise
+                output = f"{output} (browser fallback: {type(exc).__name__})"
+
         if action in {"extract", "write", "export"}:
             name = f"{step_id}-{action}.txt"
             with open(name, "w", encoding="utf-8") as fh:
