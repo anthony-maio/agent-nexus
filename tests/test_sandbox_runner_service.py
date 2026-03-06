@@ -25,6 +25,7 @@ def test_execute_step_creates_artifact_for_extract(tmp_path: Path, monkeypatch) 
     assert "output_text" in data
     assert len(data["citations"]) == 1
     assert len(data["artifacts"]) == 1
+    assert data["metadata"]["executor_backend"] == "local"
 
     artifact = data["artifacts"][0]
     assert Path(artifact["sandbox_path"]).exists()
@@ -87,3 +88,13 @@ def test_execute_step_requires_token_when_configured(tmp_path: Path, monkeypatch
         headers={"X-Sandbox-Token": "sandbox-secret"},
     )
     assert authorized.status_code == 200
+
+
+def test_health_reports_executor_backend(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SANDBOX_EXECUTION_BACKEND", "local")
+    client = TestClient(create_app())
+
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["executor_backend"] == "local"

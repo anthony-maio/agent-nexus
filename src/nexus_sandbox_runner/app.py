@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote_plus
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+
+from nexus_sandbox_runner.executors import StepRequest, build_executor_from_env
 
 _ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
@@ -40,14 +38,18 @@ class ExecuteStepResponse(BaseModel):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Agent Nexus Sandbox Runner", version="0.1.0")
+    app = FastAPI(title="Agent Nexus Sandbox Runner", version="0.2.0")
     sandbox_root = Path("data/sandbox").resolve()
     sandbox_token = os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip()
+    executor = build_executor_from_env(dict(os.environ))
     sandbox_root.mkdir(parents=True, exist_ok=True)
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "executor_backend": getattr(executor, "backend_name", "unknown"),
+        }
 
     @app.post("/execute-step", response_model=ExecuteStepResponse)
     def execute_step(
@@ -56,93 +58,27 @@ def create_app() -> FastAPI:
     ) -> ExecuteStepResponse:
         if sandbox_token and x_sandbox_token != sandbox_token:
             raise HTTPException(status_code=401, detail="Invalid sandbox token")
-        run_dir = sandbox_root / request.run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
         action = request.action_type.strip().lower()
         if action not in _ALLOWED_ACTIONS:
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported action_type: {action}",
             )
-
-        ts = datetime.now(timezone.utc).isoformat()
-        output = _step_output(action, request.instruction)
-        citations = _citations(action, request.instruction)
-        artifacts: list[dict[str, str]] = []
-
-        if action in {"extract", "write", "export"}:
-            name = f"{request.step_id}-{action}.txt"
-            rel_path = f"{request.run_id}/{name}"
-            full_path = run_dir / name
-            full_path.write_text(output, encoding="utf-8")
-            artifacts.append(
-                {
-                    "kind": "text",
-                    "name": name,
-                    "rel_path": rel_path,
-                    "sandbox_path": str(full_path),
-                    "sha256": _sha256(full_path),
-                }
-            )
-
-        # Keep per-step metadata log for auditability in sandbox space.
-        meta_path = run_dir / f"{request.step_id}.json"
-        meta_path.write_text(
-            json.dumps(
-                {
-                    "step_id": request.step_id,
-                    "run_id": request.run_id,
-                    "action_type": action,
-                    "instruction": request.instruction,
-                    "timestamp": ts,
-                },
-                indent=2,
+        step_result = executor.execute(
+            StepRequest(
+                run_id=request.run_id,
+                step_id=request.step_id,
+                action_type=action,
+                instruction=request.instruction,
             ),
-            encoding="utf-8",
+            sandbox_root,
         )
 
         return ExecuteStepResponse(
-            output_text=output,
-            citations=citations,
-            artifacts=artifacts,
-            metadata={"timestamp": ts, "sandbox_root": str(sandbox_root)},
+            output_text=step_result.output_text,
+            citations=step_result.citations,
+            artifacts=step_result.artifacts,
+            metadata=step_result.metadata,
         )
 
     return app
-
-
-def _step_output(action: str, instruction: str) -> str:
-    if action == "navigate":
-        return f"[sandbox-browser] Navigated and collected candidate pages for: {instruction}"
-    if action == "extract":
-        return (
-            "[sandbox-browser] Evidence summary with citations prepared. "
-            f"Focus: {instruction}"
-        )
-    if action == "export":
-        return (
-            "[sandbox-browser] Export artifact prepared for promotion into canonical workspace. "
-            f"Request: {instruction}"
-        )
-    return f"[sandbox-browser] Executed action `{action}`: {instruction}"
-
-
-def _citations(action: str, instruction: str) -> list[dict[str, str]]:
-    if action not in {"navigate", "extract"}:
-        return []
-    query = quote_plus(instruction[:120])
-    return [
-        {
-            "url": f"https://example.com/search?q={query}",
-            "title": "Sandbox Search Result",
-            "snippet": f"Evidence candidate for: {instruction[:120]}",
-        }
-    ]
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        while chunk := fh.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()

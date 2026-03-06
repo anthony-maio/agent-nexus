@@ -78,6 +78,9 @@ ruff format src/
 - Canonical outputs are promoted from sandbox artifact paths into app workspace only via explicit promote actions.
 - App control-plane schema is managed via Alembic in `alembic/`; avoid re-introducing `metadata.create_all` startup behavior.
 - Sandbox runner supports optional shared-token auth via `SANDBOX_RUNNER_TOKEN`; keep API and runner tokens aligned.
+- Sandbox execution backend is selectable via `SANDBOX_EXECUTION_BACKEND`:
+  - `local`: in-process per-step ephemeral workspace.
+  - `docker`: throwaway container per step using `SANDBOX_DOCKER_*` settings.
 - `continuity_core/` is part of this monorepo. It was originally a separate project but is now maintained here. Edit freely.
 
 ## Environment Variables
