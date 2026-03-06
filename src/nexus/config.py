@@ -450,7 +450,7 @@ class NexusSettings(BaseSettings):
 
     def __repr__(self) -> str:
         fields = []
-        for name in self.model_fields:
+        for name in type(self).model_fields:
             val = getattr(self, name)
             if name in self._SENSITIVE_FIELDS:
                 val = "***" if val else None
