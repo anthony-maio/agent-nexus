@@ -57,6 +57,15 @@ def test_docker_executor_rejects_unpinned_image() -> None:
         DockerEphemeralExecutor(image="python:3.13-slim")
 
 
+def test_docker_executor_allows_local_unpinned_image_when_flag_enabled() -> None:
+    executor = DockerEphemeralExecutor(
+        image="agent-nexus-sandbox-step:local",
+        allow_unpinned_local=True,
+        allowed_images=["agent-nexus-sandbox-step:local"],
+    )
+    assert executor.image == "agent-nexus-sandbox-step:local"
+
+
 def test_docker_executor_rejects_non_allowlisted_image() -> None:
     with pytest.raises(ValueError, match="not in SANDBOX_DOCKER_ALLOWED_IMAGES"):
         DockerEphemeralExecutor(
@@ -165,6 +174,19 @@ def test_docker_executor_preflight_reports_browser_support_auto_mode(
     preflight = executor.preflight()
     assert preflight["browser_mode"] == "auto"
     assert preflight["browser_support"].startswith("missing-playwright:")
+
+
+def test_build_executor_from_env_allows_local_unpinned_image_when_enabled() -> None:
+    executor = build_executor_from_env(
+        {
+            "SANDBOX_EXECUTION_BACKEND": "docker",
+            "SANDBOX_DOCKER_IMAGE": "agent-nexus-sandbox-step:local",
+            "SANDBOX_DOCKER_ALLOWED_IMAGES": "agent-nexus-sandbox-step:local",
+            "SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL": "1",
+        }
+    )
+    assert isinstance(executor, DockerEphemeralExecutor)
+    assert executor.image == "agent-nexus-sandbox-step:local"
 
 
 def test_docker_executor_execute_collects_artifacts(

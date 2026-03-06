@@ -48,19 +48,24 @@ def main() -> None:
     from nexus.config import has_config
 
     if not has_config():
-        log.warning("No configuration found (missing DISCORD_TOKEN / OPENROUTER_API_KEY).")
-        log.info("Starting web setup wizard on http://127.0.0.1:8090 ...")
-        log.info("Open your browser to complete first-time setup.")
-        try:
-            from nexus.setup_web import run_setup_server
-            run_setup_server()
-        except Exception:
-            log.exception("Web setup wizard failed.")
-            log.error(
-                "Manual setup: copy config/.env.example to config/.env and fill in "
-                "DISCORD_TOKEN and OPENROUTER_API_KEY, then restart."
-            )
-        sys.exit(0)
+        log.warning("No configuration found for the legacy Discord runtime.")
+        if os.environ.get("NEXUS_ENABLE_LEGACY_SETUP", "").strip() == "1":
+            log.info("Legacy Discord-first setup has been explicitly enabled.")
+            log.info("Starting web setup wizard on http://127.0.0.1:8090 ...")
+            try:
+                from nexus.setup_web import run_setup_server
+
+                run_setup_server()
+            except Exception:
+                log.exception("Web setup wizard failed.")
+            sys.exit(0)
+
+        log.error("Agent Nexus is app-first now; the Discord bot is a secondary runtime.")
+        log.error("Bring up the app stack first, then optionally enable the Discord bridge.")
+        log.error("Recommended: scripts/prod-up.ps1 -SandboxBackend docker")
+        log.error("Or on Unix: ./scripts/prod-up.sh docker")
+        log.error("Set NEXUS_ENABLE_LEGACY_SETUP=1 only if you intentionally want the old wizard.")
+        sys.exit(1)
 
     # Validate config early
     try:

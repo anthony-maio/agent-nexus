@@ -2,6 +2,8 @@
 
 This deployment path targets the app-first stack with the web UI fronted by Caddy.
 
+On a fresh install, open the web app first. If `config/.env` is missing, the app presents a bootstrap screen that writes the initial config and restarts the API.
+
 ## Prerequisites
 
 - Docker Engine + Docker Compose v2
@@ -57,3 +59,4 @@ Optional host-socket mode additionally applies:
 - `nexus-proxy` routes `/api/*` to `nexus-api` and all other paths to `nexus-frontend`.
 - `nexus-api` and `nexus-sandbox-runner` are bound to loopback in production override.
 - Promotion safety checks require artifacts to stay under `APP_SANDBOX_ARTIFACT_ROOT`.
+- `docker` and `docker-host` helper scripts auto-build `agent-nexus-sandbox-step:local`, a Playwright-capable step image used for real browser execution.

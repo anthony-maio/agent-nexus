@@ -19,13 +19,28 @@ host_socket_compose_file="$repo_root/docker/docker-compose.host-socket.yml"
 profile_args=()
 compose_args=(-f "$compose_file" -f "$prod_compose_file")
 
+ensure_sandbox_step_image() {
+  if [[ -z "${SANDBOX_DOCKER_IMAGE:-}" ]]; then
+    echo "Building local browser step image..."
+    docker build -f "$repo_root/docker/Dockerfile.sandbox.step" -t agent-nexus-sandbox-step:local "$repo_root"
+    export SANDBOX_DOCKER_IMAGE="agent-nexus-sandbox-step:local"
+  fi
+  export SANDBOX_DOCKER_ALLOWED_IMAGES="${SANDBOX_DOCKER_ALLOWED_IMAGES:-$SANDBOX_DOCKER_IMAGE}"
+  if [[ "$SANDBOX_DOCKER_IMAGE" == "agent-nexus-sandbox-step:local" ]]; then
+    export SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL="${SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL:-1}"
+  fi
+  export SANDBOX_BROWSER_MODE="${SANDBOX_BROWSER_MODE:-auto}"
+}
+
 if [[ "$backend" == "docker" ]]; then
+  ensure_sandbox_step_image
   export SANDBOX_EXECUTION_BACKEND="docker"
   export SANDBOX_DOCKER_HOST="${SANDBOX_DOCKER_HOST:-tcp://nexus-sandbox-dind:2376}"
   export SANDBOX_DOCKER_TLS_VERIFY="${SANDBOX_DOCKER_TLS_VERIFY:-1}"
   export SANDBOX_DOCKER_CERT_PATH="${SANDBOX_DOCKER_CERT_PATH:-/certs/client}"
   profile_args=(--profile sandbox-docker)
 elif [[ "$backend" == "docker-host" ]]; then
+  ensure_sandbox_step_image
   export SANDBOX_EXECUTION_BACKEND="docker"
   export SANDBOX_DOCKER_HOST="${SANDBOX_DOCKER_HOST:-unix:///var/run/docker.sock}"
   export SANDBOX_DOCKER_TLS_VERIFY="${SANDBOX_DOCKER_TLS_VERIFY:-0}"

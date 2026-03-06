@@ -25,8 +25,27 @@ function Wait-HttpOk {
             }
         } catch {
             Start-Sleep -Seconds 2
-        }
     }
+}
+
+function Ensure-SandboxStepImage {
+    param([string]$RepoRoot)
+
+    if (-not $env:SANDBOX_DOCKER_IMAGE) {
+        Write-Host "Building local browser step image..."
+        & docker build -f (Join-Path $RepoRoot "docker/Dockerfile.sandbox.step") -t agent-nexus-sandbox-step:local $RepoRoot
+        $env:SANDBOX_DOCKER_IMAGE = "agent-nexus-sandbox-step:local"
+    }
+    if (-not $env:SANDBOX_DOCKER_ALLOWED_IMAGES) {
+        $env:SANDBOX_DOCKER_ALLOWED_IMAGES = $env:SANDBOX_DOCKER_IMAGE
+    }
+    if ($env:SANDBOX_DOCKER_IMAGE -eq "agent-nexus-sandbox-step:local" -and -not $env:SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL) {
+        $env:SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL = "1"
+    }
+    if (-not $env:SANDBOX_BROWSER_MODE) {
+        $env:SANDBOX_BROWSER_MODE = "auto"
+    }
+}
     throw "Timed out waiting for $Url"
 }
 
@@ -42,6 +61,7 @@ $composeArgs = @("-f", $composeFile)
 
 $profileArgs = @()
 if ($SandboxBackend -eq "docker") {
+    Ensure-SandboxStepImage -RepoRoot $repoRoot
     $env:SANDBOX_EXECUTION_BACKEND = "docker"
     if (-not $env:SANDBOX_DOCKER_HOST) {
         $env:SANDBOX_DOCKER_HOST = "tcp://nexus-sandbox-dind:2376"
@@ -54,6 +74,7 @@ if ($SandboxBackend -eq "docker") {
     }
     $profileArgs = @("--profile", "sandbox-docker")
 } elseif ($SandboxBackend -eq "docker-host") {
+    Ensure-SandboxStepImage -RepoRoot $repoRoot
     $env:SANDBOX_EXECUTION_BACKEND = "docker"
     if (-not $env:SANDBOX_DOCKER_HOST) {
         $env:SANDBOX_DOCKER_HOST = "unix:///var/run/docker.sock"

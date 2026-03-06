@@ -15,9 +15,21 @@ async function api(path, method = "GET", token = "", body = null) {
   return response.json();
 }
 
+const initialBootstrapForm = {
+  admin_username: "admin",
+  admin_password: "",
+  sandbox_backend: "docker",
+  browser_mode: "auto",
+  openrouter_api_key: "",
+  discord_token: "",
+  discord_bridge_channel: "human",
+  public_host: "",
+  acme_email: ""
+};
+
 function App() {
   const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("change-me-now");
+  const [password, setPassword] = useState("");
   const [session, setSession] = useState(null);
   const [objective, setObjective] = useState("");
   const [runId, setRunId] = useState("");
@@ -28,19 +40,39 @@ function App() {
   const [traceOpen, setTraceOpen] = useState(true);
   const [error, setError] = useState("");
   const [streamState, setStreamState] = useState("disconnected");
+  const [bootstrapLoading, setBootstrapLoading] = useState(true);
+  const [bootstrapStatus, setBootstrapStatus] = useState(null);
+  const [bootstrapForm, setBootstrapForm] = useState(initialBootstrapForm);
+  const [bootstrapSaving, setBootstrapSaving] = useState(false);
+  const [bootstrapRestarting, setBootstrapRestarting] = useState(false);
   const wsRef = useRef(null);
 
   const token = session?.token || "";
-
   const pendingForCurrent = useMemo(
-    () => pending.filter((i) => !runId || i.run_id === runId),
+    () => pending.filter((item) => !runId || item.run_id === runId),
     [pending, runId]
   );
+  const showBootstrap = bootstrapLoading || bootstrapRestarting || bootstrapStatus?.setup_required;
+
+  useEffect(() => {
+    loadBootstrapStatus();
+  }, []);
+
+  useEffect(() => {
+    if (!bootstrapRestarting) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      loadBootstrapStatus({ silent: true });
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [bootstrapRestarting]);
 
   useEffect(() => {
     if (!runId || !token) {
       setStreamState("disconnected");
-      return;
+      return undefined;
     }
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -75,18 +107,65 @@ function App() {
     };
   }, [runId, token]);
 
+  async function loadBootstrapStatus(options = {}) {
+    const { silent = false } = options;
+    if (!silent) {
+      setBootstrapLoading(true);
+    }
+    try {
+      const data = await api("/bootstrap/status");
+      setBootstrapStatus(data);
+      if (!data.setup_required) {
+        setBootstrapRestarting(false);
+        setUsername((current) => current || bootstrapForm.admin_username || "admin");
+      }
+    } catch (err) {
+      if (!silent) {
+        setError(String(err));
+      }
+    } finally {
+      if (!silent) {
+        setBootstrapLoading(false);
+      }
+    }
+  }
+
+  async function submitBootstrap() {
+    setBootstrapSaving(true);
+    setError("");
+    try {
+      const data = await api("/bootstrap/configure", "POST", "", bootstrapForm);
+      setBootstrapStatus({
+        configured: true,
+        setup_required: false,
+        config_path: data.config_path,
+        uses_default_admin_password: false
+      });
+      setBootstrapRestarting(Boolean(data.restart_required));
+      setUsername(bootstrapForm.admin_username);
+      setPassword(bootstrapForm.admin_password);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBootstrapSaving(false);
+    }
+  }
+
   async function login() {
     setError("");
     try {
       const data = await api("/sessions", "POST", "", { username, password });
       setSession(data);
+      await refreshPending(data.token);
     } catch (err) {
       setError(String(err));
     }
   }
 
   async function createRun() {
-    if (!objective.trim()) return;
+    if (!objective.trim()) {
+      return;
+    }
     setError("");
     try {
       const data = await api("/runs", "POST", token, {
@@ -103,7 +182,9 @@ function App() {
   }
 
   async function refreshRun(id = runId) {
-    if (!id) return;
+    if (!id) {
+      return;
+    }
     setError("");
     try {
       const [runData, timelineData, citationsData] = await Promise.all([
@@ -119,10 +200,12 @@ function App() {
     }
   }
 
-  async function refreshPending() {
-    if (!token) return;
+  async function refreshPending(currentToken = token) {
+    if (!currentToken) {
+      return;
+    }
     try {
-      const data = await api("/approvals/pending", "GET", token);
+      const data = await api("/approvals/pending", "GET", currentToken);
       setPending(data.items || []);
     } catch (err) {
       setError(String(err));
@@ -130,7 +213,9 @@ function App() {
   }
 
   async function decide(stepId, decision) {
-    if (!runId) return;
+    if (!runId) {
+      return;
+    }
     setError("");
     try {
       await api(`/runs/${runId}/approvals/${stepId}`, "POST", token, {
@@ -145,7 +230,9 @@ function App() {
   }
 
   async function promote(artifactId) {
-    if (!runId) return;
+    if (!runId) {
+      return;
+    }
     setError("");
     try {
       await api(`/runs/${runId}/artifacts/${artifactId}/promote`, "POST", token, {
@@ -157,29 +244,172 @@ function App() {
     }
   }
 
+  function updateBootstrapField(field, value) {
+    setBootstrapForm((current) => ({ ...current, [field]: value }));
+  }
+
   return (
     <div className="app-shell">
-      <header>
-        <h1>Agent Nexus</h1>
-        <p>Single-assistant control with optional trace, citations, and approvals.</p>
+      <header className="hero">
+        <div>
+          <span className="eyebrow">Agent Nexus</span>
+          <h1>Supervised browser automation, app-first.</h1>
+          <p>
+            Primary web control plane with approvals, citations, sandboxed execution,
+            and an optional trace surface.
+          </p>
+        </div>
+        <div className="hero-panel">
+          <div className="metric">
+            <span>Bootstrap</span>
+            <strong>
+              {bootstrapLoading ? "checking" : bootstrapStatus?.setup_required ? "required" : "ready"}
+            </strong>
+          </div>
+          <div className="metric">
+            <span>Stream</span>
+            <strong>{streamState}</strong>
+          </div>
+        </div>
       </header>
 
-      {!session ? (
+      {showBootstrap ? (
+        <section className="card setup-card">
+          <div className="setup-header">
+            <div>
+              <h2>{bootstrapRestarting ? "Restarting control plane" : "First-run setup"}</h2>
+              <p>
+                {bootstrapRestarting
+                  ? "Configuration was written. The API will come back up with the new settings."
+                  : "This replaces the old Discord-first setup path. Configure the app runtime first, then optionally add the Discord bridge."}
+              </p>
+            </div>
+            {bootstrapStatus?.config_path ? (
+              <code>{bootstrapStatus.config_path}</code>
+            ) : null}
+          </div>
+
+          {bootstrapRestarting ? (
+            <div className="callout">
+              <p>Waiting for the API to restart and report healthy bootstrap status.</p>
+              <button onClick={() => loadBootstrapStatus()}>Check readiness</button>
+            </div>
+          ) : (
+            <div className="setup-grid">
+              <label>
+                Admin Username
+                <input
+                  value={bootstrapForm.admin_username}
+                  onChange={(event) => updateBootstrapField("admin_username", event.target.value)}
+                />
+              </label>
+              <label>
+                Admin Password
+                <input
+                  type="password"
+                  value={bootstrapForm.admin_password}
+                  onChange={(event) => updateBootstrapField("admin_password", event.target.value)}
+                />
+              </label>
+              <label>
+                Sandbox Backend
+                <select
+                  value={bootstrapForm.sandbox_backend}
+                  onChange={(event) => updateBootstrapField("sandbox_backend", event.target.value)}
+                >
+                  <option value="docker">Docker sandbox</option>
+                  <option value="docker-host">Host socket</option>
+                  <option value="local">Local process</option>
+                </select>
+              </label>
+              <label>
+                Browser Mode
+                <select
+                  value={bootstrapForm.browser_mode}
+                  onChange={(event) => updateBootstrapField("browser_mode", event.target.value)}
+                >
+                  <option value="auto">Auto fallback</option>
+                  <option value="real">Require real browser</option>
+                  <option value="simulated">Simulated only</option>
+                </select>
+              </label>
+              <label className="span-2">
+                OpenRouter API Key
+                <input
+                  type="password"
+                  value={bootstrapForm.openrouter_api_key}
+                  onChange={(event) => updateBootstrapField("openrouter_api_key", event.target.value)}
+                  placeholder="Optional for bootstrap, recommended for model-backed runs"
+                />
+              </label>
+              <label>
+                Public Host
+                <input
+                  value={bootstrapForm.public_host}
+                  onChange={(event) => updateBootstrapField("public_host", event.target.value)}
+                  placeholder="Optional domain for Caddy/TLS"
+                />
+              </label>
+              <label>
+                ACME Email
+                <input
+                  value={bootstrapForm.acme_email}
+                  onChange={(event) => updateBootstrapField("acme_email", event.target.value)}
+                  placeholder="Optional certificate contact"
+                />
+              </label>
+              <label className="span-2">
+                Discord Token
+                <input
+                  type="password"
+                  value={bootstrapForm.discord_token}
+                  onChange={(event) => updateBootstrapField("discord_token", event.target.value)}
+                  placeholder="Optional, only for the secondary bridge"
+                />
+              </label>
+              <label className="span-2">
+                Discord Bridge Channel
+                <input
+                  value={bootstrapForm.discord_bridge_channel}
+                  onChange={(event) => updateBootstrapField("discord_bridge_channel", event.target.value)}
+                />
+              </label>
+            </div>
+          )}
+
+          {!bootstrapRestarting ? (
+            <div className="row">
+              <button disabled={bootstrapSaving} onClick={submitBootstrap}>
+                {bootstrapSaving ? "Saving setup..." : "Write config and restart"}
+              </button>
+              <button className="ghost" onClick={() => loadBootstrapStatus()}>
+                Refresh status
+              </button>
+            </div>
+          ) : null}
+        </section>
+      ) : !session ? (
         <section className="card">
           <h2>Admin Login</h2>
+          <p className="subtle">Bootstrap is complete. Sign in to start or supervise runs.</p>
           <label>
             Username
-            <input value={username} onChange={(e) => setUsername(e.target.value)} />
+            <input value={username} onChange={(event) => setUsername(event.target.value)} />
           </label>
           <label>
             Password
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
             />
           </label>
-          <button onClick={login}>Create Session</button>
+          <div className="row">
+            <button onClick={login}>Create Session</button>
+            <button className="ghost" onClick={() => loadBootstrapStatus()}>
+              Re-check setup
+            </button>
+          </div>
         </section>
       ) : (
         <main className="layout">
@@ -190,14 +420,16 @@ function App() {
               <textarea
                 rows={5}
                 value={objective}
-                onChange={(e) => setObjective(e.target.value)}
+                onChange={(event) => setObjective(event.target.value)}
                 placeholder="Research and execute a browser-first task..."
               />
             </label>
             <div className="row">
               <button onClick={createRun}>Create Run</button>
-              <button onClick={() => refreshRun()}>Refresh Run</button>
-              <button onClick={() => setTraceOpen((x) => !x)}>
+              <button className="ghost" onClick={() => refreshRun()}>
+                Refresh Run
+              </button>
+              <button className="ghost" onClick={() => setTraceOpen((open) => !open)}>
                 {traceOpen ? "Hide" : "Show"} Trace
               </button>
             </div>
@@ -216,14 +448,20 @@ function App() {
                   <strong>Live Stream:</strong> {streamState}
                 </p>
               </div>
-            ) : null}
+            ) : (
+              <p className="subtle">
+                Create a run to produce citations, artifacts, and approval-gated actions.
+              </p>
+            )}
           </section>
 
           <aside className="card sidebar">
             <h3>Pending Approvals</h3>
-            <button onClick={refreshPending}>Refresh</button>
+            <button className="ghost" onClick={() => refreshPending()}>
+              Refresh
+            </button>
             {pendingForCurrent.length === 0 ? (
-              <p>No pending approvals.</p>
+              <p className="subtle">No pending approvals.</p>
             ) : (
               pendingForCurrent.map((item) => (
                 <div key={item.step_id} className="approval">
@@ -248,13 +486,14 @@ function App() {
         <section className="card">
           <h2>Action Timeline</h2>
           {timeline.length === 0 ? (
-            <p>No events yet.</p>
+            <p className="subtle">No events yet.</p>
           ) : (
-            <ul>
-              {timeline.map((item, idx) => (
-                <li key={`${item.type}-${idx}`}>
-                  <code>{item.timestamp || "n/a"}</code> - <strong>{item.type}</strong>{" "}
-                  {item.action_type ? `(${item.action_type})` : ""}
+            <ul className="timeline">
+              {timeline.map((item, index) => (
+                <li key={`${item.type}-${index}`}>
+                  <code>{item.timestamp || "n/a"}</code>
+                  <strong>{item.type}</strong>
+                  {item.action_type ? <span>{item.action_type}</span> : null}
                 </li>
               ))}
             </ul>
@@ -263,37 +502,44 @@ function App() {
       ) : null}
 
       {run ? (
-        <section className="card">
-          <h2>Citations</h2>
-          {citations.length === 0 ? (
-            <p>No citations yet.</p>
-          ) : (
-            <ul>
-              {citations.map((c) => (
-                <li key={c.id}>
-                  <a href={c.url} target="_blank" rel="noreferrer">
-                    {c.title || c.url}
-                  </a>
-                  <p>{c.snippet}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-          <h2>Artifacts</h2>
-          {run.artifacts?.length ? (
-            <ul>
-              {run.artifacts.map((a) => (
-                <li key={a.id}>
-                  {a.name} [{a.kind}] {a.promoted ? "(promoted)" : ""}
-                  {!a.promoted ? (
-                    <button onClick={() => promote(a.id)}>Promote</button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>No artifacts yet.</p>
-          )}
+        <section className="card split-card">
+          <div>
+            <h2>Citations</h2>
+            {citations.length === 0 ? (
+              <p className="subtle">No citations yet.</p>
+            ) : (
+              <ul className="stack-list">
+                {citations.map((citation) => (
+                  <li key={citation.id}>
+                    <a href={citation.url} target="_blank" rel="noreferrer">
+                      {citation.title || citation.url}
+                    </a>
+                    <p>{citation.snippet}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div>
+            <h2>Artifacts</h2>
+            {run.artifacts?.length ? (
+              <ul className="stack-list">
+                {run.artifacts.map((artifact) => (
+                  <li key={artifact.id}>
+                    <p>
+                      <strong>{artifact.name}</strong> [{artifact.kind}]{" "}
+                      {artifact.promoted ? "(promoted)" : ""}
+                    </p>
+                    {!artifact.promoted ? (
+                      <button onClick={() => promote(artifact.id)}>Promote</button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="subtle">No artifacts yet.</p>
+            )}
+          </div>
         </section>
       ) : null}
 

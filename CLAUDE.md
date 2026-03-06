@@ -77,6 +77,9 @@ scripts/prod-up.ps1 -SandboxBackend docker-host
 ./scripts/prod-up.sh docker
 ./scripts/prod-up.sh docker-host
 
+# First-run bootstrap
+# If config/.env is missing, the web app now owns setup before login.
+
 # Development (without Docker)
 pip install -e ".[dev]"
 
@@ -103,6 +106,7 @@ ruff format src/
   - `local`: in-process per-step ephemeral workspace.
   - `docker`: throwaway container per step using `SANDBOX_DOCKER_*` settings (`network=none`, caps dropped, read-only rootfs, pids/memory/cpu limits).
   - Docker backend enforces pinned digest images and allowlist validation (`SANDBOX_DOCKER_IMAGE`, `SANDBOX_DOCKER_ALLOWED_IMAGES`).
+  - Helper scripts auto-build `agent-nexus-sandbox-step:local` and opt it in with `SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL=1` for browser-capable local runs.
   - Browser mode is controlled by `SANDBOX_BROWSER_MODE` (`simulated|auto|real`).
   - Compose `sandbox-docker` profile uses a dedicated TLS-enabled `nexus-sandbox-dind` daemon on an internal network.
   - Host-socket mode is supported via `docker/docker-compose.host-socket.yml` and should only be used in trusted local/dev environments.

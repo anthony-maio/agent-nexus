@@ -112,6 +112,7 @@ class DockerEphemeralExecutor:
         docker_tls_verify: bool = False,
         docker_cert_path: str = "",
         allowed_images: list[str] | None = None,
+        allow_unpinned_local: bool = False,
         browser_mode: str = "auto",
         browser_timeout_ms: int = 15_000,
         capture_screenshot: bool = True,
@@ -134,9 +135,10 @@ class DockerEphemeralExecutor:
         self.browser_timeout_ms = browser_timeout_ms
         self.capture_screenshot = capture_screenshot
         self.allowed_images = allowed_images or []
+        self.allow_unpinned_local = allow_unpinned_local
         if not self.image:
             raise ValueError("Docker executor requires SANDBOX_DOCKER_IMAGE")
-        if "@sha256:" not in self.image:
+        if "@sha256:" not in self.image and not self.allow_unpinned_local:
             raise ValueError("SANDBOX_DOCKER_IMAGE must be pinned by digest (`@sha256:...`).")
         if self.allowed_images and self.image not in self.allowed_images:
             raise ValueError(
@@ -392,6 +394,9 @@ def build_executor_from_env(env: dict[str, str]) -> StepExecutor:
             docker_tls_verify=(env.get("SANDBOX_DOCKER_TLS_VERIFY", "1").strip() != "0"),
             docker_cert_path=env.get("SANDBOX_DOCKER_CERT_PATH", "").strip(),
             allowed_images=allowed_images,
+            allow_unpinned_local=(
+                env.get("SANDBOX_DOCKER_ALLOW_UNPINNED_LOCAL", "0").strip() == "1"
+            ),
             browser_mode=env.get("SANDBOX_BROWSER_MODE", "auto").strip().lower() or "auto",
             browser_timeout_ms=int(env.get("SANDBOX_BROWSER_TIMEOUT_MS", "15000")),
             capture_screenshot=(env.get("SANDBOX_CAPTURE_SCREENSHOT", "1").strip() != "0"),

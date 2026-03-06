@@ -1,0 +1,9 @@
+FROM mcr.microsoft.com/playwright/python:v1.58.0-noble
+
+WORKDIR /work
+
+# The upstream image bundles browsers and OS dependencies.
+# Install the matching Python package so the sandbox executor can import Playwright.
+RUN python -m pip install --no-cache-dir playwright==1.58.0
+
+CMD ["python", "--version"]

@@ -17,9 +17,13 @@ from nexus_api.auth import (
     ensure_admin_user,
     validate_bearer_token,
 )
+from nexus_api.bootstrap import bootstrap_status, write_bootstrap_config
 from nexus_api.repository import SqlRunRepository
 from nexus_api.schemas import (
     ApprovalRequest,
+    BootstrapConfigureRequest,
+    BootstrapConfigureResponse,
+    BootstrapStatusResponse,
     PendingApprovalItem,
     PromotionRequest,
     RunCreateRequest,
@@ -78,6 +82,19 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/bootstrap/status", response_model=BootstrapStatusResponse)
+    def get_bootstrap_status() -> BootstrapStatusResponse:
+        return bootstrap_status(ctx.settings)
+
+    @app.post("/bootstrap/configure", response_model=BootstrapConfigureResponse)
+    def configure_bootstrap(
+        request: BootstrapConfigureRequest,
+    ) -> BootstrapConfigureResponse:
+        status = bootstrap_status(ctx.settings)
+        if not status.setup_required:
+            raise HTTPException(status_code=409, detail="App is already configured")
+        return write_bootstrap_config(ctx.settings, request)
 
     @app.post("/sessions", response_model=SessionCreateResponse)
     def create_session(

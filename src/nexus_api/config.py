@@ -28,6 +28,8 @@ class ApiSettings(BaseSettings):
     APP_SESSION_TTL_HOURS: int = Field(default=24)
     APP_CANONICAL_WORKSPACE: str = Field(default="workspace/app")
     APP_SANDBOX_ARTIFACT_ROOT: str = Field(default="data/sandbox")
+    APP_CONFIG_PATH: str = Field(default="config/.env")
+    APP_BOOTSTRAP_EXIT_AFTER_CONFIGURE: bool = Field(default=True)
     SANDBOX_RUNNER_URL: str = Field(default="http://localhost:8020")
     SANDBOX_RUNNER_TOKEN: str = Field(
         default="",
@@ -41,3 +43,7 @@ class ApiSettings(BaseSettings):
     @property
     def sandbox_artifact_root_path(self) -> Path:
         return Path(self.APP_SANDBOX_ARTIFACT_ROOT).resolve()
+
+    @property
+    def config_path(self) -> Path:
+        return Path(self.APP_CONFIG_PATH).resolve()
