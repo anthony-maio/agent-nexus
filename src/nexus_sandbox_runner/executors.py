@@ -169,12 +169,21 @@ class DockerEphemeralExecutor:
             raise RuntimeError(f"Unable to reach Docker daemon: {err}")
 
         version = (proc.stdout or "").strip() or "unknown"
+        browser_support = "n/a"
+        if self.browser_mode in {"auto", "real"}:
+            browser_support = self._probe_browser_support()
+            if self.browser_mode == "real" and browser_support != "ready":
+                raise RuntimeError(
+                    "SANDBOX_BROWSER_MODE=real requires a Playwright-capable "
+                    "SANDBOX_DOCKER_IMAGE."
+                )
         return {
             "status": "ok",
             "backend": self.backend_name,
             "docker_server_version": version,
             "sandbox_image": self.image,
             "browser_mode": self.browser_mode,
+            "browser_support": browser_support,
         }
 
     def execute(self, request: StepRequest, sandbox_root: Path) -> StepResult:
@@ -334,6 +343,36 @@ class DockerEphemeralExecutor:
                 }
             )
         return artifacts
+
+    def _probe_browser_support(self) -> str:
+        try:
+            proc = subprocess.run(
+                [
+                    self.docker_bin,
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    self.image,
+                    "python",
+                    "-c",
+                    "from playwright.sync_api import sync_playwright",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=self._docker_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return "probe-timeout"
+
+        if proc.returncode == 0:
+            return "ready"
+        stderr = (proc.stderr or proc.stdout or "").strip()
+        if not stderr:
+            stderr = "import failed"
+        return f"missing-playwright:{stderr[:120]}"
 
 
 def build_executor_from_env(env: dict[str, str]) -> StepExecutor:

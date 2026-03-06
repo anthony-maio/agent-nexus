@@ -75,6 +75,8 @@ class EngineRepository(Protocol):
         promoted_by: str,
     ) -> None: ...
 
+    def latest_approval_for_step(self, run_id: str, step_id: str) -> dict[str, Any] | None: ...
+
 
 class RunEngine:
     """Executes run steps using risk-tier policy and adapter boundaries."""
@@ -86,12 +88,16 @@ class RunEngine:
         interaction: InteractionAdapter,
         events: RunEventBus,
         canonical_workspace: Path,
+        sandbox_artifacts_root: Path | None = None,
     ) -> None:
         self.repo = repository
         self.execution = execution
         self.interaction = interaction
         self.events = events
         self.canonical_workspace = canonical_workspace
+        self.sandbox_artifacts_root = (
+            sandbox_artifacts_root.resolve() if sandbox_artifacts_root else None
+        )
         self.canonical_workspace.mkdir(parents=True, exist_ok=True)
 
     async def create_run(
@@ -166,17 +172,46 @@ class RunEngine:
         promoted_by: str,
     ) -> dict[str, Any]:
         """Copy artifact from sandbox space into canonical app workspace."""
+        run = self.repo.get_run(run_id)
+        if run is None:
+            raise ValueError("Run not found")
         artifact = self.repo.get_artifact(artifact_id)
         if artifact is None or artifact["run_id"] != run_id:
             raise ValueError("Artifact not found for run")
+        if artifact.get("promoted"):
+            raise ValueError("Artifact already promoted")
 
-        source = Path(artifact["sandbox_path"])
+        step = self.repo.get_step(artifact["step_id"])
+        if step is None:
+            raise ValueError("Artifact step not found")
+        if step["status"] != StepStatus.COMPLETED.value:
+            raise ValueError("Artifact step is not completed")
+        if is_high_risk_action(step["action_type"]) and run.get("mode") != RunMode.AUTOPILOT.value:
+            approval = self.repo.latest_approval_for_step(run_id, step["id"])
+            if approval is None or approval.get("decision") != ApprovalDecision.APPROVE.value:
+                raise PermissionError("High-risk artifact requires approved step before promotion")
+
+        source = Path(artifact["sandbox_path"]).resolve()
         if not source.exists():
             raise FileNotFoundError(f"Sandbox artifact missing: {source}")
+        if self.sandbox_artifacts_root is not None:
+            root = self.sandbox_artifacts_root
+            if root != source and root not in source.parents:
+                raise PermissionError("Artifact path is outside sandbox artifact root")
+        expected_sha = str(artifact.get("sha256", "")).strip()
+        if expected_sha and self._sha256(source) != expected_sha:
+            raise PermissionError("Artifact integrity check failed")
+
+        artifact_name = Path(str(artifact.get("name", ""))).name
+        if not artifact_name or artifact_name != artifact.get("name", ""):
+            raise ValueError("Artifact name is invalid")
 
         run_dir = self.canonical_workspace / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        target = run_dir / artifact["name"]
+        target = (run_dir / artifact_name).resolve()
+        run_dir_resolved = run_dir.resolve()
+        if run_dir_resolved != target and run_dir_resolved not in target.parents:
+            raise PermissionError("Promotion target escapes canonical workspace")
         shutil.copy2(source, target)
 
         self.repo.mark_artifact_promoted(artifact_id)

@@ -62,6 +62,9 @@ SANDBOX_EXECUTION_BACKEND=docker docker compose -f docker/docker-compose.yml --p
 # Docker sandbox backend via host socket (trusted environments only)
 SANDBOX_EXECUTION_BACKEND=docker docker compose -f docker/docker-compose.yml -f docker/docker-compose.host-socket.yml up -d
 
+# Production app stack with reverse proxy + frontend
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --build
+
 # One-click helpers
 scripts/dev-up.ps1 -SandboxBackend local
 scripts/dev-up.ps1 -SandboxBackend docker
@@ -69,6 +72,10 @@ scripts/dev-up.ps1 -SandboxBackend docker-host
 ./scripts/dev-up.sh local
 ./scripts/dev-up.sh docker
 ./scripts/dev-up.sh docker-host
+scripts/prod-up.ps1 -SandboxBackend docker
+scripts/prod-up.ps1 -SandboxBackend docker-host
+./scripts/prod-up.sh docker
+./scripts/prod-up.sh docker-host
 
 # Development (without Docker)
 pip install -e ".[dev]"
@@ -96,8 +103,10 @@ ruff format src/
   - `local`: in-process per-step ephemeral workspace.
   - `docker`: throwaway container per step using `SANDBOX_DOCKER_*` settings (`network=none`, caps dropped, read-only rootfs, pids/memory/cpu limits).
   - Docker backend enforces pinned digest images and allowlist validation (`SANDBOX_DOCKER_IMAGE`, `SANDBOX_DOCKER_ALLOWED_IMAGES`).
+  - Browser mode is controlled by `SANDBOX_BROWSER_MODE` (`simulated|auto|real`).
   - Compose `sandbox-docker` profile uses a dedicated TLS-enabled `nexus-sandbox-dind` daemon on an internal network.
   - Host-socket mode is supported via `docker/docker-compose.host-socket.yml` and should only be used in trusted local/dev environments.
+  - Production reverse proxy + frontend bundle is defined in `docker/docker-compose.prod.yml`.
 - `continuity_core/` is part of this monorepo. It was originally a separate project but is now maintained here. Edit freely.
 
 ## Environment Variables
@@ -106,6 +115,7 @@ App-first required:
 - `APP_DATABASE_URL`
 - `APP_ADMIN_USERNAME`
 - `APP_ADMIN_PASSWORD`
+- `APP_SANDBOX_ARTIFACT_ROOT` (promotion source-root enforcement)
 
 Optional/secondary:
 - `DISCORD_TOKEN` (for bridge or legacy bot runtime)
@@ -120,6 +130,8 @@ Infrastructure services can be mixed with external equivalents via environment o
 - `nexus-api` - App control plane (FastAPI)
 - `nexus-sandbox-runner` - Isolated execution service
 - `nexus-sandbox-dind` - Optional Docker daemon for sandbox backend (profile: sandbox-docker)
+- `nexus-frontend` - Primary web app UI bundle (production compose override)
+- `nexus-proxy` - Caddy reverse proxy with optional automatic TLS
 - `nexus-discord-bridge` - Optional remote approval/status bridge
 - `nexus-bot` - Legacy Discord bot runtime (optional)
 - `nexus-qdrant` - Vector memory (port 6333, profile: qdrant)

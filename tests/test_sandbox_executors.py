@@ -67,6 +67,14 @@ def test_docker_executor_rejects_non_allowlisted_image() -> None:
         )
 
 
+def test_docker_executor_rejects_invalid_browser_mode() -> None:
+    with pytest.raises(ValueError, match="Unsupported SANDBOX_BROWSER_MODE"):
+        DockerEphemeralExecutor(
+            image=DEFAULT_DOCKER_IMAGE,
+            browser_mode="broken",
+        )
+
+
 def test_docker_executor_build_command_contains_isolation_flags(tmp_path: Path) -> None:
     executor = DockerEphemeralExecutor(
         image=DEFAULT_DOCKER_IMAGE,
@@ -98,6 +106,65 @@ def test_docker_executor_build_command_contains_isolation_flags(tmp_path: Path) 
     assert "--cap-drop" in command
     assert "ALL" in command
     assert "--pids-limit" in command
+
+
+def test_docker_executor_preflight_fails_real_mode_when_browser_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = DockerEphemeralExecutor(
+        image=DEFAULT_DOCKER_IMAGE,
+        browser_mode="real",
+    )
+
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if cmd[:3] == ["docker", "info", "--format"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout="27.1.0",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=1,
+            stdout="",
+            stderr="ModuleNotFoundError: No module named 'playwright'",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: "docker")
+    with pytest.raises(RuntimeError, match="Playwright-capable"):
+        executor.preflight()
+
+
+def test_docker_executor_preflight_reports_browser_support_auto_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = DockerEphemeralExecutor(
+        image=DEFAULT_DOCKER_IMAGE,
+        browser_mode="auto",
+    )
+
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if cmd[:3] == ["docker", "info", "--format"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout="27.1.0",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=1,
+            stdout="",
+            stderr="ModuleNotFoundError: No module named 'playwright'",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: "docker")
+    preflight = executor.preflight()
+    assert preflight["browser_mode"] == "auto"
+    assert preflight["browser_support"].startswith("missing-playwright:")
 
 
 def test_docker_executor_execute_collects_artifacts(

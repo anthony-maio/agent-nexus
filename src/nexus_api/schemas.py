@@ -31,7 +31,7 @@ class ApprovalRequest(BaseModel):
 
 
 class PromotionRequest(BaseModel):
-    promoted_by: str = Field(min_length=1, max_length=120)
+    promoted_by: str = Field(default="", max_length=120)
 
 
 class PendingApprovalItem(BaseModel):

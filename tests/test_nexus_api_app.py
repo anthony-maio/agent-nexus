@@ -65,6 +65,7 @@ def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = Non
     settings = ApiSettings(
         APP_DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}",
         APP_CANONICAL_WORKSPACE=str(tmp_path / "workspace"),
+        APP_SANDBOX_ARTIFACT_ROOT=str(tmp_path / "sandbox"),
         APP_ADMIN_USERNAME="admin",
         APP_ADMIN_PASSWORD="secret",
         APP_SESSION_TTL_HOURS=24,
@@ -139,6 +140,115 @@ def test_run_lifecycle_with_approval_and_promotion(tmp_path: Path) -> None:
     citations = client.get(f"/runs/{run_id}/citations", headers=headers)
     assert citations.status_code == 200
     assert len(citations.json()["citations"]) >= 3
+
+
+def test_promote_rejects_integrity_mismatch(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Prepare extract artifact",
+            "mode": "manual",
+            "steps": [
+                {"action_type": "extract", "instruction": "summarize findings"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run_id = create.json()["id"]
+
+    details = client.get(f"/runs/{run_id}", headers=headers)
+    assert details.status_code == 200
+    artifact = details.json()["artifacts"][0]
+    Path(artifact["sandbox_path"]).write_text("tampered", encoding="utf-8")
+
+    promote = client.post(
+        f"/runs/{run_id}/artifacts/{artifact['id']}/promote",
+        headers=headers,
+        json={"promoted_by": "admin"},
+    )
+    assert promote.status_code == 403
+    assert "integrity check failed" in promote.json()["detail"]
+
+
+def test_promote_rejects_user_spoof_and_repeat_promote(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Prepare extract artifact",
+            "mode": "manual",
+            "steps": [
+                {"action_type": "extract", "instruction": "summarize findings"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run_id = create.json()["id"]
+
+    details = client.get(f"/runs/{run_id}", headers=headers)
+    assert details.status_code == 200
+    artifact_id = details.json()["artifacts"][0]["id"]
+
+    spoof = client.post(
+        f"/runs/{run_id}/artifacts/{artifact_id}/promote",
+        headers=headers,
+        json={"promoted_by": "different-user"},
+    )
+    assert spoof.status_code == 403
+    assert "must match authenticated user" in spoof.json()["detail"]
+
+    first = client.post(
+        f"/runs/{run_id}/artifacts/{artifact_id}/promote",
+        headers=headers,
+        json={"promoted_by": "admin"},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        f"/runs/{run_id}/artifacts/{artifact_id}/promote",
+        headers=headers,
+        json={"promoted_by": "admin"},
+    )
+    assert second.status_code == 400
+    assert "already promoted" in second.json()["detail"]
+
+
+def test_autopilot_high_risk_artifact_can_promote_without_approval_record(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Autopilot export run",
+            "mode": "autopilot",
+            "steps": [
+                {"action_type": "export", "instruction": "export report"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run_id = create.json()["id"]
+    assert create.json()["status"] == "completed"
+
+    details = client.get(f"/runs/{run_id}", headers=headers)
+    assert details.status_code == 200
+    artifact_id = details.json()["artifacts"][0]["id"]
+
+    promote = client.post(
+        f"/runs/{run_id}/artifacts/{artifact_id}/promote",
+        headers=headers,
+        json={"promoted_by": "admin"},
+    )
+    assert promote.status_code == 200
 
 
 def test_run_stream_ready_event(tmp_path: Path) -> None:

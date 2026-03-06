@@ -27,6 +27,7 @@ class ApiSettings(BaseSettings):
     APP_ADMIN_PASSWORD: str = Field(default="change-me-now")
     APP_SESSION_TTL_HOURS: int = Field(default=24)
     APP_CANONICAL_WORKSPACE: str = Field(default="workspace/app")
+    APP_SANDBOX_ARTIFACT_ROOT: str = Field(default="data/sandbox")
     SANDBOX_RUNNER_URL: str = Field(default="http://localhost:8020")
     SANDBOX_RUNNER_TOKEN: str = Field(
         default="",
@@ -36,3 +37,7 @@ class ApiSettings(BaseSettings):
     @property
     def canonical_workspace_path(self) -> Path:
         return Path(self.APP_CANONICAL_WORKSPACE).resolve()
+
+    @property
+    def sandbox_artifact_root_path(self) -> Path:
+        return Path(self.APP_SANDBOX_ARTIFACT_ROOT).resolve()

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-nexus"
 version = "0.1.0"
-description = "Agent Nexus: Multi-model AI swarm orchestrated through Discord"
+description = "Agent Nexus: App-first multi-model AI swarm with supervised automation"
 readme = {text = "", content-type = "text/markdown"}
 authors = [{ name = "Anthony Maio" }]
 license = "MIT"

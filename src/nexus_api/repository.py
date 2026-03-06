@@ -194,6 +194,24 @@ class SqlRunRepository:
         )
         self.session.flush()
 
+    def latest_approval_for_step(self, run_id: str, step_id: str) -> dict[str, Any] | None:
+        row = self.session.scalar(
+            select(Approval)
+            .where(Approval.run_id == run_id, Approval.step_id == step_id)
+            .order_by(Approval.decided_at.desc())
+        )
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "run_id": row.run_id,
+            "step_id": row.step_id,
+            "decision": row.decision,
+            "decided_by": row.decided_by,
+            "reason": row.reason,
+            "decided_at": row.decided_at.isoformat() if row.decided_at else None,
+        }
+
     def list_citations(self, run_id: str) -> list[dict[str, Any]]:
         rows = self.session.scalars(
             select(Citation).where(Citation.run_id == run_id).order_by(Citation.created_at.asc())
@@ -248,6 +266,25 @@ class SqlRunRepository:
             for r in rows
         ]
 
+    def list_promotions(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.session.scalars(
+            select(Promotion)
+            .where(Promotion.run_id == run_id)
+            .order_by(Promotion.promoted_at.asc())
+        ).all()
+        return [
+            {
+                "id": r.id,
+                "run_id": r.run_id,
+                "artifact_id": r.artifact_id,
+                "source_path": r.source_path,
+                "target_path": r.target_path,
+                "promoted_by": r.promoted_by,
+                "promoted_at": r.promoted_at.isoformat() if r.promoted_at else None,
+            }
+            for r in rows
+        ]
+
     def list_pending_approval_steps(self) -> list[dict[str, Any]]:
         rows = self.session.scalars(
             select(RunStep).where(RunStep.status == StepStatus.PENDING_APPROVAL.value)
@@ -282,16 +319,16 @@ class SqlRunRepository:
                     "reason": approval["reason"],
                 }
             )
-        for artifact in self.list_artifacts(run_id):
-            if artifact["promoted"]:
-                events.append(
-                    {
-                        "type": "artifact.promoted",
-                        "timestamp": artifact["created_at"],
-                        "artifact_id": artifact["id"],
-                        "name": artifact["name"],
-                    }
-                )
+        for promotion in self.list_promotions(run_id):
+            events.append(
+                {
+                    "type": "artifact.promoted",
+                    "timestamp": promotion["promoted_at"],
+                    "artifact_id": promotion["artifact_id"],
+                    "target_path": promotion["target_path"],
+                    "promoted_by": promotion["promoted_by"],
+                }
+            )
         events.sort(key=lambda e: e.get("timestamp") or "")
         return events
 

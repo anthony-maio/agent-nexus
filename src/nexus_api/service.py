@@ -51,6 +51,8 @@ class ApiContext:
 def build_context(settings: ApiSettings | None = None) -> ApiContext:
     settings = settings or ApiSettings()
     Path("data/app").mkdir(parents=True, exist_ok=True)
+    settings.canonical_workspace_path.mkdir(parents=True, exist_ok=True)
+    settings.sandbox_artifact_root_path.mkdir(parents=True, exist_ok=True)
 
     run_migrations(settings.APP_DATABASE_URL)
     db_engine = build_engine(settings.APP_DATABASE_URL)

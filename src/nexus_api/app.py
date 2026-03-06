@@ -93,11 +93,15 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         user = authenticate_user(session, request.username, request.password)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        tok = create_session_token(session, user, ttl_hours=ctx.settings.APP_SESSION_TTL_HOURS)
+        tok, raw_token = create_session_token(
+            session,
+            user,
+            ttl_hours=ctx.settings.APP_SESSION_TTL_HOURS,
+        )
         expires = tok.expires_at.astimezone(timezone.utc).isoformat()
         return SessionCreateResponse(
             session_id=tok.id,
-            token=tok.token,
+            token=raw_token,
             username=user.username,
             expires_at=expires,
         )
@@ -116,6 +120,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             interaction=ctx.interaction_adapter,
             events=ctx.events,
             canonical_workspace=ctx.settings.canonical_workspace_path,
+            sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
         )
         run = await engine.create_run(
             objective=request.objective,
@@ -169,6 +174,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             interaction=ctx.interaction_adapter,
             events=ctx.events,
             canonical_workspace=ctx.settings.canonical_workspace_path,
+            sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
         )
         run = await engine.decide_approval(
             run_id=run_id,
@@ -187,7 +193,12 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         user: dict[str, Any] = Depends(current_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        _ = user
+        promoted_by = user["username"]
+        if request.promoted_by and request.promoted_by != promoted_by:
+            raise HTTPException(
+                status_code=403,
+                detail="promoted_by must match authenticated user",
+            )
         repo = SqlRunRepository(session)
         engine = RunEngine(
             repository=repo,
@@ -195,11 +206,12 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             interaction=ctx.interaction_adapter,
             events=ctx.events,
             canonical_workspace=ctx.settings.canonical_workspace_path,
+            sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
         )
         return await engine.promote_artifact(
             run_id=run_id,
             artifact_id=artifact_id,
-            promoted_by=request.promoted_by,
+            promoted_by=promoted_by,
         )
 
     @app.get("/runs/{run_id}/citations")
@@ -276,5 +288,9 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
     @app.exception_handler(FileNotFoundError)
     async def file_not_found_handler(_, exc: FileNotFoundError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(PermissionError)
+    async def permission_error_handler(_, exc: PermissionError) -> JSONResponse:
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
 
     return app
