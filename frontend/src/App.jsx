@@ -34,6 +34,7 @@ function App() {
   const [objective, setObjective] = useState("");
   const [runId, setRunId] = useState("");
   const [run, setRun] = useState(null);
+  const [runs, setRuns] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [citations, setCitations] = useState([]);
   const [pending, setPending] = useState([]);
@@ -157,6 +158,7 @@ function App() {
       const data = await api("/sessions", "POST", "", { username, password });
       setSession(data);
       await refreshPending(data.token);
+      await refreshRuns(data.token);
     } catch (err) {
       setError(String(err));
     }
@@ -176,6 +178,7 @@ function App() {
       setRunId(data.id);
       await refreshRun(data.id);
       await refreshPending();
+      await refreshRuns();
     } catch (err) {
       setError(String(err));
     }
@@ -195,6 +198,7 @@ function App() {
       setRun(runData);
       setTimeline(timelineData.timeline || []);
       setCitations(citationsData.citations || []);
+      await refreshRuns();
     } catch (err) {
       setError(String(err));
     }
@@ -212,6 +216,24 @@ function App() {
     }
   }
 
+  async function refreshRuns(currentToken = token) {
+    if (!currentToken) {
+      return;
+    }
+    try {
+      const data = await api("/runs?limit=30", "GET", currentToken);
+      setRuns(data.items || []);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function openRun(id) {
+    setRunId(id);
+    await refreshRun(id);
+    await refreshPending();
+  }
+
   async function decide(stepId, decision) {
     if (!runId) {
       return;
@@ -224,6 +246,7 @@ function App() {
       });
       await refreshRun(runId);
       await refreshPending();
+      await refreshRuns();
     } catch (err) {
       setError(String(err));
     }
@@ -239,6 +262,39 @@ function App() {
         promoted_by: username
       });
       await refreshRun(runId);
+      await refreshRuns();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function resumeCurrentRun() {
+    if (!runId) {
+      return;
+    }
+    setError("");
+    try {
+      const data = await api(`/runs/${runId}/resume`, "POST", token);
+      setRun(data);
+      await refreshRun(runId);
+      await refreshPending();
+      await refreshRuns();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function retryCurrentRun() {
+    if (!runId) {
+      return;
+    }
+    setError("");
+    try {
+      const data = await api(`/runs/${runId}/retry`, "POST", token);
+      setRun(data);
+      await refreshRun(runId);
+      await refreshPending();
+      await refreshRuns();
     } catch (err) {
       setError(String(err));
     }
@@ -429,6 +485,9 @@ function App() {
               <button className="ghost" onClick={() => refreshRun()}>
                 Refresh Run
               </button>
+              <button className="ghost" onClick={() => refreshRuns()}>
+                Refresh Inbox
+              </button>
               <button className="ghost" onClick={() => setTraceOpen((open) => !open)}>
                 {traceOpen ? "Hide" : "Show"} Trace
               </button>
@@ -447,6 +506,22 @@ function App() {
                 <p>
                   <strong>Live Stream:</strong> {streamState}
                 </p>
+                <div className="row">
+                  <button
+                    className="ghost"
+                    onClick={resumeCurrentRun}
+                    disabled={!["paused", "running", "pending_approval"].includes(run.status)}
+                  >
+                    Resume Run
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={retryCurrentRun}
+                    disabled={run.status !== "failed"}
+                  >
+                    Retry Failed Steps
+                  </button>
+                </div>
               </div>
             ) : (
               <p className="subtle">
@@ -456,9 +531,34 @@ function App() {
           </section>
 
           <aside className="card sidebar">
-            <h3>Pending Approvals</h3>
+            <h3>Run Inbox</h3>
+            <button className="ghost" onClick={() => refreshRuns()}>
+              Refresh runs
+            </button>
+            {runs.length === 0 ? (
+              <p className="subtle">No runs yet.</p>
+            ) : (
+              <ul className="stack-list run-list">
+                {runs.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      className={`run-item ${item.id === runId ? "active" : ""}`}
+                      onClick={() => openRun(item.id)}
+                    >
+                      <span className="run-main">{item.objective}</span>
+                      <span className="run-meta">
+                        <span className={`run-status ${item.status}`}>{item.status}</span>
+                        <span>{item.mode}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <h3 className="sidebar-heading">Pending Approvals</h3>
             <button className="ghost" onClick={() => refreshPending()}>
-              Refresh
+              Refresh approvals
             </button>
             {pendingForCurrent.length === 0 ? (
               <p className="subtle">No pending approvals.</p>

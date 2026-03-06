@@ -61,6 +61,40 @@ class FailingExecutionAdapter(FakeExecutionAdapter):
         return await super().execute_step(run_id, step_id, action_type, instruction)
 
 
+class AdaptiveExecutionAdapter(FakeExecutionAdapter):
+    def __init__(self, base_dir: Path) -> None:
+        super().__init__(base_dir)
+        self._extract_calls = 0
+
+    async def execute_step(
+        self, run_id: str, step_id: str, action_type: str, instruction: str
+    ) -> StepExecutionResult:
+        if action_type == "extract":
+            self._extract_calls += 1
+            if self._extract_calls == 1:
+                return StepExecutionResult(
+                    output_text="done:extract-no-citations",
+                    citations=[],
+                    artifacts=[],
+                )
+        return await super().execute_step(run_id, step_id, action_type, instruction)
+
+
+class FlakyExportExecutionAdapter(FakeExecutionAdapter):
+    def __init__(self, base_dir: Path) -> None:
+        super().__init__(base_dir)
+        self._export_calls = 0
+
+    async def execute_step(
+        self, run_id: str, step_id: str, action_type: str, instruction: str
+    ) -> StepExecutionResult:
+        if action_type == "export":
+            self._export_calls += 1
+            if self._export_calls == 1:
+                raise RuntimeError("transient export failure")
+        return await super().execute_step(run_id, step_id, action_type, instruction)
+
+
 def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = None) -> TestClient:
     settings = ApiSettings(
         APP_DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}",
@@ -379,3 +413,137 @@ def test_default_workflow_run_gates_on_first_write_action(tmp_path: Path) -> Non
     assert len(items) == 1
     assert items[0]["run_id"] == run["id"]
     assert items[0]["action_type"] == "type"
+
+
+def test_run_adapts_when_extract_returns_no_citations(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=AdaptiveExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research competitor pricing pages",
+            "mode": "manual",
+            "steps": [
+                {"action_type": "navigate", "instruction": "start with homepage"},
+                {"action_type": "extract", "instruction": "extract relevant pricing evidence"},
+                {"action_type": "export", "instruction": "export report artifact"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "completed"
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "navigate",
+        "extract",
+        "scroll",
+        "extract",
+        "export",
+    ]
+
+
+def test_list_runs_returns_recent_first(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    first = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "first objective",
+            "mode": "manual",
+            "steps": [],
+        },
+    )
+    assert first.status_code == 200
+    second = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "second objective",
+            "mode": "manual",
+            "steps": [],
+        },
+    )
+    assert second.status_code == 200
+
+    resp = client.get("/runs", headers=headers)
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) >= 2
+    assert items[0]["id"] == second.json()["id"]
+    assert items[1]["id"] == first.json()["id"]
+    assert items[0]["status"] == "completed"
+
+
+def test_resume_run_continues_after_rejected_step(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "workflow requiring approval",
+            "mode": "supervised",
+            "steps": [
+                {"action_type": "navigate", "instruction": "open page"},
+                {"action_type": "type", "instruction": "enter draft"},
+                {"action_type": "export", "instruction": "export report artifact"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run_id = create.json()["id"]
+    assert create.json()["status"] == "pending_approval"
+
+    pending = client.get("/approvals/pending", headers=headers)
+    assert pending.status_code == 200
+    type_step_id = pending.json()["items"][0]["step_id"]
+
+    reject = client.post(
+        f"/runs/{run_id}/approvals/{type_step_id}",
+        headers=headers,
+        json={"decision": "reject", "reason": "skip typing"},
+    )
+    assert reject.status_code == 200
+    assert reject.json()["status"] == "paused"
+
+    resume = client.post(f"/runs/{run_id}/resume", headers=headers)
+    assert resume.status_code == 200
+    assert resume.json()["status"] == "pending_approval"
+    assert resume.json()["steps"][1]["status"] == "rejected"
+
+    pending_after = client.get("/approvals/pending", headers=headers)
+    assert pending_after.status_code == 200
+    assert pending_after.json()["items"][0]["run_id"] == run_id
+    assert pending_after.json()["items"][0]["action_type"] == "export"
+
+
+def test_retry_failed_steps_reexecutes_run(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=FlakyExportExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "retry export after transient failure",
+            "mode": "manual",
+            "steps": [
+                {"action_type": "navigate", "instruction": "open docs"},
+                {"action_type": "export", "instruction": "export report artifact"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run_id = create.json()["id"]
+    assert create.json()["status"] == "failed"
+
+    retry = client.post(f"/runs/{run_id}/retry", headers=headers)
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "completed"
+    assert retry.json()["steps"][1]["status"] == "completed"

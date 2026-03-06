@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from nexus_api.models import Approval, Artifact, Citation, Promotion, Run, RunStep
@@ -43,6 +43,35 @@ class SqlRunRepository:
         self.session.flush()
         return self.get_run(run.id) or {"id": run.id}
 
+    def list_runs(self, limit: int = 25, offset: int = 0) -> list[dict[str, Any]]:
+        rows = self.session.scalars(
+            select(Run)
+            .order_by(Run.created_at.desc(), Run.id.desc())
+            .limit(max(1, min(limit, 100)))
+            .offset(max(0, offset))
+        ).all()
+        items: list[dict[str, Any]] = []
+        for run in rows:
+            steps = self.list_steps(run.id)
+            items.append(
+                {
+                    "id": run.id,
+                    "objective": run.objective,
+                    "mode": run.mode,
+                    "status": run.status,
+                    "created_at": run.created_at.isoformat() if run.created_at else None,
+                    "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+                    "step_count": len(steps),
+                    "pending_approval_count": sum(
+                        1 for step in steps if step["status"] == StepStatus.PENDING_APPROVAL.value
+                    ),
+                    "failed_count": sum(
+                        1 for step in steps if step["status"] == StepStatus.FAILED.value
+                    ),
+                }
+            )
+        return items
+
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         run = self.session.get(Run, run_id)
         if run is None:
@@ -63,6 +92,34 @@ class SqlRunRepository:
             select(RunStep).where(RunStep.run_id == run_id).order_by(RunStep.step_index.asc())
         ).all()
         return [self._step_to_dict(r) for r in rows]
+
+    def insert_steps_after(self, step_id: str, steps: list[StepDefinition]) -> None:
+        if not steps:
+            return
+        anchor = self.session.get(RunStep, step_id)
+        if anchor is None:
+            raise ValueError("Anchor step not found")
+
+        shift = len(steps)
+        self.session.execute(
+            update(RunStep)
+            .where(RunStep.run_id == anchor.run_id, RunStep.step_index > anchor.step_index)
+            .values(step_index=RunStep.step_index + shift)
+        )
+
+        for offset, step in enumerate(steps, start=1):
+            risk = risk_tier_for_action(step.action_type, step.instruction)
+            self.session.add(
+                RunStep(
+                    run_id=anchor.run_id,
+                    step_index=anchor.step_index + offset,
+                    action_type=step.action_type.strip().lower(),
+                    instruction=step.instruction.strip(),
+                    risk_tier=risk.value,
+                    status=StepStatus.PENDING.value,
+                )
+            )
+        self.session.flush()
 
     def get_step(self, step_id: str) -> dict[str, Any] | None:
         step = self.session.get(RunStep, step_id)
@@ -103,6 +160,18 @@ class SqlRunRepository:
         if error_text:
             step.error_text = error_text
         self.session.flush()
+
+    def reset_step_for_retry(self, step_id: str) -> bool:
+        step = self.session.get(RunStep, step_id)
+        if step is None:
+            return False
+        step.status = StepStatus.PENDING.value
+        step.output_text = ""
+        step.error_text = ""
+        step.started_at = None
+        step.ended_at = None
+        self.session.flush()
+        return True
 
     def add_citations(self, run_id: str, step_id: str, citations: list[dict[str, str]]) -> None:
         for citation in citations:

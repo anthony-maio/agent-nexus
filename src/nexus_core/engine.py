@@ -16,8 +16,10 @@ from nexus_core.models import (
     RunMode,
     RunStatus,
     StepDefinition,
+    StepExecutionResult,
     StepStatus,
 )
+from nexus_core.planner import plan_follow_up_steps
 from nexus_core.policy import is_high_risk_action
 
 log = logging.getLogger(__name__)
@@ -37,6 +39,8 @@ class EngineRepository(Protocol):
 
     def list_steps(self, run_id: str) -> list[dict[str, Any]]: ...
 
+    def insert_steps_after(self, step_id: str, steps: list[StepDefinition]) -> None: ...
+
     def get_step(self, step_id: str) -> dict[str, Any] | None: ...
 
     def mark_run_status(self, run_id: str, status: str) -> None: ...
@@ -48,6 +52,8 @@ class EngineRepository(Protocol):
         output_text: str = "",
         error_text: str = "",
     ) -> None: ...
+
+    def reset_step_for_retry(self, step_id: str) -> bool: ...
 
     def add_citations(self, run_id: str, step_id: str, citations: list[dict[str, str]]) -> None: ...
 
@@ -156,12 +162,13 @@ class RunEngine:
             return self.repo.get_run(run_id) or {}
 
         self.repo.mark_run_status(run_id, RunStatus.RUNNING.value)
-        ok = await self._execute_step(step)
-        if not ok:
-            self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
-            await self.interaction.deliver_status(run_id, RunStatus.FAILED.value, "Run failed")
-            await self._publish(run_id, "run.failed", {"step_id": step_id})
+        run = self.repo.get_run(run_id)
+        result = await self._execute_step(step)
+        if result is None:
+            await self._mark_run_failed(run_id, step_id)
             return self.repo.get_run(run_id) or {}
+        if run is not None:
+            await self._apply_follow_up_planning(run, step, result)
         await self._execute_until_gate(run_id)
         return self.repo.get_run(run_id) or {}
 
@@ -241,66 +248,113 @@ class RunEngine:
             "sha256": self._sha256(target),
         }
 
-    async def _execute_until_gate(self, run_id: str) -> None:
-        """Execute queued steps until run completes or approval is required."""
+    async def resume_run(self, run_id: str) -> dict[str, Any]:
+        """Resume a paused run and continue execution until next gate."""
         run = self.repo.get_run(run_id)
         if run is None:
-            return
+            raise ValueError("Run not found")
+        if run["status"] == RunStatus.COMPLETED.value:
+            raise ValueError("Run already completed")
+        if run["status"] == RunStatus.CANCELLED.value:
+            raise ValueError("Cancelled runs cannot be resumed")
+        if run["status"] == RunStatus.FAILED.value:
+            raise ValueError("Failed runs require retry")
 
-        for step in self.repo.list_steps(run_id):
-            if step["status"] in {
-                StepStatus.COMPLETED.value,
-                StepStatus.REJECTED.value,
-            }:
-                continue
-            if step["status"] == StepStatus.FAILED.value:
-                self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
-                await self.interaction.deliver_status(run_id, RunStatus.FAILED.value, "Run failed")
-                await self._publish(run_id, "run.failed", {"step_id": step["id"]})
+        self.repo.mark_run_status(run_id, RunStatus.RUNNING.value)
+        await self._publish(run_id, "run.resumed", {})
+        await self._execute_until_gate(run_id)
+        return self.repo.get_run(run_id) or {}
+
+    async def retry_run(self, run_id: str) -> dict[str, Any]:
+        """Reset failed/rejected steps to pending and re-run."""
+        run = self.repo.get_run(run_id)
+        if run is None:
+            raise ValueError("Run not found")
+
+        retryable = [
+            step
+            for step in self.repo.list_steps(run_id)
+            if step["status"] in {StepStatus.FAILED.value, StepStatus.REJECTED.value}
+        ]
+        if not retryable:
+            raise ValueError("Run has no failed or rejected steps to retry")
+
+        for step in retryable:
+            self.repo.reset_step_for_retry(step["id"])
+
+        self.repo.mark_run_status(run_id, RunStatus.RUNNING.value)
+        await self._publish(
+            run_id,
+            "run.retry_requested",
+            {"retry_step_count": len(retryable)},
+        )
+        await self._execute_until_gate(run_id)
+        return self.repo.get_run(run_id) or {}
+
+    async def _execute_until_gate(self, run_id: str) -> None:
+        """Execute queued steps until run completes or approval is required."""
+        while True:
+            run = self.repo.get_run(run_id)
+            if run is None:
+                return
+            mode = RunMode(run["mode"])
+            next_step: dict[str, Any] | None = None
+
+            for step in self.repo.list_steps(run_id):
+                status = step["status"]
+                if status in {StepStatus.COMPLETED.value, StepStatus.REJECTED.value}:
+                    continue
+                if status == StepStatus.FAILED.value:
+                    await self._mark_run_failed(run_id, step["id"])
+                    return
+                if status == StepStatus.PENDING_APPROVAL.value:
+                    self.repo.mark_run_status(run_id, RunStatus.PENDING_APPROVAL.value)
+                    return
+                if status == StepStatus.PENDING.value:
+                    next_step = step
+                    break
+
+            if next_step is None:
+                self.repo.mark_run_status(run_id, RunStatus.COMPLETED.value)
+                await self.interaction.deliver_status(
+                    run_id,
+                    RunStatus.COMPLETED.value,
+                    "Run completed",
+                )
+                await self._publish(run_id, "run.completed", {})
                 return
 
-            mode = RunMode(run["mode"])
-            if (
-                mode == RunMode.SUPERVISED
-                and is_high_risk_action(step["action_type"], step["instruction"])
-                and step["status"] == StepStatus.PENDING.value
+            if mode == RunMode.SUPERVISED and is_high_risk_action(
+                next_step["action_type"], next_step["instruction"]
             ):
-                self.repo.mark_step_status(step["id"], StepStatus.PENDING_APPROVAL.value)
+                self.repo.mark_step_status(next_step["id"], StepStatus.PENDING_APPROVAL.value)
                 self.repo.mark_run_status(run_id, RunStatus.PENDING_APPROVAL.value)
-                summary = f"{step['action_type']}: {step['instruction'][:120]}"
+                summary = f"{next_step['action_type']}: {next_step['instruction'][:120]}"
                 await self.interaction.request_approval(
                     run_id=run_id,
-                    step_id=step["id"],
+                    step_id=next_step["id"],
                     summary=summary,
-                    action_type=step["action_type"],
+                    action_type=next_step["action_type"],
                 )
                 await self._publish(
                     run_id,
                     "step.pending_approval",
                     {
-                        "step_id": step["id"],
-                        "action_type": step["action_type"],
-                        "instruction": step["instruction"],
+                        "step_id": next_step["id"],
+                        "action_type": next_step["action_type"],
+                        "instruction": next_step["instruction"],
                     },
                 )
                 return
 
-            if step["status"] == StepStatus.PENDING_APPROVAL.value:
-                self.repo.mark_run_status(run_id, RunStatus.PENDING_APPROVAL.value)
+            result = await self._execute_step(next_step)
+            if result is None:
+                await self._mark_run_failed(run_id, next_step["id"])
                 return
 
-            ok = await self._execute_step(step)
-            if not ok:
-                self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
-                await self.interaction.deliver_status(run_id, RunStatus.FAILED.value, "Run failed")
-                await self._publish(run_id, "run.failed", {"step_id": step["id"]})
-                return
+            await self._apply_follow_up_planning(run, next_step, result)
 
-        self.repo.mark_run_status(run_id, RunStatus.COMPLETED.value)
-        await self.interaction.deliver_status(run_id, RunStatus.COMPLETED.value, "Run completed")
-        await self._publish(run_id, "run.completed", {})
-
-    async def _execute_step(self, step: dict[str, Any]) -> bool:
+    async def _execute_step(self, step: dict[str, Any]) -> StepExecutionResult | None:
         run_id = step["run_id"]
         step_id = step["id"]
         self.repo.mark_step_status(step_id, StepStatus.RUNNING.value)
@@ -345,7 +399,7 @@ class RunEngine:
                     "artifacts": len(result.artifacts),
                 },
             )
-            return True
+            return result
         except Exception as exc:
             log.warning("Step execution failed for %s: %s", step_id, exc)
             self.repo.mark_step_status(
@@ -358,7 +412,37 @@ class RunEngine:
                 "step.failed",
                 {"step_id": step_id, "error": str(exc)},
             )
-            return False
+            return None
+
+    async def _apply_follow_up_planning(
+        self,
+        run: dict[str, Any],
+        completed_step: dict[str, Any],
+        result: StepExecutionResult,
+    ) -> None:
+        follow_up_steps = plan_follow_up_steps(
+            objective=run["objective"],
+            completed_step=completed_step,
+            result=result,
+            existing_steps=self.repo.list_steps(run["id"]),
+        )
+        if not follow_up_steps:
+            return
+
+        self.repo.insert_steps_after(completed_step["id"], follow_up_steps)
+        await self._publish(
+            run["id"],
+            "run.replanned",
+            {
+                "after_step_id": completed_step["id"],
+                "inserted_steps": [s.model_dump() for s in follow_up_steps],
+            },
+        )
+
+    async def _mark_run_failed(self, run_id: str, step_id: str) -> None:
+        self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
+        await self.interaction.deliver_status(run_id, RunStatus.FAILED.value, "Run failed")
+        await self._publish(run_id, "run.failed", {"step_id": step_id})
 
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         await self.events.publish(

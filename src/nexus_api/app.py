@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import timezone
 from typing import Any, AsyncIterator, Iterator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -147,6 +147,17 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         run["created_by"] = user["username"]
         return run
 
+    @app.get("/runs")
+    def list_runs(
+        limit: int = Query(default=25, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        _ = user
+        repo = SqlRunRepository(session)
+        return {"items": repo.list_runs(limit=limit, offset=offset)}
+
     @app.get("/runs/{run_id}")
     def get_run(
         run_id: str,
@@ -201,6 +212,42 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             reason=request.reason,
         )
         return run
+
+    @app.post("/runs/{run_id}/resume")
+    async def resume_run(
+        run_id: str,
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        _ = user
+        repo = SqlRunRepository(session)
+        engine = RunEngine(
+            repository=repo,
+            execution=ctx.execution_adapter,
+            interaction=ctx.interaction_adapter,
+            events=ctx.events,
+            canonical_workspace=ctx.settings.canonical_workspace_path,
+            sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
+        )
+        return await engine.resume_run(run_id=run_id)
+
+    @app.post("/runs/{run_id}/retry")
+    async def retry_run(
+        run_id: str,
+        user: dict[str, Any] = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        _ = user
+        repo = SqlRunRepository(session)
+        engine = RunEngine(
+            repository=repo,
+            execution=ctx.execution_adapter,
+            interaction=ctx.interaction_adapter,
+            events=ctx.events,
+            canonical_workspace=ctx.settings.canonical_workspace_path,
+            sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
+        )
+        return await engine.retry_run(run_id=run_id)
 
     @app.post("/runs/{run_id}/artifacts/{artifact_id}/promote")
     async def promote_artifact(

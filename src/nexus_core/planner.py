@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
-from nexus_core.models import StepDefinition
+from pydantic import ValidationError
+
+from nexus_core.models import StepDefinition, StepExecutionResult
 
 _URL_RE = re.compile(r"https?://[^\s)>]+", re.IGNORECASE)
 _WORKFLOW_HINTS: tuple[str, ...] = (
@@ -35,6 +38,47 @@ def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
     if _looks_like_workflow(cleaned):
         return _workflow_steps(cleaned)
     return _research_steps(cleaned)
+
+
+def plan_follow_up_steps(
+    objective: str,
+    completed_step: dict[str, Any],
+    result: StepExecutionResult,
+    existing_steps: list[dict[str, Any]],
+) -> list[StepDefinition]:
+    """Return dynamic follow-up steps based on execution result."""
+    metadata_steps = _metadata_follow_up_steps(result)
+    if metadata_steps:
+        return metadata_steps
+
+    action = str(completed_step.get("action_type", "")).strip().lower()
+    if action != "extract":
+        return []
+    if result.citations:
+        return []
+    if _count_adaptive_extracts(existing_steps) >= 2:
+        return []
+
+    step_index = int(completed_step.get("step_index", -1))
+    if _has_action_after(existing_steps, step_index, "scroll"):
+        return []
+
+    return [
+        StepDefinition(
+            action_type="scroll",
+            instruction=(
+                "Adaptive follow-up: gather additional page context because the last "
+                f"extraction returned no citations. Objective: {objective}"
+            ),
+        ),
+        StepDefinition(
+            action_type="extract",
+            instruction=(
+                "Adaptive follow-up: re-run extraction after scrolling and include "
+                f"citations for: {objective}"
+            ),
+        ),
+    ]
 
 
 def _looks_like_workflow(objective: str) -> bool:
@@ -144,3 +188,51 @@ def _workflow_steps(objective: str) -> list[StepDefinition]:
             ),
         ),
     ]
+
+
+def _metadata_follow_up_steps(result: StepExecutionResult) -> list[StepDefinition]:
+    raw = result.metadata.get("next_steps")
+    if not isinstance(raw, list):
+        return []
+    planned: list[StepDefinition] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            planned.append(
+                StepDefinition(
+                    action_type=str(item.get("action_type", "")),
+                    instruction=str(item.get("instruction", "")),
+                )
+            )
+        except ValidationError:
+            continue
+    return planned
+
+
+def _count_adaptive_extracts(existing_steps: list[dict[str, Any]]) -> int:
+    count = 0
+    for step in existing_steps:
+        if str(step.get("action_type", "")).strip().lower() != "extract":
+            continue
+        instruction = str(step.get("instruction", ""))
+        if instruction.startswith("Adaptive follow-up:"):
+            count += 1
+    return count
+
+
+def _has_action_after(
+    existing_steps: list[dict[str, Any]],
+    after_step_index: int,
+    action_type: str,
+) -> bool:
+    for step in existing_steps:
+        try:
+            step_index = int(step.get("step_index", -1))
+        except (TypeError, ValueError):
+            step_index = -1
+        if step_index <= after_step_index:
+            continue
+        if str(step.get("action_type", "")).strip().lower() == action_type:
+            return True
+    return False

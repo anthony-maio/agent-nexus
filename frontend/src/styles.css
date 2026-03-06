@@ -273,6 +273,69 @@ button:disabled {
   margin: 0;
 }
 
+.run-list {
+  max-height: 20rem;
+  overflow: auto;
+}
+
+.run-item {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(39, 51, 68, 0.14);
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--text);
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.run-item.active {
+  border-color: rgba(14, 109, 114, 0.6);
+  box-shadow: 0 0 0 2px rgba(14, 109, 114, 0.14);
+}
+
+.run-main {
+  display: block;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.run-meta {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.run-status {
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(39, 51, 68, 0.09);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+
+.run-status.completed {
+  background: rgba(14, 109, 114, 0.12);
+  color: var(--accent-strong);
+}
+
+.run-status.failed {
+  background: rgba(159, 43, 29, 0.14);
+  color: var(--danger);
+}
+
+.run-status.pending_approval,
+.run-status.paused {
+  background: rgba(176, 95, 57, 0.16);
+  color: #6f3a1f;
+}
+
+.sidebar-heading {
+  margin-top: 1.25rem;
+}
+
 .timeline li,
 .stack-list li {
   display: grid;
