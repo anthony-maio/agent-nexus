@@ -35,24 +35,32 @@ function App() {
   const [runId, setRunId] = useState("");
   const [run, setRun] = useState(null);
   const [runs, setRuns] = useState([]);
+  const [runsTotal, setRunsTotal] = useState(0);
+  const [runSearch, setRunSearch] = useState("");
+  const [runStatusFilter, setRunStatusFilter] = useState("");
+  const [runModeFilter, setRunModeFilter] = useState("");
+  const runListLimit = 12;
   const [timeline, setTimeline] = useState([]);
   const [citations, setCitations] = useState([]);
   const [pending, setPending] = useState([]);
   const [traceOpen, setTraceOpen] = useState(true);
   const [error, setError] = useState("");
   const [streamState, setStreamState] = useState("disconnected");
+  const [streamRetryNonce, setStreamRetryNonce] = useState(0);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapStatus, setBootstrapStatus] = useState(null);
   const [bootstrapForm, setBootstrapForm] = useState(initialBootstrapForm);
   const [bootstrapSaving, setBootstrapSaving] = useState(false);
   const [bootstrapRestarting, setBootstrapRestarting] = useState(false);
   const wsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
 
   const token = session?.token || "";
   const pendingForCurrent = useMemo(
     () => pending.filter((item) => !runId || item.run_id === runId),
     [pending, runId]
   );
+  const hasMoreRuns = runs.length < runsTotal;
   const showBootstrap = bootstrapLoading || bootstrapRestarting || bootstrapStatus?.setup_required;
 
   useEffect(() => {
@@ -73,13 +81,18 @@ function App() {
   useEffect(() => {
     if (!runId || !token) {
       setStreamState("disconnected");
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
       return undefined;
     }
 
+    let closedByCleanup = false;
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = `${protocol}://${window.location.host}/api/runs/${runId}/stream?token=${encodeURIComponent(token)}`;
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
+    setStreamState(streamRetryNonce > 0 ? "reconnecting" : "connecting");
 
     socket.onopen = () => {
       setStreamState("connected");
@@ -99,14 +112,25 @@ function App() {
       setStreamState("error");
     };
     socket.onclose = () => {
-      setStreamState("disconnected");
+      if (closedByCleanup) {
+        setStreamState("disconnected");
+        return;
+      }
+      setStreamState("reconnecting");
+      reconnectTimerRef.current = window.setTimeout(() => {
+        setStreamRetryNonce((value) => value + 1);
+      }, 1500);
     };
 
     return () => {
+      closedByCleanup = true;
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
       socket.close();
       wsRef.current = null;
     };
-  }, [runId, token]);
+  }, [runId, token, streamRetryNonce]);
 
   async function loadBootstrapStatus(options = {}) {
     const { silent = false } = options;
@@ -174,6 +198,7 @@ function App() {
         objective,
         mode: "supervised"
       });
+      setStreamRetryNonce(0);
       setRun(data);
       setRunId(data.id);
       await refreshRun(data.id);
@@ -216,19 +241,61 @@ function App() {
     }
   }
 
-  async function refreshRuns(currentToken = token) {
+  function buildRunsPath(offset = 0, filters = null) {
+    const search = filters?.search ?? runSearch;
+    const status = filters?.status ?? runStatusFilter;
+    const mode = filters?.mode ?? runModeFilter;
+    const params = new URLSearchParams();
+    params.set("limit", String(runListLimit));
+    params.set("offset", String(offset));
+    if (search.trim()) {
+      params.set("search", search.trim());
+    }
+    if (status) {
+      params.set("status", status);
+    }
+    if (mode) {
+      params.set("mode", mode);
+    }
+    return `/runs?${params.toString()}`;
+  }
+
+  async function refreshRuns(currentToken = token, options = {}) {
     if (!currentToken) {
       return;
     }
+    const { offset = 0, append = false, filters = null } = options;
     try {
-      const data = await api("/runs?limit=30", "GET", currentToken);
-      setRuns(data.items || []);
+      const data = await api(buildRunsPath(offset, filters), "GET", currentToken);
+      const nextItems = data.items || [];
+      setRuns((current) => (append ? [...current, ...nextItems] : nextItems));
+      setRunsTotal(data.total || 0);
     } catch (err) {
       setError(String(err));
     }
   }
 
+  async function applyRunFilters() {
+    await refreshRuns(token, { offset: 0, append: false });
+  }
+
+  async function clearRunFilters() {
+    setRunSearch("");
+    setRunStatusFilter("");
+    setRunModeFilter("");
+    await refreshRuns(token, {
+      offset: 0,
+      append: false,
+      filters: { search: "", status: "", mode: "" }
+    });
+  }
+
+  async function loadMoreRuns() {
+    await refreshRuns(token, { offset: runs.length, append: true });
+  }
+
   async function openRun(id) {
+    setStreamRetryNonce(0);
     setRunId(id);
     await refreshRun(id);
     await refreshPending();
@@ -535,25 +602,77 @@ function App() {
             <button className="ghost" onClick={() => refreshRuns()}>
               Refresh runs
             </button>
+            <label>
+              Search objective
+              <input
+                value={runSearch}
+                onChange={(event) => setRunSearch(event.target.value)}
+                placeholder="keyword"
+              />
+            </label>
+            <label>
+              Status
+              <select
+                value={runStatusFilter}
+                onChange={(event) => setRunStatusFilter(event.target.value)}
+              >
+                <option value="">All statuses</option>
+                <option value="running">Running</option>
+                <option value="pending_approval">Pending approval</option>
+                <option value="paused">Paused</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+              </select>
+            </label>
+            <label>
+              Mode
+              <select
+                value={runModeFilter}
+                onChange={(event) => setRunModeFilter(event.target.value)}
+              >
+                <option value="">All modes</option>
+                <option value="supervised">Supervised</option>
+                <option value="manual">Manual</option>
+                <option value="autopilot">Autopilot</option>
+              </select>
+            </label>
+            <div className="row">
+              <button className="ghost" onClick={applyRunFilters}>
+                Apply filters
+              </button>
+              <button className="ghost" onClick={clearRunFilters}>
+                Clear filters
+              </button>
+            </div>
             {runs.length === 0 ? (
               <p className="subtle">No runs yet.</p>
             ) : (
-              <ul className="stack-list run-list">
-                {runs.map((item) => (
-                  <li key={item.id}>
-                    <button
-                      className={`run-item ${item.id === runId ? "active" : ""}`}
-                      onClick={() => openRun(item.id)}
-                    >
-                      <span className="run-main">{item.objective}</span>
-                      <span className="run-meta">
-                        <span className={`run-status ${item.status}`}>{item.status}</span>
-                        <span>{item.mode}</span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <p className="subtle">
+                  Showing {runs.length} of {runsTotal}
+                </p>
+                <ul className="stack-list run-list">
+                  {runs.map((item) => (
+                    <li key={item.id}>
+                      <button
+                        className={`run-item ${item.id === runId ? "active" : ""}`}
+                        onClick={() => openRun(item.id)}
+                      >
+                        <span className="run-main">{item.objective}</span>
+                        <span className="run-meta">
+                          <span className={`run-status ${item.status}`}>{item.status}</span>
+                          <span>{item.mode}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {hasMoreRuns ? (
+                  <button className="ghost" onClick={loadMoreRuns}>
+                    Load more
+                  </button>
+                ) : null}
+              </>
             )}
 
             <h3 className="sidebar-heading">Pending Approvals</h3>

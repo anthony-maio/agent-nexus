@@ -1,0 +1,305 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+import App from "./App";
+
+class MockWebSocket {
+  static instances = [];
+
+  constructor(url) {
+    this.url = url;
+    this.readyState = 0;
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    this.onclose = null;
+    MockWebSocket.instances.push(this);
+    queueMicrotask(() => {
+      this.readyState = 1;
+      if (typeof this.onopen === "function") {
+        this.onopen();
+      }
+    });
+  }
+
+  close() {
+    this.readyState = 3;
+    if (typeof this.onclose === "function") {
+      this.onclose();
+    }
+  }
+
+  emitClose() {
+    this.readyState = 3;
+    if (typeof this.onclose === "function") {
+      this.onclose();
+    }
+  }
+}
+
+function createRunState() {
+  const runs = [
+    {
+      id: "run-failed",
+      objective: "failed export retry",
+      mode: "manual",
+      status: "failed",
+      created_at: "2026-03-06T12:00:00+00:00",
+      updated_at: "2026-03-06T12:02:00+00:00",
+      step_count: 2,
+      pending_approval_count: 0,
+      failed_count: 1
+    },
+    {
+      id: "run-pending",
+      objective: "pending approval workflow",
+      mode: "supervised",
+      status: "pending_approval",
+      created_at: "2026-03-06T12:05:00+00:00",
+      updated_at: "2026-03-06T12:06:00+00:00",
+      step_count: 3,
+      pending_approval_count: 1,
+      failed_count: 0
+    }
+  ];
+  const runDetails = {
+    "run-failed": {
+      id: "run-failed",
+      objective: "failed export retry",
+      mode: "manual",
+      status: "failed",
+      steps: [
+        { id: "s1", action_type: "navigate", status: "completed", instruction: "open docs" },
+        { id: "s2", action_type: "export", status: "failed", instruction: "export report artifact" }
+      ],
+      citations: [],
+      artifacts: [],
+      approvals: []
+    },
+    "run-pending": {
+      id: "run-pending",
+      objective: "pending approval workflow",
+      mode: "supervised",
+      status: "pending_approval",
+      steps: [
+        { id: "p1", action_type: "navigate", status: "completed", instruction: "open page" },
+        { id: "p2", action_type: "type", status: "pending_approval", instruction: "enter draft" }
+      ],
+      citations: [],
+      artifacts: [],
+      approvals: []
+    }
+  };
+  return {
+    runs,
+    runDetails,
+    timelines: {
+      "run-failed": [],
+      "run-pending": []
+    },
+    citations: {
+      "run-failed": [],
+      "run-pending": []
+    },
+    pending: [
+      {
+        run_id: "run-pending",
+        step_id: "p2",
+        action_type: "type",
+        instruction: "enter draft",
+        risk_tier: "high"
+      }
+    ]
+  };
+}
+
+function jsonResponse(payload, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() {
+      return JSON.stringify(payload);
+    },
+    async json() {
+      return payload;
+    }
+  };
+}
+
+function createFetchMock(state) {
+  return vi.fn(async (input, init = {}) => {
+    const method = (init.method || "GET").toUpperCase();
+    const rawUrl = typeof input === "string" ? input : input.url;
+    const url = new URL(rawUrl, "http://localhost");
+    const path = url.pathname;
+
+    if (path === "/api/bootstrap/status" && method === "GET") {
+      return jsonResponse({
+        setup_required: false,
+        configured: true,
+        config_path: "/tmp/config/.env",
+        uses_default_admin_password: false
+      });
+    }
+    if (path === "/api/sessions" && method === "POST") {
+      return jsonResponse({
+        session_id: "session-1",
+        token: "token-1",
+        username: "admin",
+        expires_at: "2030-01-01T00:00:00+00:00"
+      });
+    }
+    if (path === "/api/approvals/pending" && method === "GET") {
+      return jsonResponse({ items: state.pending });
+    }
+    if (path === "/api/runs" && method === "GET") {
+      const status = (url.searchParams.get("status") || "").trim();
+      const mode = (url.searchParams.get("mode") || "").trim();
+      const search = (url.searchParams.get("search") || "").trim().toLowerCase();
+      const limit = Number(url.searchParams.get("limit") || "25");
+      const offset = Number(url.searchParams.get("offset") || "0");
+      let items = [...state.runs];
+      if (status) {
+        items = items.filter((item) => item.status === status);
+      }
+      if (mode) {
+        items = items.filter((item) => item.mode === mode);
+      }
+      if (search) {
+        items = items.filter((item) => item.objective.toLowerCase().includes(search));
+      }
+      const total = items.length;
+      const sliced = items.slice(offset, offset + limit);
+      return jsonResponse({ items: sliced, total, limit, offset });
+    }
+
+    const runMatch = path.match(/^\/api\/runs\/([^/]+)$/);
+    if (runMatch && method === "GET") {
+      const runId = runMatch[1];
+      return jsonResponse(state.runDetails[runId] || {}, state.runDetails[runId] ? 200 : 404);
+    }
+    const timelineMatch = path.match(/^\/api\/runs\/([^/]+)\/timeline$/);
+    if (timelineMatch && method === "GET") {
+      const runId = timelineMatch[1];
+      return jsonResponse({ run_id: runId, timeline: state.timelines[runId] || [] });
+    }
+    const citationsMatch = path.match(/^\/api\/runs\/([^/]+)\/citations$/);
+    if (citationsMatch && method === "GET") {
+      const runId = citationsMatch[1];
+      return jsonResponse({ run_id: runId, citations: state.citations[runId] || [] });
+    }
+    const retryMatch = path.match(/^\/api\/runs\/([^/]+)\/retry$/);
+    if (retryMatch && method === "POST") {
+      const runId = retryMatch[1];
+      const run = state.runDetails[runId];
+      if (!run) {
+        return jsonResponse({ detail: "Run not found" }, 404);
+      }
+      run.status = "completed";
+      run.steps = run.steps.map((step) =>
+        step.status === "failed" ? { ...step, status: "completed" } : step
+      );
+      state.runs = state.runs.map((item) =>
+        item.id === runId ? { ...item, status: "completed", failed_count: 0 } : item
+      );
+      return jsonResponse(run);
+    }
+    const resumeMatch = path.match(/^\/api\/runs\/([^/]+)\/resume$/);
+    if (resumeMatch && method === "POST") {
+      const runId = resumeMatch[1];
+      const run = state.runDetails[runId];
+      if (!run) {
+        return jsonResponse({ detail: "Run not found" }, 404);
+      }
+      return jsonResponse(run);
+    }
+
+    return jsonResponse({ detail: `Unhandled ${method} ${path}` }, 404);
+  });
+}
+
+async function login() {
+  await waitFor(() => {
+    expect(screen.getByText("Admin Login")).toBeInTheDocument();
+  });
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret" } });
+  fireEvent.click(screen.getByText("Create Session"));
+  await waitFor(() => {
+    expect(screen.getByText("Run Inbox")).toBeInTheDocument();
+  });
+}
+
+describe("App run inbox e2e", () => {
+  beforeEach(() => {
+    MockWebSocket.instances = [];
+    global.WebSocket = MockWebSocket;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanup();
+  });
+
+  it("supports run inbox filter + open + retry flow", async () => {
+    const state = createRunState();
+    const fetchMock = createFetchMock(state);
+    global.fetch = fetchMock;
+
+    render(<App />);
+    await login();
+
+    await waitFor(() => {
+      expect(screen.getByText("failed export retry")).toBeInTheDocument();
+      expect(screen.getByText("pending approval workflow")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText("Search objective"), {
+      target: { value: "failed" }
+    });
+    fireEvent.click(screen.getByText("Apply filters"));
+    await waitFor(() => {
+      expect(screen.getByText("Showing 1 of 1")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("failed export retry"));
+    await waitFor(() => {
+      expect(screen.getByText("run-failed")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Retry Failed Steps"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).includes("/api/runs/run-failed/retry"))
+      ).toBe(true);
+    });
+  });
+
+  it("reconnects stream after websocket close", async () => {
+    const state = createRunState();
+    global.fetch = createFetchMock(state);
+
+    render(<App />);
+    await login();
+
+    fireEvent.click(screen.getByText("pending approval workflow"));
+    await waitFor(() => {
+      expect(screen.getAllByText("connected").length).toBeGreaterThan(0);
+    });
+
+    expect(MockWebSocket.instances.length).toBeGreaterThan(0);
+    MockWebSocket.instances[0].emitClose();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("reconnecting").length).toBeGreaterThan(0);
+    });
+    await waitFor(
+      () => {
+        expect(MockWebSocket.instances.length).toBeGreaterThan(1);
+      },
+      { timeout: 4000 }
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText("connected").length).toBeGreaterThan(0);
+    });
+  });
+});
