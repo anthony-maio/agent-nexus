@@ -51,6 +51,12 @@ def test_docker_executor_build_command_contains_isolation_flags(tmp_path: Path) 
     assert "256m" in command
     assert "--cpus" in command
     assert "0.5" in command
+    assert "--read-only" in command
+    assert "--security-opt" in command
+    assert "no-new-privileges" in command
+    assert "--cap-drop" in command
+    assert "ALL" in command
+    assert "--pids-limit" in command
 
 
 def test_docker_executor_execute_collects_artifacts(
@@ -90,6 +96,7 @@ def test_docker_executor_execute_collects_artifacts(
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: "docker")
     result = executor.execute(request, tmp_path / "sandbox")
 
     assert result.output_text == "done:export"
@@ -98,3 +105,46 @@ def test_docker_executor_execute_collects_artifacts(
     artifact_path = Path(result.artifacts[0]["sandbox_path"])
     assert artifact_path.exists()
     assert artifact_path.name == "step123-export.txt"
+
+
+def test_docker_executor_ignores_artifacts_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executor = DockerEphemeralExecutor(image="python:3.13-slim")
+    request = StepRequest(
+        run_id="run123",
+        step_id="step123",
+        action_type="export",
+        instruction="export report",
+    )
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        mount = cmd[cmd.index("-v") + 1]
+        host_workspace = Path(mount.rsplit(":", 1)[0])
+        host_workspace.mkdir(parents=True, exist_ok=True)
+        (host_workspace / "result.json").write_text(
+            json.dumps(
+                {
+                    "output_text": "done:export",
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "kind": "text",
+                            "name": "outside.txt",
+                            "path": str(outside),
+                            "workspace": str(host_workspace),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: "docker")
+    result = executor.execute(request, tmp_path / "sandbox")
+
+    assert result.artifacts == []

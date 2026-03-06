@@ -80,7 +80,8 @@ ruff format src/
 - Sandbox runner supports optional shared-token auth via `SANDBOX_RUNNER_TOKEN`; keep API and runner tokens aligned.
 - Sandbox execution backend is selectable via `SANDBOX_EXECUTION_BACKEND`:
   - `local`: in-process per-step ephemeral workspace.
-  - `docker`: throwaway container per step using `SANDBOX_DOCKER_*` settings.
+  - `docker`: throwaway container per step using `SANDBOX_DOCKER_*` settings (`network=none`, caps dropped, read-only rootfs, pids/memory/cpu limits).
+  - Docker backend requires Docker CLI and daemon access in the sandbox-runner runtime.
 - `continuity_core/` is part of this monorepo. It was originally a separate project but is now maintained here. Edit freely.
 
 ## Environment Variables

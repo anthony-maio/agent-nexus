@@ -98,3 +98,23 @@ def test_health_reports_executor_backend(tmp_path: Path, monkeypatch) -> None:
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["executor_backend"] == "local"
+
+
+def test_docker_backend_returns_503_when_docker_missing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SANDBOX_EXECUTION_BACKEND", "docker")
+    monkeypatch.setenv("SANDBOX_DOCKER_IMAGE", "python:3.13-slim")
+    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: None)
+    client = TestClient(create_app())
+
+    resp = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step127",
+            "action_type": "extract",
+            "instruction": "summarize sources",
+        },
+    )
+    assert resp.status_code == 503
+    assert "Docker binary" in resp.json()["detail"]

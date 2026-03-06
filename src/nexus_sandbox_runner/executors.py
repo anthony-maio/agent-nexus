@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from textwrap import dedent
 from typing import Protocol
 from urllib.parse import quote_plus
 
@@ -102,6 +103,7 @@ class DockerEphemeralExecutor:
         network: str = "none",
         memory_limit: str = "512m",
         cpu_limit: str = "1.0",
+        pids_limit: int = 128,
     ) -> None:
         self.image = image.strip()
         self.timeout_sec = timeout_sec
@@ -109,6 +111,7 @@ class DockerEphemeralExecutor:
         self.network = network.strip()
         self.memory_limit = memory_limit.strip()
         self.cpu_limit = cpu_limit.strip()
+        self.pids_limit = pids_limit
         if not self.image:
             raise ValueError("Docker executor requires SANDBOX_DOCKER_IMAGE")
 
@@ -116,6 +119,10 @@ class DockerEphemeralExecutor:
         run_dir = sandbox_root / request.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).isoformat()
+        if shutil.which(self.docker_bin) is None:
+            raise RuntimeError(
+                f"Docker binary `{self.docker_bin}` is not available for sandbox backend."
+            )
 
         with tempfile.TemporaryDirectory(
             prefix=f"step-{request.run_id}-{request.step_id}-",
@@ -124,13 +131,18 @@ class DockerEphemeralExecutor:
             step_workspace = Path(temp_dir)
             result_file = step_workspace / "result.json"
             command = self.build_command(request, step_workspace, result_file)
-            proc = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_sec,
-            )
+            try:
+                proc = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_sec,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"Docker step execution timed out after {self.timeout_sec}s"
+                ) from exc
             if proc.returncode != 0:
                 stderr = (proc.stderr or "").strip()[:500]
                 raise RuntimeError(
@@ -145,6 +157,7 @@ class DockerEphemeralExecutor:
             artifacts = self._collect_artifacts(
                 run_dir=run_dir,
                 run_id=request.run_id,
+                step_workspace=step_workspace,
                 artifact_specs=payload.get("artifacts", []),
             )
 
@@ -162,18 +175,32 @@ class DockerEphemeralExecutor:
             metadata=metadata,
         )
 
-    def build_command(self, request: StepRequest, step_workspace: Path, result_file: Path) -> list[str]:
+    def build_command(
+        self,
+        request: StepRequest,
+        step_workspace: Path,
+        result_file: Path,
+    ) -> list[str]:
         script = _container_script()
         cmd = [
             self.docker_bin,
             "run",
             "--rm",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            str(self.pids_limit),
             "--memory",
             self.memory_limit,
             "--cpus",
             self.cpu_limit,
             "--network",
             self.network,
+            "--tmpfs",
+            "/tmp:rw,size=64m,noexec,nosuid,nodev",
             "-e",
             f"NEXUS_ACTION={request.action_type.strip().lower()}",
             "-e",
@@ -197,16 +224,22 @@ class DockerEphemeralExecutor:
         self,
         run_dir: Path,
         run_id: str,
+        step_workspace: Path,
         artifact_specs: list[dict[str, str]],
     ) -> list[dict[str, str]]:
         artifacts: list[dict[str, str]] = []
+        workspace_root = step_workspace.resolve()
         for spec in artifact_specs:
-            source_name = spec.get("name", "").strip()
-            if not source_name:
+            source_name_raw = spec.get("name", "").strip()
+            if not source_name_raw:
                 continue
+            source_name = Path(source_name_raw).name
             source = Path(spec.get("path", source_name))
             if not source.is_absolute():
-                source = Path(spec.get("workspace", ".")) / source
+                source = workspace_root / source
+            source = source.resolve()
+            if workspace_root not in source.parents and source != workspace_root:
+                continue
             if not source.exists():
                 continue
 
@@ -236,35 +269,74 @@ def build_executor_from_env(env: dict[str, str]) -> StepExecutor:
             network=env.get("SANDBOX_DOCKER_NETWORK", "none").strip() or "none",
             memory_limit=env.get("SANDBOX_DOCKER_MEMORY", "512m").strip() or "512m",
             cpu_limit=env.get("SANDBOX_DOCKER_CPUS", "1.0").strip() or "1.0",
+            pids_limit=int(env.get("SANDBOX_DOCKER_PIDS", "128")),
         )
     raise ValueError(f"Unsupported SANDBOX_EXECUTION_BACKEND: {backend}")
 
 
 def _container_script() -> str:
-    return (
-        "import json,os,urllib.parse;"
-        "action=os.environ.get('NEXUS_ACTION','').strip().lower();"
-        "instruction=os.environ.get('NEXUS_INSTRUCTION','');"
-        "step_id=os.environ.get('NEXUS_STEP_ID','step');"
-        "result_path=os.environ.get('NEXUS_OUTPUT_JSON','result.json');"
-        "artifact_actions={'extract','write','export'};"
-        "citation_actions={'navigate','extract'};"
-        "def out(a,i):\n"
-        "  \n"
-        "  return ('[sandbox-browser] Navigated and collected candidate pages for: '+i) if a=='navigate' else "
-        "('[sandbox-browser] Evidence summary with citations prepared. Focus: '+i) if a=='extract' else "
-        "('[sandbox-browser] Export artifact prepared for promotion into canonical workspace. Request: '+i) if a=='export' else "
-        "('[sandbox-browser] Executed action `'+a+'`: '+i);"
-        "output=out(action,instruction);"
-        "query=urllib.parse.quote_plus(instruction[:120]);"
-        "cit=[{'url':'https://example.com/search?q='+query,'title':'Sandbox Search Result','snippet':'Evidence candidate for: '+instruction[:120]}] if action in citation_actions else [];"
-        "arts=[];"
-        "if action in artifact_actions:\n"
-        "  name=f'{step_id}-{action}.txt';"
-        "  with open(name,'w',encoding='utf-8') as fh: fh.write(output);"
-        "  arts.append({'kind':'text','name':name,'path':name,'workspace':os.getcwd()});"
-        "with open(result_path,'w',encoding='utf-8') as fh: json.dump({'output_text':output,'citations':cit,'artifacts':arts},fh);"
-    )
+    return dedent(
+        """
+        import json
+        import os
+        import urllib.parse
+
+        action = os.environ.get("NEXUS_ACTION", "").strip().lower()
+        instruction = os.environ.get("NEXUS_INSTRUCTION", "")
+        step_id = os.environ.get("NEXUS_STEP_ID", "step")
+        result_path = os.environ.get("NEXUS_OUTPUT_JSON", "result.json")
+
+        if action == "navigate":
+            output = f"[sandbox-browser] Navigated and collected candidate pages for: {instruction}"
+        elif action == "extract":
+            output = (
+                "[sandbox-browser] Evidence summary with citations prepared. "
+                f"Focus: {instruction}"
+            )
+        elif action == "export":
+            output = (
+                "[sandbox-browser] Export artifact prepared for workspace promotion. "
+                f"Request: {instruction}"
+            )
+        else:
+            output = f"[sandbox-browser] Executed action `{action}`: {instruction}"
+
+        citations = []
+        if action in {"navigate", "extract"}:
+            query = urllib.parse.quote_plus(instruction[:120])
+            citations.append(
+                {
+                    "url": f"https://example.com/search?q={query}",
+                    "title": "Sandbox Search Result",
+                    "snippet": f"Evidence candidate for: {instruction[:120]}",
+                }
+            )
+
+        artifacts = []
+        if action in {"extract", "write", "export"}:
+            name = f"{step_id}-{action}.txt"
+            with open(name, "w", encoding="utf-8") as fh:
+                fh.write(output)
+            artifacts.append(
+                {
+                    "kind": "text",
+                    "name": name,
+                    "path": name,
+                    "workspace": os.getcwd(),
+                }
+            )
+
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "output_text": output,
+                    "citations": citations,
+                    "artifacts": artifacts,
+                },
+                fh,
+            )
+        """
+    ).strip()
 
 
 def _step_output(action: str, instruction: str) -> str:
@@ -277,7 +349,7 @@ def _step_output(action: str, instruction: str) -> str:
         )
     if action == "export":
         return (
-            "[sandbox-browser] Export artifact prepared for promotion into canonical workspace. "
+            "[sandbox-browser] Export artifact prepared for workspace promotion. "
             f"Request: {instruction}"
         )
     return f"[sandbox-browser] Executed action `{action}`: {instruction}"

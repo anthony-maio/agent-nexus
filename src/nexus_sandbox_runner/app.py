@@ -64,15 +64,18 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail=f"Unsupported action_type: {action}",
             )
-        step_result = executor.execute(
-            StepRequest(
-                run_id=request.run_id,
-                step_id=request.step_id,
-                action_type=action,
-                instruction=request.instruction,
-            ),
-            sandbox_root,
-        )
+        try:
+            step_result = executor.execute(
+                StepRequest(
+                    run_id=request.run_id,
+                    step_id=request.step_id,
+                    action_type=action,
+                    instruction=request.instruction,
+                ),
+                sandbox_root,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         return ExecuteStepResponse(
             output_text=step_result.output_text,
