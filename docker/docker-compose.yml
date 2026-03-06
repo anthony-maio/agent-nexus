@@ -47,9 +47,12 @@ services:
         required: false
     environment:
       SANDBOX_EXECUTION_BACKEND: "${SANDBOX_EXECUTION_BACKEND:-local}"
-      SANDBOX_DOCKER_IMAGE: "${SANDBOX_DOCKER_IMAGE:-python:3.13-slim}"
+      SANDBOX_DOCKER_IMAGE: "${SANDBOX_DOCKER_IMAGE:-python:3.13-slim@sha256:8bc60ca09afaa8ea0d6d1220bde073bacfedd66a4bf8129cbdc8ef0e16c8a952}"
+      SANDBOX_DOCKER_ALLOWED_IMAGES: "${SANDBOX_DOCKER_ALLOWED_IMAGES:-python:3.13-slim@sha256:8bc60ca09afaa8ea0d6d1220bde073bacfedd66a4bf8129cbdc8ef0e16c8a952}"
       SANDBOX_DOCKER_BIN: "${SANDBOX_DOCKER_BIN:-docker}"
-      SANDBOX_DOCKER_HOST: "${SANDBOX_DOCKER_HOST:-tcp://nexus-sandbox-dind:2375}"
+      SANDBOX_DOCKER_HOST: "${SANDBOX_DOCKER_HOST:-tcp://nexus-sandbox-dind:2376}"
+      SANDBOX_DOCKER_TLS_VERIFY: "${SANDBOX_DOCKER_TLS_VERIFY:-1}"
+      SANDBOX_DOCKER_CERT_PATH: "${SANDBOX_DOCKER_CERT_PATH:-/certs/client}"
       SANDBOX_DOCKER_NETWORK: "${SANDBOX_DOCKER_NETWORK:-none}"
       SANDBOX_DOCKER_MEMORY: "${SANDBOX_DOCKER_MEMORY:-512m}"
       SANDBOX_DOCKER_CPUS: "${SANDBOX_DOCKER_CPUS:-1.0}"
@@ -59,9 +62,15 @@ services:
       - "${SANDBOX_PORT:-8020}:8020"
     volumes:
       - ../data:/app/data
+      - sandbox_dind_certs:/certs:ro
     command: ["python", "-m", "nexus_sandbox_runner"]
     networks:
       - nexus-net
+      - sandbox-net
+    depends_on:
+      nexus-sandbox-dind:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8020/health\")'"]
       interval: 30s
@@ -75,14 +84,15 @@ services:
     profiles: [sandbox-docker]
     privileged: true
     environment:
-      DOCKER_TLS_CERTDIR: ""
-    command: ["--host=tcp://0.0.0.0:2375", "--tls=false"]
+      DOCKER_TLS_CERTDIR: "/certs"
+    command: ["--host=tcp://0.0.0.0:2376"]
     volumes:
       - sandbox_dind_data:/var/lib/docker
+      - sandbox_dind_certs:/certs
     networks:
-      - nexus-net
+      - sandbox-net
     healthcheck:
-      test: ["CMD-SHELL", "docker info >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "docker --host=tcp://localhost:2376 --tlsverify --tlscacert=/certs/client/ca.pem --tlscert=/certs/client/cert.pem --tlskey=/certs/client/key.pem info >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -211,7 +221,11 @@ volumes:
   neo4j_data:
   postgres_data:
   sandbox_dind_data:
+  sandbox_dind_certs:
 
 networks:
   nexus-net:
     driver: bridge
+  sandbox-net:
+    driver: bridge
+    internal: true

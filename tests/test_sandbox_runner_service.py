@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from nexus_sandbox_runner.app import create_app
@@ -98,23 +99,20 @@ def test_health_reports_executor_backend(tmp_path: Path, monkeypatch) -> None:
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["executor_backend"] == "local"
+    assert resp.json()["preflight_status"] == "ok"
 
 
-def test_docker_backend_returns_503_when_docker_missing(tmp_path: Path, monkeypatch) -> None:
+def test_docker_backend_fails_fast_when_docker_missing(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SANDBOX_EXECUTION_BACKEND", "docker")
-    monkeypatch.setenv("SANDBOX_DOCKER_IMAGE", "python:3.13-slim")
-    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: None)
-    client = TestClient(create_app())
-
-    resp = client.post(
-        "/execute-step",
-        json={
-            "run_id": "run123",
-            "step_id": "step127",
-            "action_type": "extract",
-            "instruction": "summarize sources",
-        },
+    monkeypatch.setenv(
+        "SANDBOX_DOCKER_IMAGE",
+        "python:3.13-slim@sha256:8bc60ca09afaa8ea0d6d1220bde073bacfedd66a4bf8129cbdc8ef0e16c8a952",
     )
-    assert resp.status_code == 503
-    assert "Docker binary" in resp.json()["detail"]
+    monkeypatch.setenv(
+        "SANDBOX_DOCKER_ALLOWED_IMAGES",
+        "python:3.13-slim@sha256:8bc60ca09afaa8ea0d6d1220bde073bacfedd66a4bf8129cbdc8ef0e16c8a952",
+    )
+    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: None)
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        create_app()

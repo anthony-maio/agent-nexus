@@ -8,7 +8,11 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from nexus_sandbox_runner.executors import StepRequest, build_executor_from_env
+from nexus_sandbox_runner.executors import (
+    StepRequest,
+    build_executor_from_env,
+    run_executor_preflight,
+)
 
 _ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
@@ -41,15 +45,24 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Agent Nexus Sandbox Runner", version="0.2.0")
     sandbox_root = Path("data/sandbox").resolve()
     sandbox_token = os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip()
+    backend = os.environ.get("SANDBOX_EXECUTION_BACKEND", "local").strip().lower() or "local"
     executor = build_executor_from_env(dict(os.environ))
     sandbox_root.mkdir(parents=True, exist_ok=True)
+    try:
+        preflight = run_executor_preflight(executor)
+    except RuntimeError as exc:
+        if backend == "docker":
+            raise RuntimeError(f"Sandbox docker backend preflight failed: {exc}") from exc
+        preflight = {"status": "error", "backend": backend, "detail": str(exc)}
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {
+        payload: dict[str, str] = {
             "status": "ok",
             "executor_backend": getattr(executor, "backend_name", "unknown"),
         }
+        payload.update({f"preflight_{k}": v for k, v in preflight.items()})
+        return payload
 
     @app.post("/execute-step", response_model=ExecuteStepResponse)
     def execute_step(

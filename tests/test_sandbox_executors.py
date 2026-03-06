@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from nexus_sandbox_runner.executors import (
+    DEFAULT_DOCKER_IMAGE,
     DockerEphemeralExecutor,
     LocalEphemeralExecutor,
     StepRequest,
@@ -21,16 +22,17 @@ def test_build_executor_from_env_local() -> None:
     assert isinstance(executor, LocalEphemeralExecutor)
 
 
-def test_build_executor_from_env_docker_requires_image() -> None:
-    with pytest.raises(ValueError, match="SANDBOX_DOCKER_IMAGE"):
-        build_executor_from_env({"SANDBOX_EXECUTION_BACKEND": "docker"})
+def test_build_executor_from_env_docker_uses_default_pinned_image() -> None:
+    executor = build_executor_from_env({"SANDBOX_EXECUTION_BACKEND": "docker"})
+    assert isinstance(executor, DockerEphemeralExecutor)
+    assert executor.image == DEFAULT_DOCKER_IMAGE
 
 
 def test_build_executor_from_env_docker_includes_docker_host() -> None:
     executor = build_executor_from_env(
         {
             "SANDBOX_EXECUTION_BACKEND": "docker",
-            "SANDBOX_DOCKER_IMAGE": "python:3.13-slim",
+            "SANDBOX_DOCKER_IMAGE": DEFAULT_DOCKER_IMAGE,
             "SANDBOX_DOCKER_HOST": "tcp://nexus-sandbox-dind:2375",
         }
     )
@@ -38,9 +40,24 @@ def test_build_executor_from_env_docker_includes_docker_host() -> None:
     assert executor.docker_host == "tcp://nexus-sandbox-dind:2375"
 
 
+def test_docker_executor_rejects_unpinned_image() -> None:
+    with pytest.raises(ValueError, match="pinned by digest"):
+        DockerEphemeralExecutor(image="python:3.13-slim")
+
+
+def test_docker_executor_rejects_non_allowlisted_image() -> None:
+    with pytest.raises(ValueError, match="not in SANDBOX_DOCKER_ALLOWED_IMAGES"):
+        DockerEphemeralExecutor(
+            image=DEFAULT_DOCKER_IMAGE,
+            allowed_images=[
+                "python:3.12-slim@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            ],
+        )
+
+
 def test_docker_executor_build_command_contains_isolation_flags(tmp_path: Path) -> None:
     executor = DockerEphemeralExecutor(
-        image="python:3.13-slim",
+        image=DEFAULT_DOCKER_IMAGE,
         network="none",
         memory_limit="256m",
         cpu_limit="0.5",
@@ -74,7 +91,7 @@ def test_docker_executor_build_command_contains_isolation_flags(tmp_path: Path) 
 def test_docker_executor_execute_collects_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    executor = DockerEphemeralExecutor(image="python:3.13-slim")
+    executor = DockerEphemeralExecutor(image=DEFAULT_DOCKER_IMAGE)
     request = StepRequest(
         run_id="run123",
         step_id="step123",
@@ -123,7 +140,7 @@ def test_docker_executor_sets_docker_host_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     executor = DockerEphemeralExecutor(
-        image="python:3.13-slim",
+        image=DEFAULT_DOCKER_IMAGE,
         docker_host="tcp://nexus-sandbox-dind:2375",
     )
     request = StepRequest(
@@ -175,7 +192,7 @@ def test_docker_executor_sets_docker_host_env(
 def test_docker_executor_ignores_artifacts_outside_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    executor = DockerEphemeralExecutor(image="python:3.13-slim")
+    executor = DockerEphemeralExecutor(image=DEFAULT_DOCKER_IMAGE)
     request = StepRequest(
         run_id="run123",
         step_id="step123",

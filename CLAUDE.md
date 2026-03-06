@@ -59,6 +59,12 @@ docker compose -f docker/docker-compose.yml up -d
 # Docker sandbox backend (ephemeral containers per step)
 SANDBOX_EXECUTION_BACKEND=docker docker compose -f docker/docker-compose.yml --profile sandbox-docker up -d
 
+# One-click helpers
+scripts/dev-up.ps1 -SandboxBackend local
+scripts/dev-up.ps1 -SandboxBackend docker
+./scripts/dev-up.sh local
+./scripts/dev-up.sh docker
+
 # Development (without Docker)
 pip install -e ".[dev]"
 
@@ -84,7 +90,8 @@ ruff format src/
 - Sandbox execution backend is selectable via `SANDBOX_EXECUTION_BACKEND`:
   - `local`: in-process per-step ephemeral workspace.
   - `docker`: throwaway container per step using `SANDBOX_DOCKER_*` settings (`network=none`, caps dropped, read-only rootfs, pids/memory/cpu limits).
-  - Docker backend requires Docker CLI and daemon access in the sandbox-runner runtime.
+  - Docker backend enforces pinned digest images and allowlist validation (`SANDBOX_DOCKER_IMAGE`, `SANDBOX_DOCKER_ALLOWED_IMAGES`).
+  - Compose `sandbox-docker` profile uses a dedicated TLS-enabled `nexus-sandbox-dind` daemon on an internal network.
 - `continuity_core/` is part of this monorepo. It was originally a separate project but is now maintained here. Edit freely.
 
 ## Environment Variables

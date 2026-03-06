@@ -17,6 +17,9 @@ from urllib.parse import quote_plus
 
 _ARTIFACT_ACTIONS: frozenset[str] = frozenset({"extract", "write", "export"})
 _CITATION_ACTIONS: frozenset[str] = frozenset({"navigate", "extract"})
+DEFAULT_DOCKER_IMAGE = (
+    "python:3.13-slim@sha256:8bc60ca09afaa8ea0d6d1220bde073bacfedd66a4bf8129cbdc8ef0e16c8a952"
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,9 @@ class LocalEphemeralExecutor:
     """In-process executor with ephemeral per-step workspace."""
 
     backend_name = "local"
+
+    def preflight(self) -> dict[str, str]:
+        return {"status": "ok", "backend": self.backend_name}
 
     def execute(self, request: StepRequest, sandbox_root: Path) -> StepResult:
         run_dir = sandbox_root / request.run_id
@@ -102,6 +108,9 @@ class DockerEphemeralExecutor:
         timeout_sec: int = 120,
         docker_bin: str = "docker",
         docker_host: str = "",
+        docker_tls_verify: bool = False,
+        docker_cert_path: str = "",
+        allowed_images: list[str] | None = None,
         network: str = "none",
         memory_limit: str = "512m",
         cpu_limit: str = "1.0",
@@ -111,12 +120,52 @@ class DockerEphemeralExecutor:
         self.timeout_sec = timeout_sec
         self.docker_bin = docker_bin
         self.docker_host = docker_host.strip()
+        self.docker_tls_verify = docker_tls_verify
+        self.docker_cert_path = docker_cert_path.strip()
         self.network = network.strip()
         self.memory_limit = memory_limit.strip()
         self.cpu_limit = cpu_limit.strip()
         self.pids_limit = pids_limit
+        self.allowed_images = allowed_images or []
         if not self.image:
             raise ValueError("Docker executor requires SANDBOX_DOCKER_IMAGE")
+        if "@sha256:" not in self.image:
+            raise ValueError("SANDBOX_DOCKER_IMAGE must be pinned by digest (`@sha256:...`).")
+        if self.allowed_images and self.image not in self.allowed_images:
+            raise ValueError(
+                f"Sandbox image `{self.image}` is not in SANDBOX_DOCKER_ALLOWED_IMAGES."
+            )
+
+    def preflight(self) -> dict[str, str]:
+        if shutil.which(self.docker_bin) is None:
+            raise RuntimeError(
+                f"Docker binary `{self.docker_bin}` is not available for sandbox backend."
+            )
+        try:
+            proc = subprocess.run(
+                [self.docker_bin, "info", "--format", "{{.ServerVersion}}"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=self._docker_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Unable to reach Docker daemon (timed out after 10s).") from exc
+
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "").strip()
+            if not err:
+                err = "docker info returned non-zero status."
+            raise RuntimeError(f"Unable to reach Docker daemon: {err}")
+
+        version = (proc.stdout or "").strip() or "unknown"
+        return {
+            "status": "ok",
+            "backend": self.backend_name,
+            "docker_server_version": version,
+            "sandbox_image": self.image,
+        }
 
     def execute(self, request: StepRequest, sandbox_root: Path) -> StepResult:
         run_dir = sandbox_root / request.run_id
@@ -135,17 +184,13 @@ class DockerEphemeralExecutor:
             result_file = step_workspace / "result.json"
             command = self.build_command(request, step_workspace, result_file)
             try:
-                env = None
-                if self.docker_host:
-                    env = dict(os.environ)
-                    env["DOCKER_HOST"] = self.docker_host
                 proc = subprocess.run(
                     command,
                     check=False,
                     capture_output=True,
                     text=True,
                     timeout=self.timeout_sec,
-                    env=env,
+                    env=self._docker_env(),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
@@ -228,6 +273,15 @@ class DockerEphemeralExecutor:
         ]
         return cmd
 
+    def _docker_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if self.docker_host:
+            env["DOCKER_HOST"] = self.docker_host
+        env["DOCKER_TLS_VERIFY"] = "1" if self.docker_tls_verify else "0"
+        if self.docker_cert_path:
+            env["DOCKER_CERT_PATH"] = self.docker_cert_path
+        return env
+
     def _collect_artifacts(
         self,
         run_dir: Path,
@@ -270,17 +324,38 @@ def build_executor_from_env(env: dict[str, str]) -> StepExecutor:
     if backend in {"", "local"}:
         return LocalEphemeralExecutor()
     if backend == "docker":
+        image = env.get("SANDBOX_DOCKER_IMAGE", DEFAULT_DOCKER_IMAGE).strip()
+        allowed_images = _parse_allowed_images(
+            env.get("SANDBOX_DOCKER_ALLOWED_IMAGES", DEFAULT_DOCKER_IMAGE)
+        )
         return DockerEphemeralExecutor(
-            image=env.get("SANDBOX_DOCKER_IMAGE", "").strip(),
+            image=image,
             timeout_sec=int(env.get("SANDBOX_STEP_TIMEOUT_SEC", "120")),
             docker_bin=env.get("SANDBOX_DOCKER_BIN", "docker").strip() or "docker",
             docker_host=env.get("SANDBOX_DOCKER_HOST", "").strip(),
+            docker_tls_verify=(env.get("SANDBOX_DOCKER_TLS_VERIFY", "1").strip() != "0"),
+            docker_cert_path=env.get("SANDBOX_DOCKER_CERT_PATH", "").strip(),
+            allowed_images=allowed_images,
             network=env.get("SANDBOX_DOCKER_NETWORK", "none").strip() or "none",
             memory_limit=env.get("SANDBOX_DOCKER_MEMORY", "512m").strip() or "512m",
             cpu_limit=env.get("SANDBOX_DOCKER_CPUS", "1.0").strip() or "1.0",
             pids_limit=int(env.get("SANDBOX_DOCKER_PIDS", "128")),
         )
     raise ValueError(f"Unsupported SANDBOX_EXECUTION_BACKEND: {backend}")
+
+
+def run_executor_preflight(executor: StepExecutor) -> dict[str, str]:
+    preflight = getattr(executor, "preflight", None)
+    if callable(preflight):
+        result = preflight()
+        if isinstance(result, dict):
+            return {str(k): str(v) for k, v in result.items()}
+    return {"status": "ok", "backend": "unknown"}
+
+
+def _parse_allowed_images(raw: str) -> list[str]:
+    items = [part.strip() for part in raw.split(",") if part.strip()]
+    return items
 
 
 def _container_script() -> str:
