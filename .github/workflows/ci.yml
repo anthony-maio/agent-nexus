@@ -11,6 +11,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -37,6 +39,12 @@ jobs:
           tests/test_sandbox_executors.py
           tests/test_discord_bridge.py
           tests/test_nexus_core_adapters.py
+
+      - name: Lint touched Python files (PR baseline)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          bash scripts/lint-touched.sh "origin/${{ github.base_ref }}"
 
       - name: Run backend tests
         run: uv run pytest -q
