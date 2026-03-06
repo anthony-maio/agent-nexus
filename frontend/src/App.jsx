@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 async function api(path, method = "GET", token = "", body = null) {
   const response = await fetch(`/api${path}`, {
@@ -27,6 +27,8 @@ function App() {
   const [pending, setPending] = useState([]);
   const [traceOpen, setTraceOpen] = useState(true);
   const [error, setError] = useState("");
+  const [streamState, setStreamState] = useState("disconnected");
+  const wsRef = useRef(null);
 
   const token = session?.token || "";
 
@@ -34,6 +36,44 @@ function App() {
     () => pending.filter((i) => !runId || i.run_id === runId),
     [pending, runId]
   );
+
+  useEffect(() => {
+    if (!runId || !token) {
+      setStreamState("disconnected");
+      return;
+    }
+
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${protocol}://${window.location.host}/api/runs/${runId}/stream?token=${encodeURIComponent(token)}`;
+    const socket = new WebSocket(wsUrl);
+    wsRef.current = socket;
+
+    socket.onopen = () => {
+      setStreamState("connected");
+    };
+    socket.onmessage = async (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.event_type !== "stream.ready") {
+          await refreshRun(runId);
+          await refreshPending();
+        }
+      } catch (err) {
+        setError(String(err));
+      }
+    };
+    socket.onerror = () => {
+      setStreamState("error");
+    };
+    socket.onclose = () => {
+      setStreamState("disconnected");
+    };
+
+    return () => {
+      socket.close();
+      wsRef.current = null;
+    };
+  }, [runId, token]);
 
   async function login() {
     setError("");
@@ -171,6 +211,9 @@ function App() {
                 </p>
                 <p>
                   <strong>Mode:</strong> {run.mode}
+                </p>
+                <p>
+                  <strong>Live Stream:</strong> {streamState}
                 </p>
               </div>
             ) : null}

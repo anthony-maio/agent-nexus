@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from datetime import timezone
-from typing import Any, Iterator
+from typing import Any, AsyncIterator, Iterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -35,11 +36,9 @@ log = logging.getLogger(__name__)
 def create_app(context: ApiContext | None = None) -> FastAPI:
     """Create configured FastAPI app."""
     ctx = context or build_context()
-    app = FastAPI(title="Agent Nexus API", version="0.1.0")
-    app.state.ctx = ctx
 
-    @app.on_event("startup")
-    def _startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         with ctx.session_factory() as session:
             ensure_admin_user(
                 session,
@@ -48,6 +47,10 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             )
             session.commit()
         log.info("Nexus API started with single-admin auth enabled.")
+        yield
+
+    app = FastAPI(title="Agent Nexus API", version="0.1.0", lifespan=lifespan)
+    app.state.ctx = ctx
 
     def get_session() -> Iterator[Session]:
         session = ctx.session_factory()

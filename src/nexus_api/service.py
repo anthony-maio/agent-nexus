@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from nexus_api.adapters import SandboxExecutionAdapter, WebInteractionAdapter
 from nexus_api.config import ApiSettings
-from nexus_api.db import Base, build_engine, build_session_factory
+from nexus_api.db import build_engine, build_session_factory
+from nexus_api.migrator import run_migrations
 from nexus_core.events import RunEventBus
 from nexus_core.models import StepDefinition
 
@@ -51,9 +52,9 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
     settings = settings or ApiSettings()
     Path("data/app").mkdir(parents=True, exist_ok=True)
 
+    run_migrations(settings.APP_DATABASE_URL)
     db_engine = build_engine(settings.APP_DATABASE_URL)
     session_factory = build_session_factory(db_engine)
-    Base.metadata.create_all(db_engine)
 
     events = RunEventBus()
     execution_adapter = SandboxExecutionAdapter(base_url=settings.SANDBOX_RUNNER_URL)
