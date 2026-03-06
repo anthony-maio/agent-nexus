@@ -16,7 +16,7 @@ Primary app stack:
 
 Secondary optional adapters:
 - **`nexus_discord_bridge`**: status + approval bridge for remote/away-from-app usage.
-- **Legacy `nexus` Discord bot runtime**: still available, but no longer the primary product direction.
+- **`nexus` package**: legacy code retained in-repo, but runtime entrypoint is removed.
 
 ## Package Layout
 
@@ -26,7 +26,7 @@ src/
   nexus_api/       # FastAPI control plane
   nexus_sandbox_runner/ # Isolated step execution service
   nexus_discord_bridge/ # Optional status/approval bridge
-  nexus/           # Legacy Discord bot package (secondary)
+  nexus/           # Legacy code (no supported runtime entrypoint)
     config.py      # All env/config loading
     bot.py         # NexusBot class (discord.py)
     models/        # OpenRouter + Ollama clients, model registry
@@ -51,7 +51,6 @@ alembic upgrade head
 
 # Optional legacy/bridge services
 python -m nexus_discord_bridge
-python -m nexus
 
 # Infra
 docker compose -f docker/docker-compose.yml up -d
@@ -124,8 +123,7 @@ App-first required:
 - `APP_SANDBOX_ARTIFACT_ROOT` (promotion source-root enforcement)
 
 Optional/secondary:
-- `DISCORD_TOKEN` (for bridge or legacy bot runtime)
-- `NEXUS_ENABLE_LEGACY_RUNTIME` (must be `1` to run legacy `python -m nexus` bot)
+- `DISCORD_TOKEN` (for Discord bridge)
 - `OPENROUTER_API_KEY` (for model-backed execution paths)
 - `APP_ENABLE_MODEL_REPLANNER` (enable/disable model-assisted follow-up proposals)
 - `APP_REPLANNER_MAX_STEPS` and `APP_REPLANNER_TIMEOUT_SEC` (adaptive replanner limits)
@@ -143,7 +141,6 @@ Infrastructure services can be mixed with external equivalents via environment o
 - `nexus-frontend` - Primary web app UI bundle (production compose override)
 - `nexus-proxy` - Caddy reverse proxy with optional automatic TLS
 - `nexus-discord-bridge` - Optional remote approval/status bridge
-- `nexus-bot` - Legacy Discord bot runtime (optional)
 - `nexus-qdrant` - Vector memory (port 6333, profile: qdrant)
 - `nexus-redis` - Working memory cache (port 6379, profile: redis)
 - `nexus-neo4j` - C2 knowledge graph (port 7687, profile: neo4j)

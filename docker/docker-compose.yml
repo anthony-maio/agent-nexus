@@ -115,33 +115,6 @@ services:
     depends_on:
       - nexus-api
 
-  nexus-bot:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.bot
-    container_name: nexus-bot
-    restart: unless-stopped
-    profiles: [discord-bot]
-    env_file:
-      - path: ../config/.env
-        required: false
-    environment:
-      NEXUS_ENABLE_LEGACY_RUNTIME: "${NEXUS_ENABLE_LEGACY_RUNTIME:-1}"
-    ports:
-      - "${SETUP_PORT:-8090}:8090"
-    volumes:
-      - ../config:/app/config
-      - ../data:/app/data
-    networks:
-      - nexus-net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: ["CMD-SHELL", "python -c 'import sys; sys.exit(0)'"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   nexus-qdrant:
     image: qdrant/qdrant:latest
     container_name: nexus-qdrant
