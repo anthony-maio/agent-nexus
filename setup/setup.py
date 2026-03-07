@@ -13,7 +13,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -52,7 +51,12 @@ SWARM_CHOICES: list[tuple[str, str, str, bool]] = [
 # Embedding model choices: (id, display_name, cost_hint, is_default)
 EMBEDDING_CHOICES: list[tuple[str, str, str, bool]] = [
     ("qwen/qwen3-embedding-8b", "Qwen3 Embedding 8B", "$0.01/M - Recommended (cheapest)", True),
-    ("openai/text-embedding-3-small", "OpenAI Embedding 3 Small", "$0.02/M - Good alternative", False),
+    (
+        "openai/text-embedding-3-small",
+        "OpenAI Embedding 3 Small",
+        "$0.02/M - Good alternative",
+        False,
+    ),
     ("openai/text-embedding-3-large", "OpenAI Embedding 3 Large", "$0.13/M - Best quality", False),
     ("google/gemini-embedding-001", "Gemini Embedding 001", "$0.15/M - Multilingual", False),
     ("mxbai-embed-large-v1", "Local (Ollama)", "Free - Requires Ollama installed", False),
@@ -71,6 +75,7 @@ RESET = "\033[0m"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def print_step(step: int, total: int, title: str) -> None:
     print(f"\n{CYAN}[{step}/{total}]{RESET} {BOLD}{title}{RESET}")
@@ -100,7 +105,9 @@ def prompt_yes_no(label: str, default: bool = False) -> bool:
     return response in ("y", "yes")
 
 
-def prompt_choice(label: str, choices: list[tuple[str, str, str, bool]], multi: bool = False) -> list[str]:
+def prompt_choice(
+    label: str, choices: list[tuple[str, str, str, bool]], multi: bool = False
+) -> list[str]:
     """Display numbered choices and let user select.
 
     For multi-select, defaults are pre-selected and user toggles.
@@ -192,15 +199,17 @@ def write_env(config: dict[str, str]) -> None:
         lines.append(f"DISCORD_GUILD_ID={config['DISCORD_GUILD_ID']}")
         lines.append("")
 
-    lines.extend([
-        "# === MODELS ===",
-        f"SWARM_MODELS={config['SWARM_MODELS']}",
-        f"EMBEDDING_MODEL={config['EMBEDDING_MODEL']}",
-        "",
-        "# === ORCHESTRATOR ===",
-        f"AUTONOMY_MODE={config.get('AUTONOMY_MODE', 'escalate')}",
-        "",
-    ])
+    lines.extend(
+        [
+            "# === MODELS ===",
+            f"SWARM_MODELS={config['SWARM_MODELS']}",
+            f"EMBEDDING_MODEL={config['EMBEDDING_MODEL']}",
+            "",
+            "# === ORCHESTRATOR ===",
+            f"AUTONOMY_MODE={config.get('AUTONOMY_MODE', 'escalate')}",
+            "",
+        ]
+    )
 
     # Optional premium keys
     premium_keys = [
@@ -218,33 +227,39 @@ def write_env(config: dict[str, str]) -> None:
 
     # Ollama
     if config.get("OLLAMA_ENABLED") == "true":
-        lines.extend([
-            "# === LOCAL MODELS ===",
-            f"OLLAMA_BASE_URL={config.get('OLLAMA_BASE_URL', 'http://host.docker.internal:11434')}",
-            "",
-        ])
+        lines.extend(
+            [
+                "# === LOCAL MODELS ===",
+                f"OLLAMA_BASE_URL={config.get('OLLAMA_BASE_URL', 'http://host.docker.internal:11434')}",
+                "",
+            ]
+        )
 
     # PiecesOS
     if config.get("PIECES_MCP_ENABLED") == "true":
-        lines.extend([
-            "# === PIECESOS ===",
-            "PIECES_MCP_ENABLED=true",
-            f"PIECES_MCP_URL={config.get('PIECES_MCP_URL', 'http://host.docker.internal:39300')}",
-            "",
-        ])
+        lines.extend(
+            [
+                "# === PIECESOS ===",
+                "PIECES_MCP_ENABLED=true",
+                f"PIECES_MCP_URL={config.get('PIECES_MCP_URL', 'http://host.docker.internal:39300')}",
+                "",
+            ]
+        )
 
     # Infrastructure defaults (include as comments so users know they exist)
-    lines.extend([
-        "# === INFRASTRUCTURE (defaults work with docker-compose) ===",
-        "# QDRANT_URL=http://nexus-qdrant:6333",
-        "# REDIS_URL=redis://nexus-redis:6379/0",
-        "",
-        "# === ORCHESTRATOR ===",
-        "# ORCHESTRATOR_INTERVAL=3600",
-        "# CROSSTALK_PROBABILITY=0.3",
-        "# CONSENSUS_THRESHOLD=0.5",
-        "",
-    ])
+    lines.extend(
+        [
+            "# === INFRASTRUCTURE (defaults work with docker-compose) ===",
+            "# QDRANT_URL=http://nexus-qdrant:6333",
+            "# REDIS_URL=redis://nexus-redis:6379/0",
+            "",
+            "# === ORCHESTRATOR ===",
+            "# ORCHESTRATOR_INTERVAL=3600",
+            "# CROSSTALK_PROBABILITY=0.3",
+            "# CONSENSUS_THRESHOLD=0.5",
+            "",
+        ]
+    )
 
     ENV_DIR.mkdir(parents=True, exist_ok=True)
     ENV_FILE.write_text("\n".join(lines), encoding="utf-8")
@@ -255,11 +270,12 @@ def write_env(config: dict[str, str]) -> None:
 # Connection tests
 # ---------------------------------------------------------------------------
 
+
 def test_openrouter(api_key: str) -> bool:
     """Test OpenRouter API connectivity."""
     try:
-        import urllib.request
         import json
+        import urllib.request
 
         req = urllib.request.Request(
             "https://openrouter.ai/api/v1/models",
@@ -281,8 +297,8 @@ def test_openrouter(api_key: str) -> bool:
 def test_qdrant(url: str = "http://localhost:6333") -> bool:
     """Test Qdrant connectivity."""
     try:
-        import urllib.request
         import json
+        import urllib.request
 
         req = urllib.request.Request(f"{url}/collections")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -304,6 +320,7 @@ def test_ollama(url: str = "http://localhost:11434") -> bool:
         req = urllib.request.Request(f"{url}/api/tags")
         with urllib.request.urlopen(req, timeout=5) as resp:
             import json
+
             data = json.loads(resp.read())
             models = len(data.get("models", []))
             print(f"  {GREEN}Ollama: Connected ({models} models pulled){RESET}")
@@ -316,6 +333,7 @@ def test_ollama(url: str = "http://localhost:11434") -> bool:
 # ---------------------------------------------------------------------------
 # Wizard steps
 # ---------------------------------------------------------------------------
+
 
 def run_wizard() -> None:
     """Run the interactive setup wizard."""
@@ -432,16 +450,17 @@ def run_wizard() -> None:
     print(f"  Autonomy: {config.get('AUTONOMY_MODE', 'escalate')}")
     print()
     print(f"  {BOLD}Next steps:{RESET}")
-    print(f"  1. Make sure Docker is running")
+    print("  1. Make sure Docker is running")
     print(f"  2. Run: {CYAN}docker compose -f docker/docker-compose.yml up -d{RESET}")
-    print(f"  3. The bot will auto-create #human, #nexus, and #memory channels")
-    print(f"  4. Say hello in #human!")
+    print("  3. The bot will auto-create #human, #nexus, and #memory channels")
+    print("  4. Say hello in #human!")
     print()
 
 
 # ---------------------------------------------------------------------------
 # Check mode
 # ---------------------------------------------------------------------------
+
 
 def run_check() -> None:
     """Validate an existing .env file."""
@@ -470,7 +489,7 @@ def run_check() -> None:
             warnings.append(f"Only {len(models)} swarm model(s) configured. Recommend 2-4.")
         print(f"  Swarm models: {len(models)}")
     else:
-        print(f"  Swarm models: defaults (4)")
+        print("  Swarm models: defaults (4)")
 
     embedding = env.get("EMBEDDING_MODEL", "qwen/qwen3-embedding-8b")
     print(f"  Embedding model: {embedding}")
@@ -497,6 +516,7 @@ def run_check() -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(

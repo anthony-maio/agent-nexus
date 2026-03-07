@@ -58,10 +58,7 @@ def build_tools(bot: Any) -> list:
                 return "No relevant memories found."
             parts: list[str] = []
             for m in results:
-                parts.append(
-                    f"[{m.source}, score={m.score:.2f}]: "
-                    f"{m.content[:1000]}"
-                )
+                parts.append(f"[{m.source}, score={m.score:.2f}]: {m.content[:1000]}")
             return "\n".join(parts)
         except Exception as exc:
             log.warning("query_memory tool failed: %s", exc)
@@ -91,9 +88,7 @@ def build_tools(bot: Any) -> list:
                 return "No relevant C2 context chunks found."
             parts: list[str] = []
             for c in chosen:
-                parts.append(
-                    f"[{c.get('store', '?')}] {c.get('text', '')[:500]}"
-                )
+                parts.append(f"[{c.get('store', '?')}] {c.get('text', '')[:500]}")
             return "\n".join(parts)
         except Exception as exc:
             log.warning("query_c2_context tool failed: %s", exc)
@@ -140,11 +135,7 @@ def build_tools(bot: Any) -> list:
         if c2 is None or not c2.is_running:
             return "C2 is not running."
         try:
-            tag_list = (
-                [t.strip() for t in tags.split(",") if t.strip()]
-                if tags
-                else []
-            )
+            tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
             result = await c2.write_event(
                 actor=actor,
                 intent=intent,
@@ -321,10 +312,7 @@ def build_tools(bot: Any) -> list:
                 tags=["mra", "resolution", verdict],
                 metadata={"origin": "task_agent", "verdict": verdict},
             )
-            return (
-                f"Contradiction resolution recorded: verdict={verdict}. "
-                f"Evidence logged to C2."
-            )
+            return f"Contradiction resolution recorded: verdict={verdict}. Evidence logged to C2."
         except Exception as exc:
             log.warning("resolve_contradiction tool failed: %s", exc)
             return f"Resolution logging failed: {exc}"

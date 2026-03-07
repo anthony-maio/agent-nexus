@@ -83,6 +83,7 @@ _ORCHESTRATOR_SYSTEM_PROMPT = (
 # Node functions
 # =====================================================================
 
+
 async def gather_state_node(
     state: NexusOrchestratorState,
     *,
@@ -196,19 +197,19 @@ async def orchestrator_decide_node(
     prompt = _build_decision_prompt(state, bot)
 
     try:
-        response = await orchestrator_llm.ainvoke([
-            SystemMessage(content=_ORCHESTRATOR_SYSTEM_PROMPT),
-            HumanMessage(content=prompt),
-        ])
+        response = await orchestrator_llm.ainvoke(
+            [
+                SystemMessage(content=_ORCHESTRATOR_SYSTEM_PROMPT),
+                HumanMessage(content=prompt),
+            ]
+        )
         actions = _parse_actions(response.content)
 
         # Log decision to C2 for future context.
         if actions:
             c2 = getattr(bot, "c2", None)
             if c2 is not None and c2.is_running:
-                summary = "; ".join(
-                    a.get("description", "")[:60] for a in actions[:3]
-                )
+                summary = "; ".join(a.get("description", "")[:60] for a in actions[:3])
                 try:
                     await c2.write_event(
                         actor="orchestrator",
@@ -309,7 +310,10 @@ async def dispatch_agent_node(
 
     log.info(
         "LangGraph dispatching action %d/%d (%s): %.100s",
-        idx + 1, len(actions), action_type, description,
+        idx + 1,
+        len(actions),
+        action_type,
+        description,
     )
 
     # Build agent messages with C2 context.
@@ -326,7 +330,10 @@ async def dispatch_agent_node(
     agent_error = False
     try:
         result_text, tool_calls_log = await _react_loop(
-            agent_with_tools, tools, messages, max_steps=3,
+            agent_with_tools,
+            tools,
+            messages,
+            max_steps=3,
         )
     except Exception as exc:
         log.error("Agent dispatch failed: %s", exc, exc_info=True)
@@ -449,6 +456,7 @@ def should_continue(state: NexusOrchestratorState) -> str:
 # Graph builder
 # =====================================================================
 
+
 def build_orchestrator_graph(
     bot: Any,
     orchestrator_llm: Any,
@@ -510,6 +518,7 @@ def build_orchestrator_graph(
 # ReAct loop
 # =====================================================================
 
+
 async def _react_loop(
     agent_with_tools: Any,
     tools: list,
@@ -561,9 +570,7 @@ async def _react_loop(
             log_entry["result_preview"] = str(result)[:1000]
             tool_log.append(log_entry)
 
-            messages.append(
-                ToolMessage(content=str(result), tool_call_id=tc["id"])
-            )
+            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
 
     # Max steps reached -- get final response.
     response = await agent_with_tools.ainvoke(messages)
@@ -573,6 +580,7 @@ async def _react_loop(
 # =====================================================================
 # Helpers
 # =====================================================================
+
 
 def _build_decision_prompt(
     state: NexusOrchestratorState,
@@ -602,10 +610,7 @@ def _build_decision_prompt(
         parts.append(f"\n--- Recent Task Results ({len(task_results)}) ---")
         for tr in task_results:
             status = "OK" if tr.get("success") else "FAILED"
-            parts.append(
-                f"  [{status}] {tr.get('type', '?')}: "
-                f"{tr.get('description', '')[:100]}"
-            )
+            parts.append(f"  [{status}] {tr.get('type', '?')}: {tr.get('description', '')[:100]}")
 
     # Recent conversation.
     recent_msgs = state.get("recent_messages", [])
@@ -658,9 +663,7 @@ def _build_decision_prompt(
         if activity.get("projects"):
             parts.append(f"  Active projects: {', '.join(activity['projects'])}")
         if activity.get("active_apps"):
-            parts.append(
-                f"  Active apps: {', '.join(activity['active_apps'][:5])}"
-            )
+            parts.append(f"  Active apps: {', '.join(activity['active_apps'][:5])}")
 
     # C2 context.
     c2_context = state.get("c2_context", "")
@@ -721,10 +724,7 @@ def _build_agent_system_prompt(
     parts.append(f"Type: {action.get('type', 'analyze')}")
     parts.append(f"Priority: {action.get('priority', 'medium')}")
     parts.append("")
-    parts.append(
-        "Respond with a clear, actionable answer. "
-        "Keep your response under 500 words."
-    )
+    parts.append("Respond with a clear, actionable answer. Keep your response under 500 words.")
 
     return "\n".join(parts)
 
@@ -839,7 +839,7 @@ def _parse_actions(raw_response: str) -> list[dict[str, Any]]:
     bracket_end = text.rfind("]")
     if bracket_start >= 0 and bracket_end > bracket_start:
         try:
-            parsed = json.loads(text[bracket_start:bracket_end + 1])
+            parsed = json.loads(text[bracket_start : bracket_end + 1])
             if isinstance(parsed, list):
                 return _validate_actions(parsed)
         except json.JSONDecodeError:
@@ -855,7 +855,12 @@ def _validate_actions(
 ) -> list[dict[str, Any]]:
     """Validate and normalise a parsed list of action dicts."""
     valid_types = {
-        "research", "code", "analyze", "summarize", "classify", "extract",
+        "research",
+        "code",
+        "analyze",
+        "summarize",
+        "classify",
+        "extract",
     }
     valid_priorities = {"high", "medium", "low"}
     actions: list[dict[str, Any]] = []
@@ -922,8 +927,7 @@ async def _post_to_nexus(bot: Any, agent_result: dict[str, Any]) -> None:
         tool_calls = agent_result.get("tool_calls", [])
         if tool_calls:
             tool_summary = "\n".join(
-                f"`{tc.get('tool', '?')}` -> "
-                f"{tc.get('result_preview', '...')[:500]}"
+                f"`{tc.get('tool', '?')}` -> {tc.get('result_preview', '...')[:500]}"
                 for tc in tool_calls
             )
             embeds[-1].add_field(

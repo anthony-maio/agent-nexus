@@ -17,14 +17,11 @@ class Event:
 
 
 class EventStore(Protocol):
-    def append(self, event: Event) -> None:
-        ...
+    def append(self, event: Event) -> None: ...
 
-    def tail(self, n: int = 10) -> List[Event]:
-        ...
+    def tail(self, n: int = 10) -> List[Event]: ...
 
-    def query(self, tag: Optional[str] = None, limit: int = 50) -> List[Event]:
-        ...
+    def query(self, tag: Optional[str] = None, limit: int = 50) -> List[Event]: ...
 
 
 class InMemoryEventStore:
@@ -49,9 +46,15 @@ class EventLog:
     def __init__(self, store: Optional[EventStore] = None) -> None:
         self._store = store or InMemoryEventStore()
 
-    def log(self, actor: str, intent: str, inp: str, out: str,
-            tags: Optional[Iterable[str]] = None,
-            metadata: Optional[Dict[str, str]] = None) -> Event:
+    def log(
+        self,
+        actor: str,
+        intent: str,
+        inp: str,
+        out: str,
+        tags: Optional[Iterable[str]] = None,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> Event:
         event = Event(
             timestamp=time.time(),
             actor=actor,

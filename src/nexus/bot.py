@@ -392,8 +392,7 @@ class NexusBot(commands.Bot):
                 log.info("LangGraph: Redis checkpointer initialized.")
             except Exception as exc:
                 log.info(
-                    "LangGraph: Redis checkpointer unavailable (%s), "
-                    "using in-memory fallback.",
+                    "LangGraph: Redis checkpointer unavailable (%s), using in-memory fallback.",
                     exc,
                 )
                 from langgraph.checkpoint.memory import MemorySaver
@@ -408,15 +407,13 @@ class NexusBot(commands.Bot):
                 checkpointer=checkpointer,
             )
             log.info(
-                "LangGraph orchestrator initialized "
-                "(orchestrator=%s, agent=%s).",
+                "LangGraph orchestrator initialized (orchestrator=%s, agent=%s).",
                 self.settings.ORCHESTRATOR_MODEL,
                 self.settings.TASK_AGENT_MODEL,
             )
         except Exception:
             log.error(
-                "LangGraph initialization failed -- "
-                "falling back to manual orchestrator.",
+                "LangGraph initialization failed -- falling back to manual orchestrator.",
                 exc_info=True,
             )
             self._orchestrator_graph = None
@@ -487,10 +484,7 @@ class NexusBot(commands.Bot):
         content = message.content
         attachment_text = await self._extract_attachments(message)
         if attachment_text:
-            content = (
-                f"{message.content}\n\n---\n"
-                f"**Attached Document:**\n{attachment_text}"
-            )
+            content = f"{message.content}\n\n---\n**Attached Document:**\n{attachment_text}"
 
         # Analyse sentiment so models can adapt their tone.
         self.sentiment.analyze(content)
@@ -541,9 +535,7 @@ class NexusBot(commands.Bot):
             fab_warnings = check_swarm_fabrication(response.content)
             if fab_warnings:
                 footer = embed.footer.text or ""
-                embed.set_footer(
-                    text=f"{footer} | Unverified claims detected".strip(" |")
-                )
+                embed.set_footer(text=f"{footer} | Unverified claims detected".strip(" |"))
 
             last_msg = await self.router.nexus.send(embed=embed)
 
@@ -607,11 +599,10 @@ class NexusBot(commands.Bot):
                 continue
 
             try:
-                await message.channel.send(
-                    f"Reading attachment: *{attachment.filename}*..."
-                )
+                await message.channel.send(f"Reading attachment: *{attachment.filename}*...")
                 text = await extractor.extract_from_url(
-                    attachment.url, attachment.filename,
+                    attachment.url,
+                    attachment.filename,
                 )
                 if text:
                     parts.append(f"### {attachment.filename}\n{text}")
@@ -670,9 +661,7 @@ class NexusBot(commands.Bot):
                 fab_warnings = check_swarm_fabrication(reaction.content)
                 if fab_warnings:
                     footer = embed.footer.text or ""
-                    embed.set_footer(
-                        text=f"{footer} | Unverified claims detected".strip(" |")
-                    )
+                    embed.set_footer(text=f"{footer} | Unverified claims detected".strip(" |"))
 
                 last_msg = await last_msg.reply(embed=embed, mention_author=False)
                 reactions_posted += 1
@@ -765,8 +754,12 @@ class NexusBot(commands.Bot):
             return
         try:
             await self.c2.write_event(
-                actor=actor, intent=intent, inp=inp, out=out,
-                tags=tags, metadata=metadata,
+                actor=actor,
+                intent=intent,
+                inp=inp,
+                out=out,
+                tags=tags,
+                metadata=metadata,
             )
         except Exception:
             pass
@@ -782,9 +775,7 @@ class NexusBot(commands.Bot):
         # Inject previous session context for continuity
         prev = self.session.last_session_summary
         if prev:
-            parts.append(
-                f"\n\n## Previous Session\n{prev[:500]}\n"
-            )
+            parts.append(f"\n\n## Previous Session\n{prev[:500]}\n")
 
         # Inject current user mood
         mood_ctx = self.sentiment.mood_context_for_prompt()

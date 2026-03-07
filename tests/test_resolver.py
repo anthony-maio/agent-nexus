@@ -1,6 +1,5 @@
 """Tests for MRA ContradictionClassifier, ResolutionEngine, and Pipeline."""
 
-
 from continuity_core.mra.pipeline import MRAResolutionPipeline
 from continuity_core.mra.resolver import (
     ContradictionClassifier,
@@ -13,7 +12,6 @@ from continuity_core.mra.stress import StressResult
 
 
 class TestContradictionClassifier:
-
     def setup_method(self):
         self.clf = ContradictionClassifier()
 
@@ -87,7 +85,6 @@ class TestContradictionClassifier:
 
 
 class TestResolutionEngine:
-
     def setup_method(self):
         self.clf = ContradictionClassifier()
         self.engine = ResolutionEngine()
@@ -106,7 +103,8 @@ class TestResolutionEngine:
         classified = self.clf.classify(
             "Redis handles caching for the application layer",
             "Redis provides caching at the application layer",
-            score=0.2, similarity=0.92,
+            score=0.2,
+            similarity=0.92,
         )
         result = self.engine.resolve(classified)
         assert result.resolved is True
@@ -116,7 +114,8 @@ class TestResolutionEngine:
         classified = self.clf.classify(
             "Use REST API for communication",
             "Use GraphQL API for communication",
-            score=0.6, similarity=0.5,
+            score=0.6,
+            similarity=0.5,
             metadata={"timestamp_s1": 1000.0, "timestamp_s2": 5000.0},
         )
         result = self.engine.resolve(classified)
@@ -127,7 +126,8 @@ class TestResolutionEngine:
         classified = self.clf.classify(
             "Always use strict mode",
             "Strict mode is not needed in production",
-            score=0.8, similarity=0.4,
+            score=0.8,
+            similarity=0.4,
         )
         result = self.engine.resolve(classified)
         assert result.resolved is False
@@ -139,10 +139,12 @@ class TestResolutionEngine:
 
 
 class TestMRAResolutionPipeline:
-
     def test_empty_stress(self):
         stress = StressResult(
-            s_omega=0.0, d_log=0.0, d_sem=0.0, v_top=0.0,
+            s_omega=0.0,
+            d_log=0.0,
+            d_sem=0.0,
+            v_top=0.0,
         )
         pipeline = MRAResolutionPipeline()
         report = pipeline.run(stress)
@@ -153,7 +155,10 @@ class TestMRAResolutionPipeline:
 
     def test_mixed_contradictions(self):
         stress = StressResult(
-            s_omega=0.5, d_log=0.5, d_sem=0.0, v_top=0.0,
+            s_omega=0.5,
+            d_log=0.5,
+            d_sem=0.0,
+            v_top=0.0,
             contradictions=[
                 # Truncation artifact
                 ("short text", "short text with more details added on", 0.6),
@@ -174,7 +179,10 @@ class TestMRAResolutionPipeline:
 
     def test_deep_tensions_processed_first(self):
         stress = StressResult(
-            s_omega=0.7, d_log=0.7, d_sem=0.0, v_top=0.0,
+            s_omega=0.7,
+            d_log=0.7,
+            d_sem=0.0,
+            v_top=0.0,
             contradictions=[
                 ("A is true", "A is false", 0.9),
             ],
@@ -190,7 +198,10 @@ class TestMRAResolutionPipeline:
 
     def test_summary_readable(self):
         stress = StressResult(
-            s_omega=0.4, d_log=0.4, d_sem=0.0, v_top=0.0,
+            s_omega=0.4,
+            d_log=0.4,
+            d_sem=0.0,
+            v_top=0.0,
             contradictions=[
                 ("short", "short with more content appended to it here", 0.5),
                 ("Python is good", "Python is great for scripting", 0.2),
@@ -205,7 +216,10 @@ class TestMRAResolutionPipeline:
 
     def test_graph_ops_collected(self):
         stress = StressResult(
-            s_omega=0.5, d_log=0.5, d_sem=0.0, v_top=0.0,
+            s_omega=0.5,
+            d_log=0.5,
+            d_sem=0.0,
+            v_top=0.0,
             contradictions=[
                 ("short", "short with a lot more content and details", 0.5),
             ],
@@ -221,7 +235,10 @@ class TestMRAResolutionPipeline:
         from continuity_core.mra.voids import VoidReport
 
         stress = StressResult(
-            s_omega=0.1, d_log=0.1, d_sem=0.0, v_top=0.0,
+            s_omega=0.1,
+            d_log=0.1,
+            d_sem=0.0,
+            v_top=0.0,
         )
         voids = VoidReport(
             void_pairs=[("cluster_a", "cluster_b")],

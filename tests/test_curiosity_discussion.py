@@ -67,27 +67,35 @@ async def test_night_cycle_triggers_discussion_on_high_stress():
     from nexus.orchestrator.loop import OrchestratorLoop
 
     bot = _make_bot_mock()
-    bot.c2.maintenance = AsyncMock(return_value={
-        "stress_after": 0.35,
-        "contradictions_found": 2,
-        "deep_tensions_found": 0,
-        "voids_found": 0,
-    })
-    bot.c2.curiosity = AsyncMock(return_value={
-        "stress_level": 0.35,
-        "contradictions": [{"s1": "X", "s2": "Y", "score": 0.7}],
-        "deep_tensions": [],
-        "bridging_questions": [],
-        "suggested_action": "resolve_contradiction",
-    })
+    bot.c2.maintenance = AsyncMock(
+        return_value={
+            "stress_after": 0.35,
+            "contradictions_found": 2,
+            "deep_tensions_found": 0,
+            "voids_found": 0,
+        }
+    )
+    bot.c2.curiosity = AsyncMock(
+        return_value={
+            "stress_level": 0.35,
+            "contradictions": [{"s1": "X", "s2": "Y", "score": 0.7}],
+            "deep_tensions": [],
+            "bridging_questions": [],
+            "suggested_action": "resolve_contradiction",
+        }
+    )
 
     loop = OrchestratorLoop(bot, interval=3600)
 
     with patch.object(
-        loop, "_trigger_curiosity_discussion", new_callable=AsyncMock,
+        loop,
+        "_trigger_curiosity_discussion",
+        new_callable=AsyncMock,
     ) as mock_discuss:
         with patch.object(
-            loop, "_post_curiosity_findings", new_callable=AsyncMock,
+            loop,
+            "_post_curiosity_findings",
+            new_callable=AsyncMock,
         ):
             await loop._run_night_cycle()
 
@@ -100,20 +108,26 @@ async def test_night_cycle_skips_discussion_when_no_signals():
     from nexus.orchestrator.loop import OrchestratorLoop
 
     bot = _make_bot_mock()
-    bot.c2.maintenance = AsyncMock(return_value={
-        "stress_after": 0.05,
-        "contradictions_found": 0,
-        "deep_tensions_found": 0,
-        "voids_found": 0,
-    })
+    bot.c2.maintenance = AsyncMock(
+        return_value={
+            "stress_after": 0.05,
+            "contradictions_found": 0,
+            "deep_tensions_found": 0,
+            "voids_found": 0,
+        }
+    )
 
     loop = OrchestratorLoop(bot, interval=3600)
 
     with patch.object(
-        loop, "_trigger_curiosity_discussion", new_callable=AsyncMock,
+        loop,
+        "_trigger_curiosity_discussion",
+        new_callable=AsyncMock,
     ) as mock_discuss:
         with patch.object(
-            loop, "_post_curiosity_findings", new_callable=AsyncMock,
+            loop,
+            "_post_curiosity_findings",
+            new_callable=AsyncMock,
         ):
             await loop._run_night_cycle()
 

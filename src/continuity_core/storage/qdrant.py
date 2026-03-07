@@ -38,8 +38,13 @@ class QdrantMemoryStore:
                 ),
             )
 
-    def remember(self, content: str, memory_type: str, importance: int = 5,
-                 metadata: Optional[Dict[str, Any]] = None) -> str:
+    def remember(
+        self,
+        content: str,
+        memory_type: str,
+        importance: int = 5,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
         vector = self._embed_fn(content)
         mem_id = str(uuid.uuid4())
         now = time.time()
@@ -58,16 +63,19 @@ class QdrantMemoryStore:
         )
         return mem_id
 
-    def recall(self, query: str, top_k: int = 5,
-               type_filter: Optional[str] = None) -> List[QdrantResult]:
+    def recall(
+        self, query: str, top_k: int = 5, type_filter: Optional[str] = None
+    ) -> List[QdrantResult]:
         qvec = self._embed_fn(query)
         qfilter = None
         if type_filter:
             qfilter = qmodels.Filter(
-                must=[qmodels.FieldCondition(
-                    key="type",
-                    match=qmodels.MatchValue(value=type_filter),
-                )]
+                must=[
+                    qmodels.FieldCondition(
+                        key="type",
+                        match=qmodels.MatchValue(value=type_filter),
+                    )
+                ]
             )
         response = self._client.query_points(
             collection_name=self._collection,

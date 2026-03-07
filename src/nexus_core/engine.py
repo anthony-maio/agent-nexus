@@ -455,9 +455,7 @@ class RunEngine:
         await self._publish(run_id, "run.failed", {"step_id": step_id})
 
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        await self.events.publish(
-            RunEvent(run_id=run_id, event_type=event_type, payload=payload)
-        )
+        await self.events.publish(RunEvent(run_id=run_id, event_type=event_type, payload=payload))
 
     @staticmethod
     def _sha256(path: Path) -> str:

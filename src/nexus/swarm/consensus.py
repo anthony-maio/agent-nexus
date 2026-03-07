@@ -27,9 +27,9 @@ class ConsensusOutcome(Enum):
 @dataclass
 class Vote:
     model_id: str
-    decision: str        # "approve", "reject", or "abstain"
+    decision: str  # "approve", "reject", or "abstain"
     reasoning: str
-    confidence: float    # 0.0-1.0
+    confidence: float  # 0.0-1.0
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -51,7 +51,7 @@ class ConsensusProtocol:
 
     def __init__(self, threshold: float = 0.5, timeout: float = 60.0) -> None:
         self.threshold = threshold  # Agreement ratio required
-        self.timeout = timeout      # Seconds to wait for votes
+        self.timeout = timeout  # Seconds to wait for votes
         self._active_votes: dict[str, list[Vote]] = {}  # question_id -> votes
 
     async def request_consensus(
@@ -65,7 +65,9 @@ class ConsensusProtocol:
         Args:
             question: The decision to vote on
             model_ids: Which models should vote
-            call_model_fn: Async function to call each model. Takes (model_id, prompt) -> response string.
+            call_model_fn:
+                Async function to call each model.
+                Takes (model_id, prompt) -> response string.
 
         Returns:
             ConsensusResult with the outcome
@@ -120,7 +122,11 @@ class ConsensusProtocol:
         else:
             agreement_ratio = max(approvals, rejections) / total_decisive
             if agreement_ratio >= self.threshold:
-                outcome = ConsensusOutcome.APPROVED if approvals > rejections else ConsensusOutcome.REJECTED
+                outcome = (
+                    ConsensusOutcome.APPROVED
+                    if approvals > rejections
+                    else ConsensusOutcome.REJECTED
+                )
             else:
                 outcome = ConsensusOutcome.NEEDS_HUMAN
 

@@ -213,7 +213,9 @@ class AutonomyGate:
 
         try:
             reaction, _user = await bot.wait_for(
-                "reaction_add", check=check, timeout=timeout,
+                "reaction_add",
+                check=check,
+                timeout=timeout,
             )
             approved = str(reaction.emoji) == "\U0001f44d"
             status = "approved" if approved else "rejected"

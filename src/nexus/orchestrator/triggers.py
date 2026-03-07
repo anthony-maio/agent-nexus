@@ -73,7 +73,8 @@ class ActivityTrigger(BaseTrigger):
 
         try:
             activity: str | None = await asyncio.wait_for(
-                pieces.get_recent_activity(), timeout=20.0,
+                pieces.get_recent_activity(),
+                timeout=20.0,
             )
         except (asyncio.TimeoutError, Exception):
             return False
@@ -98,7 +99,9 @@ class MessageRateTrigger(BaseTrigger):
     name = "message_rate"
 
     def __init__(
-        self, threshold: int = 10, window_minutes: float = 5.0,
+        self,
+        threshold: int = 10,
+        window_minutes: float = 5.0,
     ) -> None:
         self.threshold = threshold
         self.window_seconds = window_minutes * 60
@@ -111,14 +114,8 @@ class MessageRateTrigger(BaseTrigger):
 
         from datetime import datetime, timedelta, timezone
 
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            seconds=self.window_seconds
-        )
-        recent = [
-            m
-            for m in conversation.get_history(limit=50)
-            if m.timestamp >= cutoff
-        ]
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.window_seconds)
+        recent = [m for m in conversation.get_history(limit=50) if m.timestamp >= cutoff]
 
         if len(recent) >= self.threshold and len(recent) > self._last_check_count:
             self._last_check_count = len(recent)
@@ -128,10 +125,7 @@ class MessageRateTrigger(BaseTrigger):
         return False
 
     def __repr__(self) -> str:
-        return (
-            f"MessageRateTrigger(threshold={self.threshold}, "
-            f"window={self.window_seconds}s)"
-        )
+        return f"MessageRateTrigger(threshold={self.threshold}, window={self.window_seconds}s)"
 
 
 class GoalStaleTrigger(BaseTrigger):
@@ -163,10 +157,7 @@ class GoalStaleTrigger(BaseTrigger):
 
         # Clean out fired entries for goals no longer active.
         active_ids = {g.id for g in active}
-        self._fired_goals = {
-            gid: ts for gid, ts in self._fired_goals.items()
-            if gid in active_ids
-        }
+        self._fired_goals = {gid: ts for gid, ts in self._fired_goals.items() if gid in active_ids}
 
         for goal in active:
             try:
@@ -277,7 +268,8 @@ class TriggerManager:
                 for trigger in self._triggers:
                     try:
                         fired = await asyncio.wait_for(
-                            trigger.check(self.bot), timeout=10.0,
+                            trigger.check(self.bot),
+                            timeout=10.0,
                         )
                         if fired:
                             self._fire_counts[trigger.name] = (
@@ -285,7 +277,9 @@ class TriggerManager:
                             )
                             log.info("Trigger fired: %s", trigger.name)
                             orchestrator = getattr(
-                                self.bot, "orchestrator", None,
+                                self.bot,
+                                "orchestrator",
+                                None,
                             )
                             if orchestrator is not None:
                                 await orchestrator.trigger_cycle()
@@ -294,7 +288,8 @@ class TriggerManager:
                         log.debug("Trigger %s timed out.", trigger.name)
                     except Exception:
                         log.warning(
-                            "Trigger %s check failed.", trigger.name,
+                            "Trigger %s check failed.",
+                            trigger.name,
                             exc_info=True,
                         )
             except Exception:

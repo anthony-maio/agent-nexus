@@ -120,8 +120,7 @@ class TestTaskOutputValidation:
 
     def test_confidence_without_evidence_fails(self):
         is_valid, reason = validate_task_output(
-            "Confirmed: the deployment was successfully resolved. "
-            "Action completed per protocol.",
+            "Confirmed: the deployment was successfully resolved. Action completed per protocol.",
             "Check system status",
         )
         assert not is_valid
@@ -156,8 +155,7 @@ class TestTaskOutputValidation:
     def test_single_path_mention_passes(self):
         """One path reference alone shouldn't trigger — need 2+ signals."""
         is_valid, _ = validate_task_output(
-            "The config is typically stored at /etc/nginx/nginx.conf "
-            "on Linux systems.",
+            "The config is typically stored at /etc/nginx/nginx.conf on Linux systems.",
             "Research nginx config",
         )
         assert is_valid
@@ -190,8 +188,7 @@ class TestTaskOutputValidation:
     def test_actual_sql_still_fails(self):
         """Real SQL syntax should still be caught."""
         is_valid, reason = validate_task_output(
-            "I ran SELECT * FROM users and also ran "
-            "INSERT INTO logs the findings.",
+            "I ran SELECT * FROM users and also ran INSERT INTO logs the findings.",
             "Query data",
         )
         assert not is_valid
@@ -291,7 +288,8 @@ class TestIdleLoopDetector:
         assert detector.staleness_counter == 1
         # Stale PiecesOS activity should NOT reset
         detector.check_cycle(
-            actions, _make_state(has_activity=True, stale_activity=True),
+            actions,
+            _make_state(has_activity=True, stale_activity=True),
         )
         assert detector.staleness_counter == 2
 
@@ -446,8 +444,8 @@ class TestFailureCircuitBreaker:
         breaker.record_result(False)
         assert breaker.is_tripped
 
-        assert breaker.should_suppress()   # cooldown 1
-        assert breaker.should_suppress()   # cooldown 0
+        assert breaker.should_suppress()  # cooldown 1
+        assert breaker.should_suppress()  # cooldown 0
         assert not breaker.should_suppress()  # expired -- resumed
 
     def test_reset_clears_all(self):

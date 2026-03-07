@@ -176,8 +176,7 @@ class DockerEphemeralExecutor:
             browser_support = self._probe_browser_support()
             if self.browser_mode == "real" and browser_support != "ready":
                 raise RuntimeError(
-                    "SANDBOX_BROWSER_MODE=real requires a Playwright-capable "
-                    "SANDBOX_DOCKER_IMAGE."
+                    "SANDBOX_BROWSER_MODE=real requires a Playwright-capable SANDBOX_DOCKER_IMAGE."
                 )
         return {
             "status": "ok",
@@ -586,10 +585,7 @@ def _step_output(action: str, instruction: str) -> str:
             f"more context for: {instruction}"
         )
     if action == "extract":
-        return (
-            "[sandbox-browser] Evidence summary with citations prepared. "
-            f"Focus: {instruction}"
-        )
+        return f"[sandbox-browser] Evidence summary with citations prepared. Focus: {instruction}"
     if action == "click":
         return f"[sandbox-browser] Clicked the requested control for: {instruction}"
     if action == "type":

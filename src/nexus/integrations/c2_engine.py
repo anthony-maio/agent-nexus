@@ -66,7 +66,8 @@ class C2Engine:
         try:
             config = self._build_c2_config(self._settings)
             self._system = await asyncio.to_thread(
-                self._create_system, config,
+                self._create_system,
+                config,
             )
             self._running = True
             log.info("C2Engine started (direct integration)")
@@ -80,6 +81,7 @@ class C2Engine:
     def _create_system(config: Any) -> Any:
         """Create TieredMemorySystem (sync, runs in thread)."""
         from continuity_core.memory.system import TieredMemorySystem
+
         return TieredMemorySystem(config)
 
     async def stop(self) -> None:
@@ -116,38 +118,47 @@ class C2Engine:
         if not self.is_running:
             return None
         try:
+
             def _write() -> dict[str, Any]:
                 event = self._system.event_log.log(
-                    actor, intent, inp, out,
-                    tags=tags or [], metadata=metadata or {},
+                    actor,
+                    intent,
+                    inp,
+                    out,
+                    tags=tags or [],
+                    metadata=metadata or {},
                 )
                 return {
                     "actor": event.actor,
                     "intent": event.intent,
                     "timestamp": event.timestamp,
                 }
+
             return await asyncio.to_thread(_write)
         except Exception as exc:
             log.warning("C2Engine write_event failed: %s", exc)
             return None
 
     async def get_context(
-        self, query: str, token_budget: int = 2048,
+        self,
+        query: str,
+        token_budget: int = 2048,
     ) -> dict[str, Any] | None:
         """Compose a context pack from C2 memory."""
         if not self.is_running:
             return None
         try:
+
             def _context() -> dict[str, Any]:
                 from continuity_core.context import ContextPipeline, ContextResult
+
                 pipeline = ContextPipeline(
                     memory_system=self._system,
                     config=self._system.config,
                 )
                 result: ContextResult = pipeline.run(query, thread_id=None)
                 chosen = [
-                    {"id": c.id, "text": c.text, "store": c.store,
-                     "token_cost": c.token_cost}
+                    {"id": c.id, "text": c.text, "store": c.store, "token_cost": c.token_cost}
                     for c in result.chosen
                 ]
                 return {
@@ -155,6 +166,7 @@ class C2Engine:
                     "chosen": chosen,
                     "working_context": result.working_context,
                 }
+
             return await asyncio.to_thread(_context)
         except Exception as exc:
             log.warning("C2Engine get_context failed: %s", exc)
@@ -171,6 +183,7 @@ class C2Engine:
         if not self.is_running:
             return None
         try:
+
             def _introspect() -> dict[str, Any]:
                 from continuity_core.mra.stress import EpistemicStressMonitor
                 from continuity_core.mra.voids import VoidDetector
@@ -235,7 +248,8 @@ class C2Engine:
 
                 # Update MRA cache with resolution summary
                 self._system.update_mra_cache(
-                    stress, voids,
+                    stress,
+                    voids,
                     resolution_summary=resolution.summary,
                 )
 
@@ -278,6 +292,7 @@ class C2Engine:
                         "questions": voids.questions,
                     }
                 return result
+
             return await asyncio.to_thread(_introspect)
         except Exception as exc:
             log.warning("C2Engine introspect failed: %s", exc)
@@ -288,6 +303,7 @@ class C2Engine:
         if not self.is_running:
             return None
         try:
+
             def _curiosity() -> dict[str, Any] | None:
                 cache = self._system.get_mra_signals()
                 if cache is None:
@@ -295,9 +311,7 @@ class C2Engine:
                     events = self._system.event_log.tail(20)
                     if not events:
                         return None
-                    statements = [
-                        e.input[:300] for e in events if e.input
-                    ]
+                    statements = [e.input[:300] for e in events if e.input]
                     if len(statements) < 2:
                         return None
                     # This will populate the cache
@@ -335,16 +349,12 @@ class C2Engine:
 
             # If cache was stale, run introspect and try again
             if sync_result is None and self.is_running:
-                events = await asyncio.to_thread(
-                    lambda: self._system.event_log.tail(20)
-                )
-                statements = [
-                    e.input[:300] for e in events if e.input
-                ]
+                events = await asyncio.to_thread(lambda: self._system.event_log.tail(20))
+                statements = [e.input[:300] for e in events if e.input]
                 event_origins = [
-                    (e.metadata or {}).get("origin", "")
-                    if hasattr(e, "metadata") else ""
-                    for e in events if e.input
+                    (e.metadata or {}).get("origin", "") if hasattr(e, "metadata") else ""
+                    for e in events
+                    if e.input
                 ]
                 if len(statements) >= 2:
                     await self.introspect(statements, origins=event_origins)
@@ -356,21 +366,20 @@ class C2Engine:
             return None
 
     async def maintenance(
-        self, graph: dict[str, Any] | None = None,
+        self,
+        graph: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Run a Night Cycle maintenance pass."""
         if not self.is_running:
             return None
         try:
+
             def _maintenance() -> dict[str, Any]:
                 from continuity_core.services.night_cycle import NightCycle
 
                 graph_dict: dict[str, set[str]] | None = None
                 if graph:
-                    graph_dict = {
-                        k: set(v) if isinstance(v, list) else v
-                        for k, v in graph.items()
-                    }
+                    graph_dict = {k: set(v) if isinstance(v, list) else v for k, v in graph.items()}
 
                 cycle = NightCycle(self._system)
                 result = cycle.run(graph_dict)
@@ -382,6 +391,7 @@ class C2Engine:
                     "stress_delta": result.stress_after - result.stress_before,
                     "duration_sec": result.duration_sec,
                 }
+
             return await asyncio.to_thread(_maintenance)
         except Exception as exc:
             log.warning("C2Engine maintenance failed: %s", exc)
@@ -392,6 +402,7 @@ class C2Engine:
         if not self.is_running:
             return None
         try:
+
             def _status() -> dict[str, Any]:
                 info: dict[str, Any] = {
                     "engine": "direct",
@@ -420,6 +431,7 @@ class C2Engine:
                 if cache and cache.last_stress:
                     info["stress_level"] = cache.last_stress.s_omega
                 return info
+
             return await asyncio.to_thread(_status)
         except Exception as exc:
             log.warning("C2Engine status failed: %s", exc)
@@ -430,6 +442,7 @@ class C2Engine:
         if not self.is_running:
             return None
         try:
+
             def _events() -> dict[str, Any]:
                 items = self._system.event_log.tail(min(limit, 50))
                 return {
@@ -446,6 +459,7 @@ class C2Engine:
                         for e in items
                     ],
                 }
+
             return await asyncio.to_thread(_events)
         except Exception as exc:
             log.warning("C2Engine events failed: %s", exc)

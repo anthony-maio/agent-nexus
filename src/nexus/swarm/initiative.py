@@ -102,7 +102,8 @@ class SwarmInitiative:
 
         if not force and not self._cooldown_elapsed():
             log.debug(
-                "Initiative skipped (cooldown): reason=%s", reason,
+                "Initiative skipped (cooldown): reason=%s",
+                reason,
             )
             return False
 
@@ -155,48 +156,56 @@ class SwarmInitiative:
 
         try:
             messages = self.bot.conversation.build_messages_for_model(
-                primary_model, system_prompt, limit=10,
+                primary_model,
+                system_prompt,
+                limit=10,
             )
             messages.append({"role": "user", "content": prompt})
 
             response = await asyncio.wait_for(
                 self.bot.openrouter.chat(
-                    model=primary_model, messages=messages,
+                    model=primary_model,
+                    messages=messages,
                 ),
                 timeout=60.0,
             )
 
             await self.bot.conversation.add_message(
-                primary_model, response.content,
+                primary_model,
+                response.content,
             )
 
             embed = MessageFormatter.format_response(
-                primary_model, response.content,
+                primary_model,
+                response.content,
             )
             last_msg = await self.bot.router.nexus.send(embed=embed)
 
             # Store in memory
             if self.bot.memory_store.is_connected:
-                self.bot._spawn(
-                    self._store_memory(response.content, primary_model)
-                )
+                self.bot._spawn(self._store_memory(response.content, primary_model))
 
             # Log to C2
-            self.bot._spawn(self._log_to_c2(
-                primary_model, reason, response.content,
-            ))
+            self.bot._spawn(
+                self._log_to_c2(
+                    primary_model,
+                    reason,
+                    response.content,
+                )
+            )
 
             # Run reaction round
             if self.bot.crosstalk.is_enabled and last_msg is not None:
                 await self._run_reactions(
-                    primary_model, model_ids, last_msg,
+                    primary_model,
+                    model_ids,
+                    last_msg,
                 )
 
             # Post summary to #memory
             summary_embed = MessageFormatter.format_memory_log(
                 f"initiative:{reason}",
-                f"Self-initiated by {primary_model}. "
-                f"Context: {context[:150]}",
+                f"Self-initiated by {primary_model}. Context: {context[:150]}",
             )
             await self.bot.router.memory.send(embed=summary_embed)
 
@@ -229,9 +238,7 @@ class SwarmInitiative:
                 if spec is None:
                     scored.append((mid, 0))
                     continue
-                score = sum(
-                    1 for s in spec.strengths if s in desired
-                )
+                score = sum(1 for s in spec.strengths if s in desired)
                 scored.append((mid, score))
 
             scored.sort(key=lambda x: x[1], reverse=True)
@@ -247,16 +254,13 @@ class SwarmInitiative:
         """Build the prompt that kicks off the self-initiated discussion."""
         reason_intros: dict[str, str] = {
             "task_result": (
-                "A task agent has returned significant findings that warrant "
-                "swarm discussion."
+                "A task agent has returned significant findings that warrant swarm discussion."
             ),
             "goal_milestone": (
-                "A goal has reached a milestone. Review progress and decide "
-                "next steps."
+                "A goal has reached a milestone. Review progress and decide next steps."
             ),
             "curiosity": (
-                "The Continuity Core has detected epistemic tensions in the "
-                "knowledge base."
+                "The Continuity Core has detected epistemic tensions in the knowledge base."
             ),
             "reflection": (
                 "It's been a while since the swarm last reflected on its "
@@ -302,17 +306,16 @@ class SwarmInitiative:
             if reactions_posted >= 2:
                 break
             try:
-                reactor_prompt = (
-                    self.bot.get_system_prompt(reactor_id) + reaction_suffix
-                )
-                reactor_messages = (
-                    self.bot.conversation.build_messages_for_model(
-                        reactor_id, reactor_prompt, limit=10,
-                    )
+                reactor_prompt = self.bot.get_system_prompt(reactor_id) + reaction_suffix
+                reactor_messages = self.bot.conversation.build_messages_for_model(
+                    reactor_id,
+                    reactor_prompt,
+                    limit=10,
                 )
                 reaction = await asyncio.wait_for(
                     self.bot.openrouter.chat(
-                        model=reactor_id, messages=reactor_messages,
+                        model=reactor_id,
+                        messages=reactor_messages,
                     ),
                     timeout=30.0,
                 )
@@ -321,24 +324,26 @@ class SwarmInitiative:
                     continue
 
                 await self.bot.conversation.add_message(
-                    reactor_id, reaction.content,
+                    reactor_id,
+                    reaction.content,
                 )
                 embed = MessageFormatter.format_response(
-                    reactor_id, reaction.content,
+                    reactor_id,
+                    reaction.content,
                 )
                 last_msg = await last_msg.reply(
-                    embed=embed, mention_author=False,
+                    embed=embed,
+                    mention_author=False,
                 )
                 reactions_posted += 1
 
                 if self.bot.memory_store.is_connected:
-                    self.bot._spawn(
-                        self._store_memory(reaction.content, reactor_id)
-                    )
+                    self.bot._spawn(self._store_memory(reaction.content, reactor_id))
 
             except asyncio.TimeoutError:
                 log.warning(
-                    "Initiative reaction from %s timed out.", reactor_id,
+                    "Initiative reaction from %s timed out.",
+                    reactor_id,
                 )
             except Exception:
                 log.error(
@@ -366,7 +371,10 @@ class SwarmInitiative:
             log.warning("Failed to store initiative in memory.", exc_info=True)
 
     async def _log_to_c2(
-        self, actor: str, reason: str, content: str,
+        self,
+        actor: str,
+        reason: str,
+        content: str,
     ) -> None:
         """Log initiative to C2 if available."""
         if not self.bot.c2.is_running:

@@ -11,19 +11,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 from continuity_core.context.composer import Candidate
-
 
 # ---------------------------------------------------------------------------
 # Verdicts
 # ---------------------------------------------------------------------------
 
+
 class PilotVerdict(str, Enum):
-    COMMIT = "commit"           # Safe to execute
-    DOWNGRADE = "downgrade"     # Too uncertain — convert action to question
-    ABORT = "abort"             # Violates safety constraint
+    COMMIT = "commit"  # Safe to execute
+    DOWNGRADE = "downgrade"  # Too uncertain — convert action to question
+    ABORT = "abort"  # Violates safety constraint
 
 
 @dataclass
@@ -39,10 +39,11 @@ class VerificationResult:
 # Safety constraints (pluggable)
 # ---------------------------------------------------------------------------
 
+
 class SafetyConstraint(Protocol):
     """A callable that returns a violation reason or None if safe."""
-    def __call__(self, action: str, context: Dict[str, Any]) -> Optional[str]:
-        ...
+
+    def __call__(self, action: str, context: Dict[str, Any]) -> Optional[str]: ...
 
 
 class PatternConstraint:
@@ -74,6 +75,7 @@ DEFAULT_CONSTRAINTS: List[SafetyConstraint] = [
 # ---------------------------------------------------------------------------
 # The Pilot
 # ---------------------------------------------------------------------------
+
 
 class ConsciousnessPilot:
     """Four-step verification: Intent → Safety → Uncertainty → Commit/Abort.
@@ -175,15 +177,12 @@ class ConsciousnessPilot:
         matched = [kw for kw in self.goal_keywords if kw in all_text]
         if not matched:
             reasons.append(
-                f"No goal keywords found in context "
-                f"(looking for: {', '.join(self.goal_keywords)})"
+                f"No goal keywords found in context (looking for: {', '.join(self.goal_keywords)})"
             )
             return False
         return True
 
-    def _check_safety(
-        self, action: str, context: Dict[str, Any], reasons: List[str]
-    ) -> bool:
+    def _check_safety(self, action: str, context: Dict[str, Any], reasons: List[str]) -> bool:
         """Run all safety constraints.  Returns False on first violation."""
         for constraint in self.safety_constraints:
             violation = constraint(action, context)
@@ -201,6 +200,6 @@ class ConsciousnessPilot:
         """Convert an action statement into a clarifying question."""
         action = action.strip().rstrip(".")
         return (
-            f"I'm not confident enough to proceed with: \"{action}\". "
+            f'I\'m not confident enough to proceed with: "{action}". '
             "Could you confirm or provide more context?"
         )

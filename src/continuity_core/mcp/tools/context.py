@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from continuity_core.context import Candidate, ContextComposer, ContextPipeline
 from continuity_core.config import load_config
+from continuity_core.context import Candidate, ContextComposer, ContextPipeline
 from continuity_core.services.runtime import get_memory_system
-
 
 _DEF_CONFIG = load_config()
 

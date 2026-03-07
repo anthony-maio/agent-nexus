@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class OllamaError(Exception):
     """Base exception for all Ollama client errors."""
 
@@ -49,6 +50,7 @@ class OllamaModelError(OllamaError):
 # ---------------------------------------------------------------------------
 # Response dataclass
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class ChatResponse:
@@ -84,6 +86,7 @@ _PROBE_TIMEOUT = aiohttp.ClientTimeout(total=10)
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
+
 
 class OllamaClient:
     """Async HTTP client for a local Ollama instance.
@@ -137,7 +140,9 @@ class OllamaClient:
             async with session.request(method, url, json=json, timeout=timeout) as resp:
                 body = await resp.json(content_type=None)
                 if resp.status >= 400:
-                    detail = body.get("error", resp.reason) if isinstance(body, dict) else resp.reason
+                    detail = (
+                        body.get("error", resp.reason) if isinstance(body, dict) else resp.reason
+                    )
                     raise OllamaError(
                         f"Ollama returned HTTP {resp.status} for {method} {path}: {detail}"
                     )
@@ -145,9 +150,7 @@ class OllamaClient:
         except OllamaError:
             raise
         except (aiohttp.ClientError, OSError, TimeoutError) as exc:
-            raise OllamaUnavailableError(
-                f"Cannot reach Ollama at {self._base_url}: {exc}"
-            ) from exc
+            raise OllamaUnavailableError(f"Cannot reach Ollama at {self._base_url}: {exc}") from exc
 
     # -- Public API ---------------------------------------------------------
 
@@ -187,7 +190,9 @@ class OllamaClient:
             "stream": False,
         }
 
-        data = await self._request("POST", "/v1/chat/completions", json=payload, timeout=_CHAT_TIMEOUT)
+        data = await self._request(
+            "POST", "/v1/chat/completions", json=payload, timeout=_CHAT_TIMEOUT
+        )
 
         # Parse the OpenAI-compatible response envelope.
         choices = data.get("choices", [])
@@ -313,7 +318,9 @@ class OllamaClient:
             async with session.post(url, json=payload, timeout=_PULL_TIMEOUT) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
-                    logger.error("Failed to pull model '%s': HTTP %s -- %s", model, resp.status, body)
+                    logger.error(
+                        "Failed to pull model '%s': HTTP %s -- %s", model, resp.status, body
+                    )
                     return False
 
                 # Read streamed progress lines.
@@ -332,9 +339,7 @@ class OllamaClient:
                             completed = chunk.get("completed", 0)
                             if total:
                                 pct = completed / total * 100
-                                logger.info(
-                                    "Pulling '%s': %s (%.1f%%)", model, status, pct
-                                )
+                                logger.info("Pulling '%s': %s (%.1f%%)", model, status, pct)
                             else:
                                 logger.info("Pulling '%s': %s", model, status)
                             last_status = status

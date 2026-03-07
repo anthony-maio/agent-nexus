@@ -147,7 +147,8 @@ class OrchestratorLoop:
                     # Wait for either the interval to elapse or a trigger event.
                     try:
                         await asyncio.wait_for(
-                            self._trigger_event.wait(), timeout=self.interval,
+                            self._trigger_event.wait(),
+                            timeout=self.interval,
                         )
                         # Trigger fired — this is a mini-cycle.
                         is_triggered = True
@@ -173,7 +174,8 @@ class OrchestratorLoop:
                     # Per-source timeouts handle individual failures.
                     # Outer timeout is a safety net only (max source = 90s).
                     state: dict[str, Any] = await asyncio.wait_for(
-                        self.bot.state_gatherer.gather(), timeout=120.0,
+                        self.bot.state_gatherer.gather(),
+                        timeout=120.0,
                     )
                 except asyncio.TimeoutError:
                     log.warning("State gather timed out after 120s -- skipping cycle.")
@@ -381,11 +383,13 @@ class OrchestratorLoop:
                 )
             active = await goal_store.get_active_goals()
             log.info(
-                "Startup: %d active goal(s) in store.", len(active),
+                "Startup: %d active goal(s) in store.",
+                len(active),
             )
         except Exception:
             log.warning(
-                "Startup goal pruning failed.", exc_info=True,
+                "Startup goal pruning failed.",
+                exc_info=True,
             )
 
     # ------------------------------------------------------------------
@@ -393,7 +397,8 @@ class OrchestratorLoop:
     # ------------------------------------------------------------------
 
     async def _maybe_post_activity_digest(
-        self, state: dict[str, Any],
+        self,
+        state: dict[str, Any],
     ) -> None:
         """Post a brief activity update to #nexus when focus changes."""
         activity = state.get("activity")
@@ -439,9 +444,7 @@ class OrchestratorLoop:
             if activity.projects:
                 embed.add_field(
                     name="Active Projects",
-                    value="\n".join(
-                        f"- {p}" for p in activity.projects[:5]
-                    ),
+                    value="\n".join(f"- {p}" for p in activity.projects[:5]),
                     inline=False,
                 )
             if activity.active_apps:
@@ -457,7 +460,8 @@ class OrchestratorLoop:
                 await router.human.send(embed=embed)
         except Exception:
             log.debug(
-                "Failed to post activity digest.", exc_info=True,
+                "Failed to post activity digest.",
+                exc_info=True,
             )
 
     # ------------------------------------------------------------------
@@ -523,9 +527,7 @@ class OrchestratorLoop:
                 timeout=300.0,
             )
             agent_results = result.get("agent_results", [])
-            dispatched = sum(
-                1 for r in agent_results if r.get("success")
-            )
+            dispatched = sum(1 for r in agent_results if r.get("success"))
             tool_calls = result.get("tool_log", [])
             log.info(
                 "LangGraph cycle complete: %d dispatched, %d tool calls.",
@@ -549,7 +551,8 @@ class OrchestratorLoop:
         # 2. Ask a swarm model what to do about it.
         try:
             actions: list[dict[str, Any]] = await asyncio.wait_for(
-                self._decide(state), timeout=60.0,
+                self._decide(state),
+                timeout=60.0,
             )
         except asyncio.TimeoutError:
             log.warning(
@@ -561,9 +564,7 @@ class OrchestratorLoop:
         if actions:
             c2 = getattr(self.bot, "c2", None)
             if c2 is not None and c2.is_running:
-                summary = "; ".join(
-                    a.get("description", "")[:60] for a in actions[:3]
-                )
+                summary = "; ".join(a.get("description", "")[:60] for a in actions[:3])
                 try:
                     await c2.write_event(
                         actor="orchestrator",
@@ -638,9 +639,7 @@ class OrchestratorLoop:
             # generate new conversation content that resets the idle
             # detector's term overlap tracking, perpetuating loops.
             if self._idle_detector.is_suppressed:
-                log.info(
-                    "Skipping curiosity discussion — idle loop suppression active."
-                )
+                log.info("Skipping curiosity discussion — idle loop suppression active.")
             else:
                 should_discuss = (
                     result.get("stress_after", 0) > 0.2
@@ -697,7 +696,8 @@ class OrchestratorLoop:
         await router.nexus.send(embed=embed)
 
     async def _trigger_curiosity_discussion(
-        self, curiosity_result: dict[str, Any],
+        self,
+        curiosity_result: dict[str, Any],
     ) -> None:
         """Trigger a Tier 1 swarm discussion about curiosity findings.
 
@@ -733,17 +733,13 @@ class OrchestratorLoop:
         if contradictions:
             prompt_parts.append(f"\nContradictions ({len(contradictions)}):")
             for c in contradictions[:5]:
-                prompt_parts.append(
-                    f'  - "{c.get("s1", "")}" vs "{c.get("s2", "")}"'
-                )
+                prompt_parts.append(f'  - "{c.get("s1", "")}" vs "{c.get("s2", "")}"')
 
         tensions = curiosity_result.get("deep_tensions", [])
         if tensions:
             prompt_parts.append(f"\nDeep tensions ({len(tensions)}):")
             for t in tensions[:5]:
-                prompt_parts.append(
-                    f'  - "{t.get("s1", "")}" vs "{t.get("s2", "")}"'
-                )
+                prompt_parts.append(f'  - "{t.get("s1", "")}" vs "{t.get("s2", "")}"')
 
         questions = curiosity_result.get("bridging_questions", [])
         if questions:
@@ -768,7 +764,9 @@ class OrchestratorLoop:
 
         try:
             messages = self.bot.conversation.build_messages_for_model(
-                primary_model, system_prompt, limit=10,
+                primary_model,
+                system_prompt,
+                limit=10,
             )
             # Inject the curiosity prompt as the latest user message
             messages.append({"role": "user", "content": curiosity_prompt})
@@ -780,12 +778,14 @@ class OrchestratorLoop:
 
             # Record in conversation history
             await self.bot.conversation.add_message(
-                primary_model, response.content,
+                primary_model,
+                response.content,
             )
 
             # Post to #nexus
             embed = MessageFormatter.format_response(
-                primary_model, response.content,
+                primary_model,
+                response.content,
             )
             last_msg = await self.bot.router.nexus.send(embed=embed)
 
@@ -793,7 +793,8 @@ class OrchestratorLoop:
             if self.bot.memory_store.is_connected:
                 self.bot._spawn(
                     self._store_discussion_memory(
-                        response.content, primary_model,
+                        response.content,
+                        primary_model,
                     )
                 )
 
@@ -809,7 +810,9 @@ class OrchestratorLoop:
             # Run crosstalk reactions if enabled
             if self.bot.crosstalk.is_enabled and last_msg is not None:
                 await self._run_curiosity_reactions(
-                    primary_model, model_ids, last_msg,
+                    primary_model,
+                    model_ids,
+                    last_msg,
                 )
 
             # Post summary to #memory
@@ -836,7 +839,8 @@ class OrchestratorLoop:
         from nexus.swarm.crosstalk import CrosstalkManager
 
         reaction_order = self.bot.crosstalk.build_reaction_order(
-            primary_model, model_ids,
+            primary_model,
+            model_ids,
         )
         reaction_suffix = CrosstalkManager.get_reaction_suffix()
         reactions_posted = 0
@@ -845,17 +849,16 @@ class OrchestratorLoop:
             if reactions_posted >= 2:
                 break
             try:
-                reactor_prompt = (
-                    self.bot.get_system_prompt(reactor_id) + reaction_suffix
-                )
-                reactor_messages = (
-                    self.bot.conversation.build_messages_for_model(
-                        reactor_id, reactor_prompt, limit=10,
-                    )
+                reactor_prompt = self.bot.get_system_prompt(reactor_id) + reaction_suffix
+                reactor_messages = self.bot.conversation.build_messages_for_model(
+                    reactor_id,
+                    reactor_prompt,
+                    limit=10,
                 )
                 reaction = await asyncio.wait_for(
                     self.bot.openrouter.chat(
-                        model=reactor_id, messages=reactor_messages,
+                        model=reactor_id,
+                        messages=reactor_messages,
                     ),
                     timeout=30.0,
                 )
@@ -863,20 +866,24 @@ class OrchestratorLoop:
                     continue
 
                 await self.bot.conversation.add_message(
-                    reactor_id, reaction.content,
+                    reactor_id,
+                    reaction.content,
                 )
                 embed = MessageFormatter.format_response(
-                    reactor_id, reaction.content,
+                    reactor_id,
+                    reaction.content,
                 )
                 last_msg = await last_msg.reply(
-                    embed=embed, mention_author=False,
+                    embed=embed,
+                    mention_author=False,
                 )
                 reactions_posted += 1
 
                 if self.bot.memory_store.is_connected:
                     self.bot._spawn(
                         self._store_discussion_memory(
-                            reaction.content, reactor_id,
+                            reaction.content,
+                            reactor_id,
                         )
                     )
 
@@ -890,7 +897,8 @@ class OrchestratorLoop:
 
             except asyncio.TimeoutError:
                 log.warning(
-                    "Curiosity reaction from %s timed out.", reactor_id,
+                    "Curiosity reaction from %s timed out.",
+                    reactor_id,
                 )
             except Exception:
                 log.error(
@@ -900,7 +908,9 @@ class OrchestratorLoop:
                 )
 
     async def _store_discussion_memory(
-        self, content: str, source: str,
+        self,
+        content: str,
+        source: str,
     ) -> None:
         """Store a curiosity discussion response in vector memory."""
         try:
@@ -937,8 +947,12 @@ class OrchestratorLoop:
             return
         try:
             await c2.write_event(
-                actor=actor, intent=intent, inp=inp, out=out,
-                tags=tags, metadata=metadata,
+                actor=actor,
+                intent=intent,
+                inp=inp,
+                out=out,
+                tags=tags,
+                metadata=metadata,
             )
         except Exception:
             pass  # Non-critical — don't let logging failures propagate.
@@ -996,10 +1010,7 @@ class OrchestratorLoop:
         if sentiment and sentiment.get("mood") != "neutral":
             mood_guidance = sentiment.get("mood_hint", "")
             if mood_guidance:
-                autonomy_hint += (
-                    f"\n\nCurrent user mood: {sentiment['mood']}. "
-                    f"{mood_guidance}"
-                )
+                autonomy_hint += f"\n\nCurrent user mood: {sentiment['mood']}. {mood_guidance}"
 
         try:
             response = await self.bot.openrouter.chat(
@@ -1066,7 +1077,9 @@ class OrchestratorLoop:
             return []
 
     def _select_decision_model(
-        self, state: dict[str, Any], model_ids: list[str],
+        self,
+        state: dict[str, Any],
+        model_ids: list[str],
     ) -> str:
         """Select the best model for the decision based on state content.
 
@@ -1095,9 +1108,7 @@ class OrchestratorLoop:
                 for mid in model_ids:
                     spec = self.bot.swarm_models.get(mid)
                     if spec:
-                        model_scores[mid] += sum(
-                            1 for s in spec.strengths if s in strengths
-                        )
+                        model_scores[mid] += sum(1 for s in spec.strengths if s in strengths)
 
         # Sort by score descending
         ranked = sorted(model_scores.items(), key=lambda x: x[1], reverse=True)
@@ -1110,7 +1121,9 @@ class OrchestratorLoop:
             choice = top_models[idx]
             log.debug(
                 "Decision model selected: %s (score=%d, cycle=%d)",
-                choice, top_score, self._cycle_count,
+                choice,
+                top_score,
+                self._cycle_count,
             )
             return choice
 
@@ -1120,7 +1133,8 @@ class OrchestratorLoop:
         return choice
 
     async def _process_goal_actions(
-        self, actions: list[dict[str, Any]],
+        self,
+        actions: list[dict[str, Any]],
     ) -> None:
         """Process any new_goal fields in the parsed actions."""
         goal_store = getattr(self.bot, "goal_store", None)
@@ -1149,9 +1163,7 @@ class OrchestratorLoop:
             action["goal_id"] = goal_id
             log.info("New goal created from decision: %s — %s", goal_id, title)
 
-    def _parse_actions(
-        self, raw_response: str, model_id: str
-    ) -> list[dict[str, Any]]:
+    def _parse_actions(self, raw_response: str, model_id: str) -> list[dict[str, Any]]:
         """Parse the decision model's response into a list of action dicts.
 
         Handles common LLM quirks like wrapping JSON in markdown code fences.
@@ -1178,7 +1190,9 @@ class OrchestratorLoop:
         return self._validate_action_list(parsed, model_id)
 
     def _try_parse_json_array(
-        self, text: str, model_id: str,
+        self,
+        text: str,
+        model_id: str,
     ) -> list[Any] | None:
         """Try to extract a JSON array from the model's response text."""
         # Direct parse.
@@ -1187,8 +1201,7 @@ class OrchestratorLoop:
             if isinstance(parsed, list):
                 return parsed
             log.warning(
-                "Orchestrator decision is not a JSON array "
-                "(model=%s, type=%s).",
+                "Orchestrator decision is not a JSON array (model=%s, type=%s).",
                 model_id,
                 type(parsed).__name__,
             )
@@ -1201,11 +1214,10 @@ class OrchestratorLoop:
         bracket_end = text.rfind("]")
         if bracket_start >= 0 and bracket_end > bracket_start:
             try:
-                parsed = json.loads(text[bracket_start:bracket_end + 1])
+                parsed = json.loads(text[bracket_start : bracket_end + 1])
                 if isinstance(parsed, list):
                     log.debug(
-                        "Extracted JSON array from surrounding text "
-                        "(model=%s).",
+                        "Extracted JSON array from surrounding text (model=%s).",
                         model_id,
                     )
                     return parsed
@@ -1213,8 +1225,7 @@ class OrchestratorLoop:
                 pass
 
         log.warning(
-            "Could not parse orchestrator decision as JSON "
-            "(model=%s): %.200s",
+            "Could not parse orchestrator decision as JSON (model=%s): %.200s",
             model_id,
             text,
         )
@@ -1298,12 +1309,18 @@ class OrchestratorLoop:
         return any(p in desc_lower for p in self._META_GOAL_PATTERNS)
 
     def _validate_action_list(
-        self, parsed: list[Any], model_id: str,
+        self,
+        parsed: list[Any],
+        model_id: str,
     ) -> list[dict[str, Any]]:
         """Validate and normalise a parsed list of action dicts."""
         valid_types = {
-            "research", "code", "analyze", "summarize",
-            "classify", "extract",
+            "research",
+            "code",
+            "analyze",
+            "summarize",
+            "classify",
+            "extract",
         }
         valid_priorities = {"high", "medium", "low"}
         actions: list[dict[str, Any]] = []
@@ -1376,8 +1393,7 @@ class OrchestratorLoop:
             for tr in task_results:
                 status = "OK" if tr.get("success") else "FAILED"
                 parts.append(
-                    f"  [{status}] {tr.get('type', '?')}: "
-                    f"{tr.get('description', '')[:100]}"
+                    f"  [{status}] {tr.get('type', '?')}: {tr.get('description', '')[:100]}"
                 )
                 if tr.get("result_snippet"):
                     parts.append(f"    -> {tr['result_snippet'][:200]}")
@@ -1429,19 +1445,13 @@ class OrchestratorLoop:
                 header += " (STALE)"
             parts.append(f"\n--- {header} ---")
             if hasattr(activity, "recent_focus") and activity.recent_focus:
-                parts.append(
-                    f"  Current focus: {activity.recent_focus[:300]}"
-                )
+                parts.append(f"  Current focus: {activity.recent_focus[:300]}")
             if hasattr(activity, "projects") and activity.projects:
-                parts.append(
-                    f"  Active projects: {', '.join(activity.projects)}"
-                )
+                parts.append(f"  Active projects: {', '.join(activity.projects)}")
             if hasattr(activity, "summary") and activity.summary:
                 parts.append(f"  Summary: {activity.summary[:500]}")
             if hasattr(activity, "active_apps") and activity.active_apps:
-                parts.append(
-                    f"  Active apps: {', '.join(activity.active_apps[:5])}"
-                )
+                parts.append(f"  Active apps: {', '.join(activity.active_apps[:5])}")
 
         # C2 curiosity signals.
         curiosity: dict[str, Any] | None = state.get("curiosity")
@@ -1501,19 +1511,21 @@ class OrchestratorLoop:
         actions: list[dict[str, Any]],
     ) -> None:
         """Record a cycle summary for temporal context in future decisions."""
-        self._cycle_history.append({
-            "cycle": self._cycle_count,
-            "type": cycle_type,
-            "dispatched": dispatched,
-            "elapsed": round(elapsed, 1),
-            "actions": [
-                {"type": a.get("type", "?"), "description": a.get("description", "")}
-                for a in actions[:3]
-            ],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self._cycle_history.append(
+            {
+                "cycle": self._cycle_count,
+                "type": cycle_type,
+                "dispatched": dispatched,
+                "elapsed": round(elapsed, 1),
+                "actions": [
+                    {"type": a.get("type", "?"), "description": a.get("description", "")}
+                    for a in actions[:3]
+                ],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         if len(self._cycle_history) > self._MAX_CYCLE_HISTORY:
-            self._cycle_history = self._cycle_history[-self._MAX_CYCLE_HISTORY:]
+            self._cycle_history = self._cycle_history[-self._MAX_CYCLE_HISTORY :]
 
     # ------------------------------------------------------------------
     # Goal queue dispatch
@@ -1532,7 +1544,7 @@ class OrchestratorLoop:
             ready = await goal_store.get_ready_tasks()
             dispatched = 0
 
-            for task_item in ready[:self._MAX_ACTIONS_PER_CYCLE]:
+            for task_item in ready[: self._MAX_ACTIONS_PER_CYCLE]:
                 await goal_store.mark_task_dispatched(task_item.id)
 
                 action = {

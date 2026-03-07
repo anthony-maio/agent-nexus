@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from nexus.personality.identities import get_identity
 
-
 # ---------------------------------------------------------------------------
 # Base prompt -- injected into every Tier-1 / Tier-1-premium model
 # ---------------------------------------------------------------------------
@@ -131,15 +130,9 @@ def build_system_prompt(model_id: str, swarm_model_ids: list[str]) -> str:
         if mid == model_id:
             continue
         other = get_identity(mid)
-        roster_lines.append(
-            f"- {other.emoji} {other.name} ({other.role}): {other.personality}"
-        )
+        roster_lines.append(f"- {other.emoji} {other.name} ({other.role}): {other.personality}")
 
-    roster = (
-        "\n".join(roster_lines)
-        if roster_lines
-        else "You are the only model in the swarm."
-    )
+    roster = "\n".join(roster_lines) if roster_lines else "You are the only model in the swarm."
 
     def _safe(s: str) -> str:
         return s.replace("{", "{{").replace("}", "}}")

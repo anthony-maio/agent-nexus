@@ -48,9 +48,7 @@ model after initial setup will cause a dimension mismatch and corrupt queries.
 """
 
 LOCAL_EMBEDDING_MODELS: frozenset[str] = frozenset(
-    spec.id
-    for spec in EMBEDDING_MODELS.values()
-    if spec.provider is ModelProvider.OLLAMA
+    spec.id for spec in EMBEDDING_MODELS.values() if spec.provider is ModelProvider.OLLAMA
 )
 """Set of model IDs that run locally through Ollama rather than via OpenRouter."""
 
@@ -58,6 +56,7 @@ LOCAL_EMBEDDING_MODELS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 # Protocols -- structural typing for embedding clients
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class SupportsEmbed(Protocol):
@@ -85,6 +84,7 @@ class SupportsEmbed(Protocol):
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class EmbeddingError(Exception):
     """Raised when an embedding operation fails.
 
@@ -100,6 +100,7 @@ class EmbeddingError(Exception):
 # ---------------------------------------------------------------------------
 # Embedding provider
 # ---------------------------------------------------------------------------
+
 
 class EmbeddingProvider:
     """Unified embedding interface.

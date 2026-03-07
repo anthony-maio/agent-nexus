@@ -85,10 +85,7 @@ class AdminCommands(commands.Cog):
         if total > settings.SESSION_COST_LIMIT * 0.8:
             embed.add_field(
                 name="Warning",
-                value=(
-                    f"Approaching session cost limit "
-                    f"(${settings.SESSION_COST_LIMIT:.2f})"
-                ),
+                value=(f"Approaching session cost limit (${settings.SESSION_COST_LIMIT:.2f})"),
                 inline=False,
             )
 
@@ -155,9 +152,7 @@ class AdminCommands(commands.Cog):
 
     @commands.command(name="crosstalk")
     @commands.has_permissions(administrator=True)
-    async def toggle_crosstalk(
-        self, ctx: commands.Context, state: str = ""
-    ) -> None:
+    async def toggle_crosstalk(self, ctx: commands.Context, state: str = "") -> None:
         """Toggle crosstalk on/off.
 
         Usage: !crosstalk on/off
@@ -170,10 +165,7 @@ class AdminCommands(commands.Cog):
             await ctx.send("Crosstalk disabled.")
         else:
             current = "enabled" if self.bot.crosstalk.is_enabled else "disabled"
-            await ctx.send(
-                f"Crosstalk is {current}. "
-                f"Use `!crosstalk on` or `!crosstalk off`."
-            )
+            await ctx.send(f"Crosstalk is {current}. Use `!crosstalk on` or `!crosstalk off`.")
 
     # ------------------------------------------------------------------
     # !autonomy -- set autonomy mode
@@ -181,9 +173,7 @@ class AdminCommands(commands.Cog):
 
     @commands.command(name="autonomy")
     @commands.has_permissions(administrator=True)
-    async def set_autonomy(
-        self, ctx: commands.Context, mode: str = ""
-    ) -> None:
+    async def set_autonomy(self, ctx: commands.Context, mode: str = "") -> None:
         """Set the orchestrator autonomy mode.
 
         Usage: !autonomy observe|escalate|autopilot
@@ -195,11 +185,14 @@ class AdminCommands(commands.Cog):
             self.bot.autonomy_gate.set_mode(mode_lower)
 
             # Log mode change to C2
-            self.bot._spawn(self.bot._log_to_c2(
-                actor="human", intent="config",
-                inp=f"autonomy={mode_lower}",
-                tags=["autonomy", mode_lower],
-            ))
+            self.bot._spawn(
+                self.bot._log_to_c2(
+                    actor="human",
+                    intent="config",
+                    inp=f"autonomy={mode_lower}",
+                    tags=["autonomy", mode_lower],
+                )
+            )
 
             await ctx.send(f"Autonomy mode set to **{mode_lower}**.")
         else:
@@ -414,10 +407,7 @@ class AdminCommands(commands.Cog):
         Usage: !pieces [query]
         """
         if self.bot.pieces is None:
-            await ctx.send(
-                "PiecesOS is not enabled. Set PIECES_MCP_ENABLED=true "
-                "in config/.env."
-            )
+            await ctx.send("PiecesOS is not enabled. Set PIECES_MCP_ENABLED=true in config/.env.")
             return
 
         await ctx.send(f"Querying PiecesOS: *{query[:100]}*...")
@@ -457,7 +447,6 @@ class AdminCommands(commands.Cog):
             embed.set_footer(text=f"Source: {digest.most_recent_at}")
         await ctx.send(embed=embed)
 
-
     # ------------------------------------------------------------------
     # !goals -- manage persistent goals
     # ------------------------------------------------------------------
@@ -481,13 +470,14 @@ class AdminCommands(commands.Cog):
                 await ctx.send("No active goals.")
                 return
             embed = discord.Embed(
-                title=f"Active Goals ({len(goals)})", color=0x2ECC71,
+                title=f"Active Goals ({len(goals)})",
+                color=0x2ECC71,
             )
             for g in goals[:10]:
                 completed = [
-                    tid for tid in g.task_ids
-                    if (t := await goal_store.get_task(tid))
-                    and t.status == "completed"
+                    tid
+                    for tid in g.task_ids
+                    if (t := await goal_store.get_task(tid)) and t.status == "completed"
                 ]
                 tasks = f"{len(completed)}/{len(g.task_ids)} tasks"
                 embed.add_field(
@@ -499,7 +489,8 @@ class AdminCommands(commands.Cog):
 
         elif action == "cancel" and goal_id:
             success = await goal_store.update_goal(
-                goal_id, status=GoalStatus.CANCELLED.value,
+                goal_id,
+                status=GoalStatus.CANCELLED.value,
             )
             if success:
                 await ctx.send(f"Goal `{goal_id[:8]}...` cancelled.")
@@ -510,15 +501,13 @@ class AdminCommands(commands.Cog):
             goals = await goal_store.get_active_goals()
             for g in goals:
                 await goal_store.update_goal(
-                    g.id, status=GoalStatus.CANCELLED.value,
+                    g.id,
+                    status=GoalStatus.CANCELLED.value,
                 )
             await ctx.send(f"Cancelled {len(goals)} active goal(s).")
 
         else:
-            await ctx.send(
-                "Usage: `!goals`, `!goals cancel <id>`, `!goals clear`"
-            )
-
+            await ctx.send("Usage: `!goals`, `!goals cancel <id>`, `!goals clear`")
 
     # ------------------------------------------------------------------
     # !ingest -- ingest files/directories into C2
@@ -526,9 +515,7 @@ class AdminCommands(commands.Cog):
 
     @commands.command(name="ingest")
     @commands.has_permissions(administrator=True)
-    async def ingest_files(
-        self, ctx: commands.Context, *, paths: str = ""
-    ) -> None:
+    async def ingest_files(self, ctx: commands.Context, *, paths: str = "") -> None:
         """Ingest local files/directories into Continuity Core.
 
         Usage:
@@ -547,6 +534,7 @@ class AdminCommands(commands.Cog):
             path_list = [p.strip() for p in paths.split(",") if p.strip()]
         else:
             from nexus.config import get_settings
+
             path_list = get_settings().INGEST_PATHS
             if not path_list:
                 await ctx.send(
@@ -567,28 +555,31 @@ class AdminCommands(commands.Cog):
             embed.add_field(name="Skipped", value=str(result.skipped), inline=True)
             embed.add_field(name="Errors", value=str(result.errors), inline=True)
             embed.add_field(
-                name="Duration", value=f"{result.duration_sec:.1f}s", inline=True,
+                name="Duration",
+                value=f"{result.duration_sec:.1f}s",
+                inline=True,
             )
             if result.error_details:
                 errs = "\n".join(
-                    f"- {e['path']}: {e['error'][:60]}"
-                    for e in result.error_details[:5]
+                    f"- {e['path']}: {e['error'][:60]}" for e in result.error_details[:5]
                 )
                 embed.add_field(name="Error Details", value=errs, inline=False)
 
             await ctx.send(embed=embed)
 
             # Log to C2
-            self.bot._spawn(self.bot._log_to_c2(
-                actor="human",
-                intent="ingest",
-                inp=", ".join(path_list)[:500],
-                out=(
-                    f"files={result.files_seen} docs={result.docs_ingested} "
-                    f"chunks={result.chunks_ingested}"
-                ),
-                tags=["ingest", "filesystem"],
-            ))
+            self.bot._spawn(
+                self.bot._log_to_c2(
+                    actor="human",
+                    intent="ingest",
+                    inp=", ".join(path_list)[:500],
+                    out=(
+                        f"files={result.files_seen} docs={result.docs_ingested} "
+                        f"chunks={result.chunks_ingested}"
+                    ),
+                    tags=["ingest", "filesystem"],
+                )
+            )
 
         except Exception as exc:
             log.error("Ingestion failed: %s", exc, exc_info=True)
@@ -598,6 +589,7 @@ class AdminCommands(commands.Cog):
     def _run_ingest(path_list: list[str]) -> Any:
         """Run the IngestPipeline synchronously (called via to_thread)."""
         from continuity_core.ingest.pipeline import IngestPipeline
+
         pipeline = IngestPipeline()
         return pipeline.ingest_paths(path_list)
 
@@ -615,7 +607,9 @@ class AdminCommands(commands.Cog):
 
         embed = discord.Embed(title="Session Info", color=0x3498DB)
         embed.add_field(
-            name="Uptime", value=f"{uptime_min:.0f} minutes", inline=True,
+            name="Uptime",
+            value=f"{uptime_min:.0f} minutes",
+            inline=True,
         )
         embed.add_field(
             name="Messages",
@@ -625,11 +619,12 @@ class AdminCommands(commands.Cog):
         embed.add_field(
             name="User Mood",
             value=f"{self.bot.sentiment.current_mood.value} "
-                  f"(avg={self.bot.sentiment.average_score:.2f})",
+            f"(avg={self.bot.sentiment.average_score:.2f})",
             inline=True,
         )
         embed.add_field(
-            name="Cost", value=f"${self.bot.openrouter.session_cost:.4f}",
+            name="Cost",
+            value=f"${self.bot.openrouter.session_cost:.4f}",
             inline=True,
         )
 
@@ -675,10 +670,14 @@ class AdminCommands(commands.Cog):
                 color=0x2ECC71 if result.is_success else 0xE74C3C,
             )
             embed.add_field(
-                name="Status", value=result.status.value, inline=True,
+                name="Status",
+                value=result.status.value,
+                inline=True,
             )
             embed.add_field(
-                name="Iterations", value=str(result.iterations), inline=True,
+                name="Iterations",
+                value=str(result.iterations),
+                inline=True,
             )
             embed.add_field(
                 name="Tests",
@@ -707,15 +706,18 @@ class AdminCommands(commands.Cog):
                 await ctx.send(file=file)
 
             # Log to C2
-            self.bot._spawn(self.bot._log_to_c2(
-                actor="human", intent="build",
-                inp=requirement[:500],
-                out=(
-                    f"status={result.status.value} "
-                    f"tests={result.tests_passed}/{result.total_tests}"
-                ),
-                tags=["build", "tdd", "synthesis"],
-            ))
+            self.bot._spawn(
+                self.bot._log_to_c2(
+                    actor="human",
+                    intent="build",
+                    inp=requirement[:500],
+                    out=(
+                        f"status={result.status.value} "
+                        f"tests={result.tests_passed}/{result.total_tests}"
+                    ),
+                    tags=["build", "tdd", "synthesis"],
+                )
+            )
 
         except Exception:
             log.exception("!build failed for: %s", requirement[:100])
@@ -726,9 +728,7 @@ class AdminCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="email")
-    async def email_status(
-        self, ctx: commands.Context, action: str = "status"
-    ) -> None:
+    async def email_status(self, ctx: commands.Context, action: str = "status") -> None:
         """Check email ingestion status or trigger a poll.
 
         Usage:

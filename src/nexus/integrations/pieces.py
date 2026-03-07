@@ -109,11 +109,13 @@ _TLDR_PROJECT_RE = re.compile(
     r"\b([A-Z][a-z]+(?:[-_ ][A-Z][a-z]+)+(?:[-_ ][A-Z0-9]+)*)\b",
 )
 # Garbage app titles that PiecesOS sometimes returns.
-_GARBAGE_APP_TITLES = frozenset({
-    "[COULD NOT RETRIEVE APP TITLE]",
-    "unknown",
-    "",
-})
+_GARBAGE_APP_TITLES = frozenset(
+    {
+        "[COULD NOT RETRIEVE APP TITLE]",
+        "unknown",
+        "",
+    }
+)
 
 
 def _strip_summary_metadata(text: str) -> str:
@@ -129,7 +131,7 @@ def _strip_summary_metadata(text: str) -> str:
     # Find first markdown heading.
     heading_match = re.search(r"^#{2,3}\s", text, re.MULTILINE)
     if heading_match:
-        return text[heading_match.start():].strip()
+        return text[heading_match.start() :].strip()
     # No headings — strip known metadata prefixes line by line.
     lines = text.split("\n")
     content_lines: list[str] = []
@@ -137,8 +139,9 @@ def _strip_summary_metadata(text: str) -> str:
     for line in lines:
         stripped = line.strip()
         if not past_metadata:
-            if stripped.lower().startswith(("automated summary", "created:",
-                                           "summarized time-range")):
+            if stripped.lower().startswith(
+                ("automated summary", "created:", "summarized time-range")
+            ):
                 continue
             if not stripped:
                 continue
@@ -173,14 +176,17 @@ def _extract_projects(text: str) -> list[str]:
     # 2. Look for project-like names in TL;DR section.
     tldr_start = text.lower().find("tl;dr")
     if tldr_start >= 0:
-        tldr_block = text[tldr_start:tldr_start + 500]
+        tldr_block = text[tldr_start : tldr_start + 500]
         for m in _TLDR_PROJECT_RE.finditer(tldr_block):
             name = m.group(1).strip()
             if len(name) >= 5 and name.lower() not in seen:
                 # Skip common false positives.
                 if name.lower() not in {
-                    "the user", "this week", "last week",
-                    "today", "yesterday",
+                    "the user",
+                    "this week",
+                    "last week",
+                    "today",
+                    "yesterday",
                 }:
                     seen.add(name.lower())
                     projects.append(name)
@@ -202,7 +208,7 @@ def _extract_tldr(text: str) -> str:
     next_header = text.find("\n#", content_start)
     if next_header >= 0:
         return text[content_start:next_header].strip()
-    return text[content_start:content_start + 500].strip()
+    return text[content_start : content_start + 500].strip()
 
 
 def parse_activity_response(raw: str) -> ActivityDigest:
@@ -321,6 +327,7 @@ def _parse_structured(data: dict, now_iso: str) -> ActivityDigest:
         most_recent_at=most_recent_at,
     )
 
+
 # MCP protocol version supported by PiecesOS
 _MCP_VERSION = "2024-11-05"
 
@@ -391,10 +398,7 @@ class PiecesMCPClient:
         # Prune expired entries if cache grows too large
         if len(self._cache) > 100:
             now = datetime.now(timezone.utc)
-            self._cache = {
-                k: v for k, v in self._cache.items()
-                if now - v[1] < self._cache_ttl
-            }
+            self._cache = {k: v for k, v in self._cache.items() if now - v[1] < self._cache_ttl}
 
     # -- Low-level sync transport (runs in thread) ----------------------------
 
@@ -446,7 +450,8 @@ class PiecesMCPClient:
         try:
             # 1. Open SSE stream
             sock = sync_socket.socket(
-                sync_socket.AF_INET, sync_socket.SOCK_STREAM,
+                sync_socket.AF_INET,
+                sync_socket.SOCK_STREAM,
             )
             sock.settimeout(timeout)
             sock.connect((self._host, self._port))
@@ -482,16 +487,18 @@ class PiecesMCPClient:
             headers = {"Content-Type": "application/json"}
 
             # 3. Send initialize
-            init_payload = json.dumps({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": _MCP_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {"name": "agent-nexus", "version": "1.0"},
-                },
-            }).encode()
+            init_payload = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": _MCP_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {"name": "agent-nexus", "version": "1.0"},
+                    },
+                }
+            ).encode()
 
             init_req = urllib.request.Request(
                 messages_url,
@@ -504,15 +511,17 @@ class PiecesMCPClient:
             sock.recv(8192)  # Clear init response from SSE buffer
 
             # 4. Send LTM query
-            query_payload = json.dumps({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "ask_pieces_ltm",
-                    "arguments": {"question": question},
-                },
-            }).encode()
+            query_payload = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "ask_pieces_ltm",
+                        "arguments": {"question": question},
+                    },
+                }
+            ).encode()
 
             query_req = urllib.request.Request(
                 messages_url,
@@ -550,7 +559,8 @@ class PiecesMCPClient:
                                 log.warning(
                                     "Pieces LTM error: %s",
                                     resp["error"].get(
-                                        "message", resp["error"],
+                                        "message",
+                                        resp["error"],
                                     ),
                                 )
                                 return None
@@ -594,13 +604,12 @@ class PiecesMCPClient:
         Returns:
             ``True`` if the server is reachable, ``False`` otherwise.
         """
-        sse_url = (
-            f"{self.base_url}/model_context_protocol/{_MCP_VERSION}/sse"
-        )
+        sse_url = f"{self.base_url}/model_context_protocol/{_MCP_VERSION}/sse"
         log.info("Connecting to PiecesOS at %s (SSE transport)", sse_url)
         try:
             url = await asyncio.to_thread(
-                self._sync_discover_messages_url, 10.0,
+                self._sync_discover_messages_url,
+                10.0,
             )
             if url:
                 log.info("PiecesOS MCP connected (messages URL discovered)")
@@ -608,8 +617,7 @@ class PiecesMCPClient:
                 return True
 
             log.warning(
-                "PiecesOS not available at %s: "
-                "SSE stream did not return messages URL",
+                "PiecesOS not available at %s: SSE stream did not return messages URL",
                 self.base_url,
             )
             self._connected = False

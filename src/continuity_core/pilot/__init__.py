@@ -11,10 +11,10 @@ the four-step protocol from the paper:
 """
 
 from .verification import (
-    PilotVerdict,
-    VerificationResult,
     ConsciousnessPilot,
+    PilotVerdict,
     SafetyConstraint,
+    VerificationResult,
 )
 
 __all__ = [

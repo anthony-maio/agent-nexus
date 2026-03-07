@@ -64,7 +64,8 @@ class ActivityMonitor:
         self._running = True
         self._task = asyncio.create_task(self._loop(), name="activity-monitor")
         log.info(
-            "Activity monitor started (poll_interval=%ds).", self.poll_interval,
+            "Activity monitor started (poll_interval=%ds).",
+            self.poll_interval,
         )
 
     async def stop(self) -> None:
@@ -78,7 +79,8 @@ class ActivityMonitor:
                 pass
             self._task = None
         log.info(
-            "Activity monitor stopped after %d poll(s).", self._poll_count,
+            "Activity monitor stopped after %d poll(s).",
+            self._poll_count,
         )
 
     # ------------------------------------------------------------------

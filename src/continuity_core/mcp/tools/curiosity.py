@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from continuity_core.mra import EpistemicStressMonitor, VoidDetector
+from continuity_core.mra import EpistemicStressMonitor
 from continuity_core.services.runtime import get_memory_system
 
 
@@ -32,7 +32,6 @@ def curiosity(arguments: Dict[str, Any]) -> Dict[str, Any]:
         monitor = EpistemicStressMonitor(embed_fn=mem.embedder.embed)
         stress = monitor.compute(statements)
 
-        void_detector = VoidDetector()
         voids = None  # no graph available in auto-mode
 
         mem.update_mra_cache(stress, voids)

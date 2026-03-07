@@ -33,23 +33,61 @@ ENV_FILE = ENV_DIR / ".env"
 # ---------------------------------------------------------------------------
 
 SWARM_MODELS: list[dict[str, Any]] = [
-    {"id": "minimax/minimax-m2.5", "name": "MiniMax M2.5", "hint": "Free - Programming #1", "default": True},
+    {
+        "id": "minimax/minimax-m2.5",
+        "name": "MiniMax M2.5",
+        "hint": "Free - Programming #1",
+        "default": True,
+    },
     {"id": "z-ai/glm-5", "name": "Z.ai GLM-5", "hint": "$0.30/$2.55 per M", "default": True},
-    {"id": "moonshotai/kimi-k2.5", "name": "Kimi K2.5", "hint": "$0.23/$3.00 per M", "default": True},
-    {"id": "qwen/qwen3-coder-next", "name": "Qwen3 Coder Next", "hint": "$0.12/$0.75 per M", "default": True},
-    {"id": "anthropic/claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "hint": "$3/$15 per M - Expensive", "default": False},
-    {"id": "google/gemini-3-flash", "name": "Gemini 3 Flash", "hint": "$0.10/$0.40 per M", "default": False},
-    {"id": "openai/chatgpt-5.2", "name": "ChatGPT 5.2", "hint": "$2.50/$10 per M - Expensive", "default": False},
+    {
+        "id": "moonshotai/kimi-k2.5",
+        "name": "Kimi K2.5",
+        "hint": "$0.23/$3.00 per M",
+        "default": True,
+    },
+    {
+        "id": "qwen/qwen3-coder-next",
+        "name": "Qwen3 Coder Next",
+        "hint": "$0.12/$0.75 per M",
+        "default": True,
+    },
+    {
+        "id": "anthropic/claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "hint": "$3/$15 per M - Expensive",
+        "default": False,
+    },
+    {
+        "id": "google/gemini-3-flash",
+        "name": "Gemini 3 Flash",
+        "hint": "$0.10/$0.40 per M",
+        "default": False,
+    },
+    {
+        "id": "openai/chatgpt-5.2",
+        "name": "ChatGPT 5.2",
+        "hint": "$2.50/$10 per M - Expensive",
+        "default": False,
+    },
 ]
 
 EMBEDDING_MODELS: list[dict[str, Any]] = [
-    {"id": "qwen/qwen3-embedding-8b", "name": "Qwen3 Embedding 8B", "hint": "$0.01/M - Recommended"},
+    {
+        "id": "qwen/qwen3-embedding-8b",
+        "name": "Qwen3 Embedding 8B",
+        "hint": "$0.01/M - Recommended",
+    },
     {"id": "openai/text-embedding-3-small", "name": "OpenAI Embedding 3 Small", "hint": "$0.02/M"},
     {"id": "openai/text-embedding-3-large", "name": "OpenAI Embedding 3 Large", "hint": "$0.13/M"},
 ]
 
 AUTONOMY_MODES: list[dict[str, str]] = [
-    {"id": "escalate", "name": "Escalate (Recommended)", "hint": "Auto low-risk, ask for high-risk"},
+    {
+        "id": "escalate",
+        "name": "Escalate (Recommended)",
+        "hint": "Auto low-risk, ask for high-risk",
+    },
     {"id": "observe", "name": "Observe", "hint": "Always ask before acting"},
     {"id": "autopilot", "name": "Autopilot", "hint": "Auto-execute everything"},
 ]
@@ -58,6 +96,7 @@ AUTONOMY_MODES: list[dict[str, str]] = [
 # ---------------------------------------------------------------------------
 # HTML template
 # ---------------------------------------------------------------------------
+
 
 def _build_html() -> str:
     """Return the setup wizard HTML page."""
@@ -71,7 +110,7 @@ def _build_html() -> str:
                 f'<input type="checkbox" name="swarm_models" value="{m["id"]}" {checked}>'
                 f'<span class="model-name">{m["name"]}</span>'
                 f'<span class="model-hint">{m["hint"]}</span>'
-                f'</label>'
+                f"</label>"
             )
         return "\n".join(items)
 
@@ -84,7 +123,7 @@ def _build_html() -> str:
                 f'<input type="radio" name="embedding_model" value="{m["id"]}" {checked}>'
                 f'<span class="model-name">{m["name"]}</span>'
                 f'<span class="model-hint">{m["hint"]}</span>'
-                f'</label>'
+                f"</label>"
             )
         return "\n".join(items)
 
@@ -97,7 +136,7 @@ def _build_html() -> str:
                 f'<input type="radio" name="autonomy_mode" value="{m["id"]}" {checked}>'
                 f'<span class="model-name">{m["name"]}</span>'
                 f'<span class="model-hint">{m["hint"]}</span>'
-                f'</label>'
+                f"</label>"
             )
         return "\n".join(items)
 
@@ -334,6 +373,7 @@ document.getElementById('setup-form').addEventListener('submit', async function(
 # Route handlers
 # ---------------------------------------------------------------------------
 
+
 async def handle_index(request: web.Request) -> web.Response:
     return web.Response(text=_build_html(), content_type="text/html")
 
@@ -352,7 +392,9 @@ async def handle_test_openrouter(request: web.Request) -> web.Response:
             return web.json_response({"ok": True, "models": count})
     except Exception as e:
         log.warning("OpenRouter test failed: %s", e)
-        return web.json_response({"ok": False, "error": "Connection test failed. Check your API key."})
+        return web.json_response(
+            {"ok": False, "error": "Connection test failed. Check your API key."}
+        )
 
 
 async def handle_save(request: web.Request) -> web.Response:
@@ -369,9 +411,7 @@ async def handle_save(request: web.Request) -> web.Response:
 
         swarm_models = data.getall("swarm_models", [])
         if not swarm_models:
-            return web.json_response(
-                {"ok": False, "error": "Select at least one swarm model."}
-            )
+            return web.json_response({"ok": False, "error": "Select at least one swarm model."})
 
         embedding_model = data.get("embedding_model", "qwen/qwen3-embedding-8b")
         autonomy_mode = data.get("autonomy_mode", "escalate")
@@ -395,15 +435,17 @@ async def handle_save(request: web.Request) -> web.Response:
             lines.append(f"DISCORD_GUILD_ID={guild_id}")
             lines.append("")
 
-        lines.extend([
-            "# === MODELS ===",
-            f"SWARM_MODELS={','.join(swarm_models)}",
-            f"EMBEDDING_MODEL={embedding_model}",
-            "",
-            "# === ORCHESTRATOR ===",
-            f"AUTONOMY_MODE={autonomy_mode}",
-            "",
-        ])
+        lines.extend(
+            [
+                "# === MODELS ===",
+                f"SWARM_MODELS={','.join(swarm_models)}",
+                f"EMBEDDING_MODEL={embedding_model}",
+                "",
+                "# === ORCHESTRATOR ===",
+                f"AUTONOMY_MODE={autonomy_mode}",
+                "",
+            ]
+        )
 
         if qdrant_url:
             lines.append(f"QDRANT_URL={qdrant_url}")
@@ -442,6 +484,7 @@ async def handle_save(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 # Server entry point
 # ---------------------------------------------------------------------------
+
 
 def run_setup_server(port: int = SETUP_PORT) -> None:
     """Start the setup wizard HTTP server (blocking)."""

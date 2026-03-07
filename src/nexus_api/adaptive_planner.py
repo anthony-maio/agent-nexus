@@ -109,9 +109,7 @@ class OpenRouterAdaptivePlanner:
             log.warning("OpenRouter adaptive replanner request failed: %s", exc)
             return []
 
-        content = str(
-            data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        ).strip()
+        content = str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
         parsed = _parse_model_json(content)
         if not parsed:
             return []

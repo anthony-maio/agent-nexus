@@ -89,8 +89,7 @@ class NexusSettings(BaseSettings):
             "qwen/qwen3-coder-next",
         ],
         description=(
-            "Comma-separated list of OpenRouter model identifiers that "
-            "form the core swarm."
+            "Comma-separated list of OpenRouter model identifiers that form the core swarm."
         ),
     )
 
@@ -143,8 +142,7 @@ class NexusSettings(BaseSettings):
     PIECES_MCP_URL: str = Field(
         default="http://localhost:39300",
         description=(
-            "URL for the PiecesOS MCP server. "
-            "Use http://host.docker.internal:39300 in Docker."
+            "URL for the PiecesOS MCP server. Use http://host.docker.internal:39300 in Docker."
         ),
     )
 
@@ -174,8 +172,7 @@ class NexusSettings(BaseSettings):
     C2_NEO4J_URI: str = Field(
         default="",
         description=(
-            "Neo4j bolt URI for the C2 knowledge graph.  "
-            "Leave empty to disable the graph backend."
+            "Neo4j bolt URI for the C2 knowledge graph.  Leave empty to disable the graph backend."
         ),
     )
     C2_NEO4J_USER: str = Field(
@@ -269,17 +266,14 @@ class NexusSettings(BaseSettings):
         ge=0.0,
         le=1.0,
         description=(
-            "Probability that a swarm model spontaneously responds to "
-            "another model's message."
+            "Probability that a swarm model spontaneously responds to another model's message."
         ),
     )
     CONSENSUS_THRESHOLD: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
-        description=(
-            "Agreement ratio required for multi-model consensus decisions."
-        ),
+        description=("Agreement ratio required for multi-model consensus decisions."),
     )
 
     # ------------------------------------------------------------------
@@ -428,9 +422,7 @@ class NexusSettings(BaseSettings):
         if isinstance(value, str):
             models = [m.strip() for m in value.split(",") if m.strip()]
             if not models:
-                raise ValueError(
-                    "SWARM_MODELS must contain at least one model identifier."
-                )
+                raise ValueError("SWARM_MODELS must contain at least one model identifier.")
             return models
         if isinstance(value, list):
             return value
@@ -443,8 +435,12 @@ class NexusSettings(BaseSettings):
     # ------------------------------------------------------------------
 
     _SENSITIVE_FIELDS: ClassVar[set[str]] = {
-        "DISCORD_TOKEN", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY", "GOOGLE_API_KEY", "C2_NEO4J_PASSWORD",
+        "DISCORD_TOKEN",
+        "OPENROUTER_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GOOGLE_API_KEY",
+        "C2_NEO4J_PASSWORD",
         "EMAIL_PASSWORD",
     }
 

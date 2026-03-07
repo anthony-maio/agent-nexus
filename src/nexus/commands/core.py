@@ -57,9 +57,7 @@ class CoreCommands(commands.Cog):
         """
         model_id = self._resolve_model(model_name)
         if not model_id:
-            await ctx.send(
-                f"Unknown model: `{model_name}`. Use `!models` to see available models."
-            )
+            await ctx.send(f"Unknown model: `{model_name}`. Use `!models` to see available models.")
             return
 
         async with ctx.typing():
@@ -119,10 +117,7 @@ class CoreCommands(commands.Cog):
             await self.bot.conversation.add_message("human", prompt, is_human=True)
 
             # Query all swarm models in parallel
-            tasks = [
-                self._query_model(model_id, prompt)
-                for model_id in self.bot.swarm_models
-            ]
+            tasks = [self._query_model(model_id, prompt) for model_id in self.bot.swarm_models]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for model_id, result in zip(self.bot.swarm_models, results):
@@ -147,10 +142,7 @@ class CoreCommands(commands.Cog):
         )
 
         # Models
-        model_lines = [
-            f"  {format_name(model_id)}"
-            for model_id in self.bot.swarm_models
-        ]
+        model_lines = [f"  {format_name(model_id)}" for model_id in self.bot.swarm_models]
         embed.add_field(
             name=f"Swarm Models ({len(self.bot.swarm_models)})",
             value="\n".join(model_lines) or "None",
@@ -248,9 +240,7 @@ class CoreCommands(commands.Cog):
         if window:
             lines = []
             for i, r in enumerate(window, 1):
-                sign = "+" if r.score > 0 else (
-                    "-" if r.score < 0 else "~"
-                )
+                sign = "+" if r.score > 0 else ("-" if r.score < 0 else "~")
                 lines.append(
                     f"`{i:>2}.` {r.label.value:<12} "
                     f"{sign}{abs(r.score):.1f} "
@@ -347,9 +337,7 @@ class CoreCommands(commands.Cog):
             A :class:`~nexus.models.openrouter.ChatResponse` from the model.
         """
         system_prompt = self.bot.get_system_prompt(model_id)
-        messages = self.bot.conversation.build_messages_for_model(
-            model_id, system_prompt, limit=10
-        )
+        messages = self.bot.conversation.build_messages_for_model(model_id, system_prompt, limit=10)
         messages.append({"role": "user", "content": prompt})
         return await self.bot.openrouter.chat(model=model_id, messages=messages)
 
@@ -367,9 +355,7 @@ class CoreCommands(commands.Cog):
             messages = self.bot.conversation.build_messages_for_model(
                 model_id, system_prompt, limit=10
             )
-            response = await self.bot.openrouter.chat(
-                model=model_id, messages=messages
-            )
+            response = await self.bot.openrouter.chat(model=model_id, messages=messages)
             await self.bot.conversation.add_message(model_id, response.content)
             for embed in MessageFormatter.format_response_multi(model_id, response.content):
                 await self.bot.router.nexus.send(embed=embed)

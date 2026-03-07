@@ -203,10 +203,7 @@ def _extract_url(objective: str) -> str:
 def _navigation_instruction(objective: str) -> str:
     url = _extract_url(objective)
     if url:
-        return (
-            f"Open a browser session and navigate directly to {url}. "
-            f"Objective: {objective}"
-        )
+        return f"Open a browser session and navigate directly to {url}. Objective: {objective}"
     return f"Open a browser session and locate the best starting pages for: {objective}"
 
 
@@ -226,8 +223,7 @@ def _research_steps(objective: str) -> list[StepDefinition]:
         StepDefinition(
             action_type="scroll",
             instruction=(
-                "Scroll through relevant content and gather more evidence for: "
-                f"{objective}"
+                f"Scroll through relevant content and gather more evidence for: {objective}"
             ),
         ),
         StepDefinition(

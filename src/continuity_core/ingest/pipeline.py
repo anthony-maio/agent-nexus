@@ -39,8 +39,7 @@ class MemorySystem(Protocol):
         memory_type: str,
         importance: int = 5,
         metadata: Optional[dict] = None,
-    ) -> str:
-        ...
+    ) -> str: ...
 
 
 class IngestPipeline:

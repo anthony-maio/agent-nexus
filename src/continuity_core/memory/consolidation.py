@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .gates import Gate, SmoothGate, AdaptiveGate
+from .gates import AdaptiveGate, Gate, SmoothGate
 
 
 @dataclass
@@ -32,18 +32,24 @@ class ConsolidationPolicy:
 
 
 class RecallGatedConsolidator:
-    def __init__(self, gate: Optional[Gate] = None, policy: Optional[ConsolidationPolicy] = None) -> None:
+    def __init__(
+        self, gate: Optional[Gate] = None, policy: Optional[ConsolidationPolicy] = None
+    ) -> None:
         self.gate = gate or SmoothGate(theta=0.5, sharpness=10.0)
         self.policy = policy or ConsolidationPolicy()
 
-    def gate_value(self, recall_strength: float, occupancy: float, uncertainty: float = 0.0) -> float:
+    def gate_value(
+        self, recall_strength: float, occupancy: float, uncertainty: float = 0.0
+    ) -> float:
         # Adaptive plasticity: raise consolidation when uncertainty is high.
         bias = self.policy.gate_bias + (0.2 * max(0.0, min(1.0, uncertainty)))
         if isinstance(self.gate, AdaptiveGate):
             return min(1.0, max(0.0, self.gate(recall_strength, occupancy=occupancy) + bias))
         return min(1.0, max(0.0, self.gate(recall_strength) + bias))
 
-    def should_consolidate(self, recall_strength: float, occupancy: float, uncertainty: float = 0.0) -> bool:
+    def should_consolidate(
+        self, recall_strength: float, occupancy: float, uncertainty: float = 0.0
+    ) -> bool:
         return self.gate_value(recall_strength, occupancy, uncertainty) > 0.5
 
     def nested_learning_cycle(self, feedback: ConsolidationFeedback) -> None:

@@ -143,7 +143,7 @@ class TaskDispatcher:
     # TASK_MODELS.  Unknown types fall back to "reasoning".
     ROLE_MAP: dict[str, str] = {
         "research": "reasoning",
-        "code": "reasoning",        # Tool-calling agent in Phase 3
+        "code": "reasoning",  # Tool-calling agent in Phase 3
         "analyze": "reasoning",
         "summarize": "extraction",
         "classify": "router",
@@ -204,10 +204,7 @@ class TaskDispatcher:
             and priority == "low"
         ):
             priority = "medium"
-            log.debug(
-                "Priority bumped low->medium for quick-win "
-                "(user mood: frustrated)"
-            )
+            log.debug("Priority bumped low->medium for quick-win (user mood: frustrated)")
 
         if not description:
             log.debug("Skipping action with empty description.")
@@ -226,7 +223,9 @@ class TaskDispatcher:
         if action_type == "code" and description:
             self._dedup.record(description)
             return await self._dispatch_synthesis(
-                description, priority, goal_id,
+                description,
+                priority,
+                goal_id,
             )
 
         role = self.ROLE_MAP.get(action_type, "reasoning")
@@ -253,7 +252,9 @@ class TaskDispatcher:
                     fallback_role,
                 )
                 result = await self._call_task_agent(
-                    fallback_role, description, priority,
+                    fallback_role,
+                    description,
+                    priority,
                 )
 
         if result is not None:
@@ -262,7 +263,8 @@ class TaskDispatcher:
                 from nexus.orchestrator.guardrails import validate_task_output
 
                 is_valid, reason = validate_task_output(
-                    result.result, description,
+                    result.result,
+                    description,
                 )
                 if not is_valid:
                     log.info(
@@ -393,8 +395,7 @@ class TaskDispatcher:
         task_model: ModelSpec | None = TASK_MODELS.get(role)
         if task_model is None:
             log.warning(
-                "No task model registered for role '%s'. "
-                "Available roles: %s",
+                "No task model registered for role '%s'. Available roles: %s",
                 role,
                 sorted(TASK_MODELS.keys()),
             )
@@ -427,7 +428,8 @@ class TaskDispatcher:
 
         try:
             response = await asyncio.wait_for(
-                self._route_to_provider(task_model, messages), timeout=120.0,
+                self._route_to_provider(task_model, messages),
+                timeout=120.0,
             )
 
             content = (response.content or "").strip()
@@ -517,8 +519,7 @@ class TaskDispatcher:
             )
 
         raise RuntimeError(
-            f"Unsupported provider '{task_model.provider.value}' for "
-            f"task model '{task_model.id}'."
+            f"Unsupported provider '{task_model.provider.value}' for task model '{task_model.id}'."
         )
 
     # ------------------------------------------------------------------

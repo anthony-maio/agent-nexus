@@ -85,7 +85,11 @@ class MRAResolutionPipeline:
             pair = (s1, s2)
             seen_pairs.add(pair)
             classified = self.classifier.classify(
-                s1, s2, score, similarity, metadata=meta,
+                s1,
+                s2,
+                score,
+                similarity,
+                metadata=meta,
             )
             result = self.engine.resolve(classified)
             self._record(report, result)
@@ -100,7 +104,11 @@ class MRAResolutionPipeline:
             # similarity, unless it's a truncation artifact).
             similarity = 0.0  # Will be refined if classifier needs it
             classified = self.classifier.classify(
-                s1, s2, score, similarity, metadata=meta,
+                s1,
+                s2,
+                score,
+                similarity,
+                metadata=meta,
             )
             result = self.engine.resolve(classified)
             self._record(report, result)
@@ -141,23 +149,17 @@ class MRAResolutionPipeline:
                     t = r.contradiction.type.value
                     type_counts[t] = type_counts.get(t, 0) + 1
 
-            breakdown = ", ".join(
-                f"{count} {typ}" for typ, count in type_counts.items()
-            )
+            breakdown = ", ".join(f"{count} {typ}" for typ, count in type_counts.items())
             parts.append(
-                f"Knowledge maintenance: {report.auto_resolved} issues "
-                f"auto-resolved ({breakdown})."
+                f"Knowledge maintenance: {report.auto_resolved} issues auto-resolved ({breakdown})."
             )
 
         if report.escalated > 0:
             parts.append(
-                f"{report.escalated} genuine contradiction(s) escalated "
-                f"for investigation."
+                f"{report.escalated} genuine contradiction(s) escalated for investigation."
             )
 
         if report.void_count > 0:
-            parts.append(
-                f"{report.void_count} knowledge gap(s) detected."
-            )
+            parts.append(f"{report.void_count} knowledge gap(s) detected.")
 
         return " ".join(parts)

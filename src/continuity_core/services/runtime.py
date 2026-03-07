@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from continuity_core.memory.system import TieredMemorySystem
 
-
 _MEMORY_SYSTEM: TieredMemorySystem | None = None
 
 

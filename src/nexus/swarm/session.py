@@ -117,9 +117,7 @@ class SessionManager:
         model_msgs = message_count - human_msgs
 
         # Extract recent topics from human messages
-        human_contents = [
-            m.content[:200] for m in history if m.is_human
-        ][-5:]
+        human_contents = [m.content[:200] for m in history if m.is_human][-5:]
         topics = "; ".join(human_contents) if human_contents else "No human messages"
 
         # Build summary

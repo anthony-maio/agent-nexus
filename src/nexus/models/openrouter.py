@@ -80,8 +80,7 @@ class OpenRouterError(Exception):
         self.status_code = status_code
         self.model = model
         super().__init__(
-            f"OpenRouter error {status_code}"
-            f"{f' (model={model})' if model else ''}: {message}"
+            f"OpenRouter error {status_code}{f' (model={model})' if model else ''}: {message}"
         )
 
 
@@ -224,10 +223,9 @@ class OpenRouterClient:
 
                 if resp.status == 429:
                     # Rate-limited -- back off and retry.
-                    delay = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                    delay = _RETRY_BACKOFF_BASE * (2**attempt)
                     logger.warning(
-                        "OpenRouter rate-limited (429). Retrying in %.1fs "
-                        "(attempt %d/%d).",
+                        "OpenRouter rate-limited (429). Retrying in %.1fs (attempt %d/%d).",
                         delay,
                         attempt + 1,
                         _MAX_RETRIES,
@@ -246,11 +244,7 @@ class OpenRouterClient:
                 # when the HTTP status indicates success.
                 if "error" in body:
                     err = body["error"]
-                    message = (
-                        err.get("message", str(err))
-                        if isinstance(err, dict)
-                        else str(err)
-                    )
+                    message = err.get("message", str(err)) if isinstance(err, dict) else str(err)
                     raise OpenRouterError(
                         message=message,
                         status_code=resp.status,
@@ -343,7 +337,9 @@ class OpenRouterClient:
             return self._stream_chat(model, payload)
 
         body, _headers = await self._request_with_retries(
-            "POST", "/chat/completions", payload,
+            "POST",
+            "/chat/completions",
+            payload,
         )
 
         # Parse the response into a structured object.
@@ -409,11 +405,13 @@ class OpenRouterClient:
             try:
                 async with session.post(url, json=payload) as resp:
                     if resp.status == 429:
-                        delay = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                        delay = _RETRY_BACKOFF_BASE * (2**attempt)
                         logger.warning(
                             "OpenRouter stream rate-limited (429). Retrying in %.1fs "
                             "(attempt %d/%d).",
-                            delay, attempt + 1, _MAX_RETRIES,
+                            delay,
+                            attempt + 1,
+                            _MAX_RETRIES,
                         )
                         last_error = OpenRouterError(
                             message="Rate limited (429)",
@@ -428,9 +426,7 @@ class OpenRouterClient:
                         if "error" in body:
                             err = body["error"]
                             message = (
-                                err.get("message", str(err))
-                                if isinstance(err, dict)
-                                else str(err)
+                                err.get("message", str(err)) if isinstance(err, dict) else str(err)
                             )
                         else:
                             message = f"HTTP {resp.status}: {body}"
@@ -510,7 +506,9 @@ class OpenRouterClient:
         }
 
         body, _headers = await self._request_with_retries(
-            "POST", "/embeddings", payload,
+            "POST",
+            "/embeddings",
+            payload,
         )
 
         # Parse embedding vectors from the response.
@@ -524,9 +522,7 @@ class OpenRouterClient:
 
         # Sort by index to guarantee order matches the input.
         data_entries.sort(key=lambda d: d.get("index", 0))
-        embeddings: list[list[float]] = [
-            entry["embedding"] for entry in data_entries
-        ]
+        embeddings: list[list[float]] = [entry["embedding"] for entry in data_entries]
 
         # Track cost if usage information is available.
         usage: dict[str, Any] = body.get("usage", {})

@@ -22,6 +22,7 @@ from enum import Enum
 # Enums
 # ---------------------------------------------------------------------------
 
+
 class ModelTier(Enum):
     """Classification of a model's role inside the nexus."""
 
@@ -48,6 +49,7 @@ class ModelProvider(Enum):
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class ModelSpec:
@@ -212,8 +214,12 @@ _GLM_FLASH = ModelSpec(
     cost_input_per_m=0.06,
     cost_output_per_m=0.40,
     strengths=[
-        "agentic-coding", "tool-calling", "reasoning",
-        "long-horizon-planning", "extraction", "routing",
+        "agentic-coding",
+        "tool-calling",
+        "reasoning",
+        "long-horizon-planning",
+        "extraction",
+        "routing",
     ],
 )
 
@@ -291,8 +297,11 @@ ORCHESTRATOR_MODEL = ModelSpec(
     cost_input_per_m=0.15,
     cost_output_per_m=3.50,
     strengths=[
-        "structured-output", "tool-calling", "speed",
-        "long-context", "reasoning",
+        "structured-output",
+        "tool-calling",
+        "speed",
+        "long-context",
+        "reasoning",
     ],
     requires_api_key="OPENROUTER_API_KEY",
 )
@@ -314,6 +323,7 @@ ORCHESTRATOR_FALLBACK = ModelSpec(
 # Selection helpers
 # ---------------------------------------------------------------------------
 
+
 def get_active_swarm(model_ids: list[str] | None = None) -> list[ModelSpec]:
     """Return the swarm models that the user has selected.
 
@@ -333,10 +343,7 @@ def get_active_swarm(model_ids: list[str] | None = None) -> list[ModelSpec]:
     active: list[ModelSpec] = []
     for mid in model_ids:
         if mid not in SWARM_MODELS:
-            raise KeyError(
-                f"Unknown swarm model '{mid}'. "
-                f"Available: {sorted(SWARM_MODELS.keys())}"
-            )
+            raise KeyError(f"Unknown swarm model '{mid}'. Available: {sorted(SWARM_MODELS.keys())}")
         active.append(SWARM_MODELS[mid])
     return active
 
@@ -359,7 +366,6 @@ def get_embedding(model_id: str | None = None) -> EmbeddingSpec:
 
     if model_id not in EMBEDDING_MODELS:
         raise KeyError(
-            f"Unknown embedding model '{model_id}'. "
-            f"Available: {sorted(EMBEDDING_MODELS.keys())}"
+            f"Unknown embedding model '{model_id}'. Available: {sorted(EMBEDDING_MODELS.keys())}"
         )
     return EMBEDDING_MODELS[model_id]

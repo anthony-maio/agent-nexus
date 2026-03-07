@@ -82,8 +82,7 @@ def check_entity_grounding(
 
         if ungrounded:
             log.warning(
-                "GUARDRAIL: Dropping ungrounded action: '%.100s' "
-                "-- references not in state: %s",
+                "GUARDRAIL: Dropping ungrounded action: '%.100s' -- references not in state: %s",
                 description,
                 ungrounded[:5],
             )
@@ -107,16 +106,37 @@ def check_entity_grounding(
 
 # Vocabulary sets that indicate off-topic hallucination.
 _OFFTOPIC_MEDICAL: set[str] = {
-    "tavp", "transcatheter", "aortic", "cardiac", "cardiovascular",
-    "myocardial", "endoscopic", "catheter", "arterial", "ventricular",
-    "angioplasty", "hemodynamic", "intravenous", "pathology",
-    "prognosis", "surgical", "clinical",
+    "tavp",
+    "transcatheter",
+    "aortic",
+    "cardiac",
+    "cardiovascular",
+    "myocardial",
+    "endoscopic",
+    "catheter",
+    "arterial",
+    "ventricular",
+    "angioplasty",
+    "hemodynamic",
+    "intravenous",
+    "pathology",
+    "prognosis",
+    "surgical",
+    "clinical",
 }
 
 _OFFTOPIC_LEGAL: set[str] = {
-    "plaintiff", "defendant", "subpoena", "deposition", "tort",
-    "jurisprudence", "litigation", "arbitration", "indictment",
-    "arraignment", "statutory",
+    "plaintiff",
+    "defendant",
+    "subpoena",
+    "deposition",
+    "tort",
+    "jurisprudence",
+    "litigation",
+    "arbitration",
+    "indictment",
+    "arraignment",
+    "statutory",
 }
 
 _FABRICATED_SPECIFICS: list[re.Pattern[str]] = [
@@ -226,9 +246,7 @@ def validate_task_output(
         matches = pattern.findall(result_text)
         infra_hits.extend(matches[:2])
     if len(infra_hits) >= 2:
-        reasons.append(
-            f"fabricated infrastructure access: {infra_hits[:4]}"
-        )
+        reasons.append(f"fabricated infrastructure access: {infra_hits[:4]}")
 
     # 3. Filler padding
     for pattern in _FILLER_PATTERNS:
@@ -237,20 +255,16 @@ def validate_task_output(
             break
 
     # 4. Confidence without evidence (need 2+ hits)
-    confidence_count = sum(
-        1 for p in _CONFIDENCE_PATTERNS if p.search(result_text)
-    )
+    confidence_count = sum(1 for p in _CONFIDENCE_PATTERNS if p.search(result_text))
     if confidence_count >= 2:
         reasons.append(
-            "multiple unsubstantiated confidence claims "
-            "(agent has no verification capability)"
+            "multiple unsubstantiated confidence claims (agent has no verification capability)"
         )
 
     if reasons:
         combined = "; ".join(reasons)
         log.warning(
-            "GUARDRAIL: Task output failed validation: %s | "
-            "Task: '%.80s' | Output: '%.200s'",
+            "GUARDRAIL: Task output failed validation: %s | Task: '%.80s' | Output: '%.200s'",
             combined,
             task_description,
             result_text,
@@ -266,17 +280,78 @@ def validate_task_output(
 
 # Words filtered out when extracting topic terms from action descriptions.
 _STOP_WORDS: set[str] = {
-    "the", "and", "for", "with", "from", "that", "this", "these",
-    "those", "have", "has", "had", "been", "being", "will", "would",
-    "could", "should", "might", "shall", "about", "into", "over",
-    "after", "before", "between", "under", "above", "below", "each",
-    "every", "both", "some", "such", "only", "also", "just", "very",
-    "well", "back", "like", "more", "most", "other", "than", "then",
-    "what", "when", "where", "which", "while", "does", "done",
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "these",
+    "those",
+    "have",
+    "has",
+    "had",
+    "been",
+    "being",
+    "will",
+    "would",
+    "could",
+    "should",
+    "might",
+    "shall",
+    "about",
+    "into",
+    "over",
+    "after",
+    "before",
+    "between",
+    "under",
+    "above",
+    "below",
+    "each",
+    "every",
+    "both",
+    "some",
+    "such",
+    "only",
+    "also",
+    "just",
+    "very",
+    "well",
+    "back",
+    "like",
+    "more",
+    "most",
+    "other",
+    "than",
+    "then",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "does",
+    "done",
     # Domain stop words (too generic to distinguish topics)
-    "task", "agent", "swarm", "nexus", "analyze", "research",
-    "summarize", "review", "current", "recent", "based", "determine",
-    "identify", "ensure", "check", "verify", "assess", "evaluate",
+    "task",
+    "agent",
+    "swarm",
+    "nexus",
+    "analyze",
+    "research",
+    "summarize",
+    "review",
+    "current",
+    "recent",
+    "based",
+    "determine",
+    "identify",
+    "ensure",
+    "check",
+    "verify",
+    "assess",
+    "evaluate",
 }
 
 
@@ -399,8 +474,7 @@ class IdleLoopDetector:
             if overlap >= self.overlap_threshold:
                 self._staleness_counter += 1
                 log.debug(
-                    "GUARDRAIL: Stale cycle detected (overlap=%.2f, "
-                    "counter=%d/%d, shared=%s).",
+                    "GUARDRAIL: Stale cycle detected (overlap=%.2f, counter=%d/%d, shared=%s).",
                     overlap,
                     self._staleness_counter,
                     self.stale_cycle_limit,
@@ -591,8 +665,7 @@ def check_capability(
 
         if reasons:
             log.warning(
-                "GUARDRAIL: Dropping impossible/self-referential action: "
-                "'%.100s' -- %s",
+                "GUARDRAIL: Dropping impossible/self-referential action: '%.100s' -- %s",
                 description,
                 reasons[0],
             )

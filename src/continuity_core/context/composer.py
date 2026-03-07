@@ -45,7 +45,7 @@ class ContextComposer:
             * (0.5 + 0.5 * cand.confidence)
             * (0.5 + 0.5 * cand.task_match)
         )
-        score *= (0.7 + 0.6 * cand.salience)
+        score *= 0.7 + 0.6 * cand.salience
         penalty = self.lambda_penalty * cand.token_cost
         return score - penalty
 

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from nexus_api.db import Base
+from alembic import context
 from nexus_api import models as _models  # noqa: F401
+from nexus_api.db import Base
 
 config = context.config
 

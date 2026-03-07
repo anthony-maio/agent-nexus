@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class SwarmMessage:
     """A message in the swarm conversation."""
+
     model_id: str
     content: str
     timestamp: datetime
@@ -38,7 +39,9 @@ class ConversationManager:
         self._max_history = 50
         self._lock = asyncio.Lock()
 
-    async def add_message(self, model_id: str, content: str, is_human: bool = False) -> SwarmMessage:
+    async def add_message(
+        self, model_id: str, content: str, is_human: bool = False
+    ) -> SwarmMessage:
         """Record a message in the conversation."""
         msg = SwarmMessage(
             model_id=model_id,
@@ -49,14 +52,16 @@ class ConversationManager:
         async with self._lock:
             self._history.append(msg)
             if len(self._history) > self._max_history:
-                self._history = self._history[-self._max_history:]
+                self._history = self._history[-self._max_history :]
         return msg
 
     def get_history(self, limit: int = 20) -> list[SwarmMessage]:
         """Get recent conversation history."""
         return self._history[-limit:]
 
-    def build_messages_for_model(self, model_id: str, system_prompt: str, limit: int = 15) -> list[dict]:
+    def build_messages_for_model(
+        self, model_id: str, system_prompt: str, limit: int = 15
+    ) -> list[dict]:
         """Build OpenAI-format message list for a specific model.
 
         The model sees:
@@ -67,24 +72,31 @@ class ConversationManager:
 
         for msg in self._history[-limit:]:
             if msg.is_human:
-                messages.append({
-                    "role": "user",
-                    "content": msg.content,
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": msg.content,
+                    }
+                )
             elif msg.model_id == model_id:
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content,
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": msg.content,
+                    }
+                )
             else:
                 # Other model's message appears as user message with attribution
                 # This lets the model see what others said without confusing role assignments
                 from nexus.personality.identities import format_name
+
                 name = format_name(msg.model_id)
-                messages.append({
-                    "role": "user",
-                    "content": f"[{name}]: {msg.content}",
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[{name}]: {msg.content}",
+                    }
+                )
 
         return messages
 

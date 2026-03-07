@@ -98,9 +98,7 @@ def authenticate_user(session: Session, username: str, password: str) -> AdminUs
 def validate_bearer_token(session: Session, token: str) -> AdminUser | None:
     now = datetime.now(timezone.utc)
     token_hash = _hash_session_token(token)
-    s = session.scalar(
-        select(SessionToken).where(SessionToken.token.in_([token_hash, token]))
-    )
+    s = session.scalar(select(SessionToken).where(SessionToken.token.in_([token_hash, token])))
     if s is None or s.revoked:
         return None
     # Migrate legacy plaintext token-at-rest values in-place.

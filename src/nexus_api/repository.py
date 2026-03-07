@@ -76,8 +76,7 @@ class SqlRunRepository:
 
         total = int(self.session.scalar(count_stmt) or 0)
         rows = self.session.scalars(
-            base_stmt
-            .order_by(Run.created_at.desc(), Run.id.desc())
+            base_stmt.order_by(Run.created_at.desc(), Run.id.desc())
             .limit(max(1, min(limit, 100)))
             .offset(max(0, offset))
         ).all()

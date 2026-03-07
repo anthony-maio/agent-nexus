@@ -81,9 +81,7 @@ class ChannelRouter:
         Args:
             guild: The Discord guild to provision channels in.
         """
-        existing: dict[str, discord.TextChannel] = {
-            ch.name: ch for ch in guild.text_channels
-        }
+        existing: dict[str, discord.TextChannel] = {ch.name: ch for ch in guild.text_channels}
 
         for key, spec in CHANNEL_SPECS.items():
             name = spec["name"]

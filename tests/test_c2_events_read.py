@@ -30,6 +30,7 @@ def test_events_returns_recent_events():
 
     with patch("continuity_core.mcp.tools.events_read.get_memory_system", return_value=mock_mem):
         from continuity_core.mcp.tools.events_read import read_events
+
         result = read_events({"limit": 10})
 
     assert len(result["events"]) == 2
@@ -45,6 +46,7 @@ def test_events_default_limit():
 
     with patch("continuity_core.mcp.tools.events_read.get_memory_system", return_value=mock_mem):
         from continuity_core.mcp.tools.events_read import read_events
+
         read_events({})
 
     mock_mem.event_log.tail.assert_called_once_with(n=10)

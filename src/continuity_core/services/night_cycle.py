@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class NightCycleResult:
     """Summary of one maintenance pass."""
+
     decay_applied: bool = False
     items_pruned: int = 0
     stress_before: float = 0.0
@@ -71,9 +72,7 @@ class NightCycle:
         prev_cache = self._mem.get_mra_signals()
         if prev_cache is not None and prev_cache.last_stress is not None:
             result.stress_before = prev_cache.last_stress.s_omega
-            prev_contradictions = {
-                (s1, s2) for s1, s2, _ in prev_cache.last_stress.contradictions
-            }
+            prev_contradictions = {(s1, s2) for s1, s2, _ in prev_cache.last_stress.contradictions}
         else:
             prev_contradictions = set()
 
@@ -91,6 +90,7 @@ class NightCycle:
         monitor = EpistemicStressMonitor(embed_fn=self._mem.embedder.embed)
 
         from continuity_core.mcp.tools.introspect import _graph_sparsity
+
         sparsity = _graph_sparsity(graph) if graph else 1.0
         stress = monitor.compute(statements, graph_sparsity=sparsity)
         result.stress_after = stress.s_omega
@@ -114,9 +114,7 @@ class NightCycle:
 
         # 5. Harmonic integration — detect resolved contradictions
         if prev_contradictions:
-            current_contradictions = {
-                (s1, s2) for s1, s2, _ in stress.contradictions
-            }
+            current_contradictions = {(s1, s2) for s1, s2, _ in stress.contradictions}
             resolved = prev_contradictions - current_contradictions
             for s1, s2 in resolved:
                 result.resolutions.append({"s1": s1, "s2": s2, "type": "contradiction_resolved"})
@@ -130,7 +128,8 @@ class NightCycle:
 
         # 6. Update MRA cache
         self._mem.update_mra_cache(
-            stress, voids,
+            stress,
+            voids,
             resolution_summary=resolution.summary,
         )
 

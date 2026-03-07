@@ -77,7 +77,7 @@ class CandidateGatherer:
             if len(out) >= self._max_mra_injections:
                 break
             text = (
-                f"[Deep Tension] \"{s1}\" vs \"{s2}\" "
+                f'[Deep Tension] "{s1}" vs "{s2}" '
                 f"(contradiction: {score:.2f}, similarity: {sim:.2f}). "
                 "These views are tightly coupled yet contradictory — resolve or investigate."
             )
@@ -99,7 +99,7 @@ class CandidateGatherer:
                 break
             if (s1, s2) in deep_pairs:
                 continue
-            text = f"[Contradiction] \"{s1}\" vs \"{s2}\" (score: {score:.2f})"
+            text = f'[Contradiction] "{s1}" vs "{s2}" (score: {score:.2f})'
             out.append(
                 _candidate_from_text(
                     "mra",

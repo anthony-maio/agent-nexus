@@ -104,8 +104,12 @@ class StateGatherer:
         )
 
         source_names = [
-            "conversation", "memories", "activity", "curiosity",
-            "task_results", "active_goals",
+            "conversation",
+            "memories",
+            "activity",
+            "curiosity",
+            "task_results",
+            "active_goals",
         ]
 
         # Unpack, treating exceptions as None
@@ -146,11 +150,7 @@ class StateGatherer:
             or state["active_goals"]
         )
 
-        mood_str = (
-            state["sentiment"]["mood"]
-            if state.get("sentiment")
-            else "n/a"
-        )
+        mood_str = state["sentiment"]["mood"] if state.get("sentiment") else "n/a"
         log.debug(
             "State gathered: %d message(s), %d memory(ies), %d result(s), "
             "activity=%s, curiosity=%s, goals=%s, mood=%s.",
@@ -216,7 +216,8 @@ class StateGatherer:
             )
             results: list[Memory] = await asyncio.wait_for(
                 self.bot.memory_store.search(
-                    query_vector, limit=self._MEMORY_LIMIT,
+                    query_vector,
+                    limit=self._MEMORY_LIMIT,
                 ),
                 timeout=10.0,
             )
@@ -252,7 +253,8 @@ class StateGatherer:
                 return None
 
             digest = await asyncio.wait_for(
-                pieces.get_activity_digest(), timeout=20.0,
+                pieces.get_activity_digest(),
+                timeout=20.0,
             )
             if digest is not None and not digest.is_empty:
                 return digest
@@ -285,7 +287,8 @@ class StateGatherer:
                 return None
 
             result = await asyncio.wait_for(
-                c2.curiosity(), timeout=30.0,
+                c2.curiosity(),
+                timeout=30.0,
             )
             return result if result else None
 
@@ -380,21 +383,15 @@ class StateGatherer:
                 "User frustrated -- prefer quick-win tasks "
                 "(summarize, research). Be more careful with risky actions."
             ),
-            Mood.URGENT: (
-                "User has urgent need -- prioritise speed, "
-                "skip low-priority tasks."
-            ),
+            Mood.URGENT: ("User has urgent need -- prioritise speed, skip low-priority tasks."),
             Mood.CURIOUS: (
-                "User is exploratory -- research tasks welcome, "
-                "deeper analysis appreciated."
+                "User is exploratory -- research tasks welcome, deeper analysis appreciated."
             ),
             Mood.NEGATIVE: (
-                "User seems dissatisfied -- focus on solutions, "
-                "avoid speculative tasks."
+                "User seems dissatisfied -- focus on solutions, avoid speculative tasks."
             ),
             Mood.POSITIVE: (
-                "User in good spirits -- maintain momentum, "
-                "can take on ambitious tasks."
+                "User in good spirits -- maintain momentum, can take on ambitious tasks."
             ),
         }
 

@@ -37,13 +37,15 @@ class DiscordLogHandler(logging.Handler):
     """
 
     # Loggers whose INFO messages are interesting enough to forward.
-    _INFO_LOGGERS: Final[frozenset[str]] = frozenset({
-        "nexus.bot",
-        "nexus.orchestrator.loop",
-        "nexus.integrations.c2_engine",
-        "nexus.integrations.pieces",
-        "nexus.memory.store",
-    })
+    _INFO_LOGGERS: Final[frozenset[str]] = frozenset(
+        {
+            "nexus.bot",
+            "nexus.orchestrator.loop",
+            "nexus.integrations.c2_engine",
+            "nexus.integrations.pieces",
+            "nexus.memory.store",
+        }
+    )
 
     def __init__(self, channel: discord.TextChannel) -> None:
         super().__init__(level=logging.INFO)

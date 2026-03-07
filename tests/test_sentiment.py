@@ -155,8 +155,7 @@ class TestMoodContextForPrompt:
             tracker.analyze(text)
             if tracker.current_mood != Mood.NEUTRAL:
                 assert tracker.mood_context_for_prompt() != "", (
-                    f"No hint for mood {tracker.current_mood} "
-                    f"from text: {text!r}"
+                    f"No hint for mood {tracker.current_mood} from text: {text!r}"
                 )
 
 

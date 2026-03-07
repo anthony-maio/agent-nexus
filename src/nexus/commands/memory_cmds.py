@@ -57,9 +57,7 @@ class MemoryCommands(commands.Cog):
         async with ctx.typing():
             try:
                 query_vector = await self.bot.embeddings.embed_one(query)
-                memories = await self.bot.memory_store.search(
-                    query_vector, limit=5
-                )
+                memories = await self.bot.memory_store.search(query_vector, limit=5)
 
                 if not memories:
                     await ctx.send("No relevant memories found.")
@@ -71,16 +69,13 @@ class MemoryCommands(commands.Cog):
                 )
                 for i, mem in enumerate(memories, 1):
                     embed.add_field(
-                        name=(
-                            f"#{i} (relevance: {mem.score:.2f}, "
-                            f"source: {mem.source})"
-                        ),
+                        name=(f"#{i} (relevance: {mem.score:.2f}, source: {mem.source})"),
                         value=mem.content[:1024],
                         inline=False,
                     )
                 await ctx.send(embed=embed)
 
-            except Exception as exc:
+            except Exception:
                 log.exception("!memory search failed for query: %s", query[:80])
                 await ctx.send("Memory search failed. Check bot logs for details.")
 
@@ -118,7 +113,7 @@ class MemoryCommands(commands.Cog):
                 )
                 await self.bot.router.memory.send(embed=log_embed)
 
-            except Exception as exc:
+            except Exception:
                 log.exception("!remember failed for text: %s", text[:80])
                 await ctx.send("Failed to store memory. Check bot logs for details.")
 
@@ -147,7 +142,7 @@ class MemoryCommands(commands.Cog):
             )
             await self.bot.router.memory.send(embed=log_embed)
 
-        except Exception as exc:
+        except Exception:
             log.exception("!forget failed for memory_id: %s", memory_id)
             await ctx.send("Failed to delete memory. Check bot logs for details.")
 

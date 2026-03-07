@@ -6,8 +6,7 @@ from typing import Protocol
 
 
 class Gate(Protocol):
-    def __call__(self, recall: float) -> float:
-        ...
+    def __call__(self, recall: float) -> float: ...
 
 
 @dataclass(frozen=True)

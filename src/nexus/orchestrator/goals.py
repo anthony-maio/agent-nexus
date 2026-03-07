@@ -69,9 +69,7 @@ class TaskQueueItem:
     result_summary: str = ""
     attempts: int = 0
     max_attempts: int = 3
-    created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str = ""
 
     def is_ready(self, completed_ids: set[str]) -> bool:
@@ -91,12 +89,8 @@ class Goal:
     source: str = "orchestrator"
     progress_notes: list[str] = field(default_factory=list)
     task_ids: list[str] = field(default_factory=list)
-    created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    updated_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str = ""
     max_age_hours: float = 72.0
 
@@ -138,9 +132,7 @@ class GoalStore:
         try:
             import redis.asyncio as aioredis
 
-            self._redis = aioredis.from_url(
-                self._redis_url, decode_responses=True
-            )
+            self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
             await self._redis.ping()
             self._connected = True
             log.info("GoalStore connected to Redis at %s", self._redis_url)
@@ -180,9 +172,7 @@ class GoalStore:
             goal.max_age_hours = self._default_max_age_hours
 
         if self._connected:
-            await self._redis.set(
-                f"{_GOAL_PREFIX}{goal.id}", json.dumps(asdict(goal))
-            )
+            await self._redis.set(f"{_GOAL_PREFIX}{goal.id}", json.dumps(asdict(goal)))
             await self._redis.sadd(_GOAL_INDEX, goal.id)
         else:
             self._mem_goals[goal.id] = goal
@@ -226,9 +216,7 @@ class GoalStore:
         goal.updated_at = datetime.now(timezone.utc).isoformat()
 
         if self._connected:
-            await self._redis.set(
-                f"{_GOAL_PREFIX}{goal.id}", json.dumps(asdict(goal))
-            )
+            await self._redis.set(f"{_GOAL_PREFIX}{goal.id}", json.dumps(asdict(goal)))
             if goal.status != GoalStatus.ACTIVE.value:
                 await self._redis.srem(_GOAL_INDEX, goal.id)
         else:
@@ -272,17 +260,13 @@ class GoalStore:
             await self.update_goal(goal_id, task_ids=goal.task_ids)
 
         if self._connected:
-            await self._redis.set(
-                f"{_TASK_PREFIX}{task.id}", json.dumps(asdict(task))
-            )
+            await self._redis.set(f"{_TASK_PREFIX}{task.id}", json.dumps(asdict(task)))
         else:
             self._mem_tasks[task.id] = task
 
         return task.id
 
-    async def enqueue_chain(
-        self, goal_id: str, tasks: list[TaskQueueItem]
-    ) -> list[str]:
+    async def enqueue_chain(self, goal_id: str, tasks: list[TaskQueueItem]) -> list[str]:
         """Enqueue a sequence of tasks where each depends on the previous."""
         ids: list[str] = []
         prev_id: str | None = None
@@ -330,9 +314,7 @@ class GoalStore:
         """Mark a task as dispatched (in-flight)."""
         return await self._update_task(task_id, status=TaskStatus.DISPATCHED.value)
 
-    async def mark_task_completed(
-        self, task_id: str, result_summary: str = ""
-    ) -> bool:
+    async def mark_task_completed(self, task_id: str, result_summary: str = "") -> bool:
         """Mark a task as completed and update its parent goal."""
         success = await self._update_task(
             task_id,
@@ -387,9 +369,7 @@ class GoalStore:
                 setattr(task, key, value)
 
         if self._connected:
-            await self._redis.set(
-                f"{_TASK_PREFIX}{task.id}", json.dumps(asdict(task))
-            )
+            await self._redis.set(f"{_TASK_PREFIX}{task.id}", json.dumps(asdict(task)))
         else:
             self._mem_tasks[task.id] = task
         return True
@@ -417,7 +397,10 @@ class GoalStore:
                     await self.update_goal(goal.id, status=GoalStatus.STALE.value)
                     log.info(
                         "Goal %s marked stale (inactive=%.1fh, max=%.1fh): %s",
-                        goal.id, inactive_hours, goal.max_age_hours, goal.title,
+                        goal.id,
+                        inactive_hours,
+                        goal.max_age_hours,
+                        goal.title,
                     )
                     pruned += 1
             except (ValueError, TypeError):
@@ -437,9 +420,7 @@ class GoalStore:
 
         parts: list[str] = []
         for goal in active:
-            parts.append(
-                f"Goal [{goal.id}] ({goal.priority}): {goal.title}"
-            )
+            parts.append(f"Goal [{goal.id}] ({goal.priority}): {goal.title}")
             if goal.description:
                 parts.append(f"  Description: {goal.description[:200]}")
 
@@ -458,9 +439,7 @@ class GoalStore:
                 else:
                     pending += 1
 
-            parts.append(
-                f"  Tasks: {completed} done, {pending} pending, {failed} failed"
-            )
+            parts.append(f"  Tasks: {completed} done, {pending} pending, {failed} failed")
 
             # Last 3 progress notes
             if goal.progress_notes:

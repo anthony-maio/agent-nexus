@@ -57,9 +57,11 @@ def _minimal_state(**overrides: Any) -> dict[str, Any]:
 
 class TestParseActions:
     def test_parses_clean_json_array(self):
-        raw = json.dumps([
-            {"type": "research", "description": "Look into X", "priority": "high"},
-        ])
+        raw = json.dumps(
+            [
+                {"type": "research", "description": "Look into X", "priority": "high"},
+            ]
+        )
         actions = _parse_actions(raw)
         assert len(actions) == 1
         assert actions[0]["type"] == "research"
@@ -91,18 +93,18 @@ class TestParseActions:
         assert actions == []
 
     def test_filters_meta_goals(self):
-        raw = json.dumps([
-            {"type": "analyze", "description": "Summarize all completed goals"},
-            {"type": "research", "description": "Look into user's project"},
-        ])
+        raw = json.dumps(
+            [
+                {"type": "analyze", "description": "Summarize all completed goals"},
+                {"type": "research", "description": "Look into user's project"},
+            ]
+        )
         actions = _parse_actions(raw)
         assert len(actions) == 1
         assert "user's project" in actions[0]["description"]
 
     def test_max_five_actions(self):
-        raw = json.dumps([
-            {"type": "analyze", "description": f"Task {i}"} for i in range(10)
-        ])
+        raw = json.dumps([{"type": "analyze", "description": f"Task {i}"} for i in range(10)])
         actions = _parse_actions(raw)
         assert len(actions) == 5
 
@@ -139,11 +141,13 @@ class TestValidateActions:
         assert result[0]["goal_id"] == "g-123"
 
     def test_preserves_new_goal(self):
-        parsed = [{
-            "type": "research",
-            "description": "Task",
-            "new_goal": {"title": "New Goal", "description": "Details"},
-        }]
+        parsed = [
+            {
+                "type": "research",
+                "description": "Task",
+                "new_goal": {"title": "New Goal", "description": "Details"},
+            }
+        ]
         result = _validate_actions(parsed)
         assert result[0]["new_goal"]["title"] == "New Goal"
 
@@ -169,12 +173,8 @@ class TestIsMetaGoal:
         assert _is_meta_goal("Investigate why the agent returned empty result")
 
     def test_detects_goal_summarisation_loop(self):
-        assert _is_meta_goal(
-            "Summarize the current state and findings for Goal [b8cd519fb605]"
-        )
-        assert _is_meta_goal(
-            "Current state and findings for Goal [fecc63bc6307]"
-        )
+        assert _is_meta_goal("Summarize the current state and findings for Goal [b8cd519fb605]")
+        assert _is_meta_goal("Current state and findings for Goal [fecc63bc6307]")
         assert _is_meta_goal("Status update for Goal [5ee7fbeef0d1]")
         assert _is_meta_goal("Progress made on the Evidence Integrity Audit")
 
@@ -251,13 +251,15 @@ class TestBuildDecisionPrompt:
         assert "Knowledge about Python testing" in prompt
 
     def test_includes_activity(self):
-        state = _minimal_state(activity={
-            "recent_focus": "Editing main.py",
-            "projects": ["agent-nexus"],
-            "active_apps": ["VSCode"],
-            "is_stale": False,
-            "age_description": "2 minutes ago",
-        })
+        state = _minimal_state(
+            activity={
+                "recent_focus": "Editing main.py",
+                "projects": ["agent-nexus"],
+                "active_apps": ["VSCode"],
+                "is_stale": False,
+                "age_description": "2 minutes ago",
+            }
+        )
         prompt = _build_decision_prompt(state, MagicMock())
         assert "Editing main.py" in prompt
         assert "agent-nexus" in prompt
@@ -303,15 +305,17 @@ class TestGatherStateNode:
         from nexus.orchestrator.graph import gather_state_node
 
         bot = MagicMock()
-        bot.state_gatherer.gather = AsyncMock(return_value={
-            "timestamp": "2025-06-01T00:00:00Z",
-            "recent_messages": [{"author": "human", "content": "hi"}],
-            "memories": [],
-            "activity": None,
-            "curiosity": None,
-            "task_results": [],
-            "active_goals": "Goal: test",
-        })
+        bot.state_gatherer.gather = AsyncMock(
+            return_value={
+                "timestamp": "2025-06-01T00:00:00Z",
+                "recent_messages": [{"author": "human", "content": "hi"}],
+                "memories": [],
+                "activity": None,
+                "curiosity": None,
+                "task_results": [],
+                "active_goals": "Goal: test",
+            }
+        )
         result = await gather_state_node(_minimal_state(), bot=bot)
         assert result["timestamp"] == "2025-06-01T00:00:00Z"
         assert result["active_goals"] == "Goal: test"
@@ -330,15 +334,17 @@ class TestGatherStateNode:
         digest.age_description = "1 min"
 
         bot = MagicMock()
-        bot.state_gatherer.gather = AsyncMock(return_value={
-            "timestamp": "t",
-            "recent_messages": [],
-            "memories": [],
-            "activity": digest,
-            "curiosity": None,
-            "task_results": [],
-            "active_goals": "",
-        })
+        bot.state_gatherer.gather = AsyncMock(
+            return_value={
+                "timestamp": "t",
+                "recent_messages": [],
+                "memories": [],
+                "activity": digest,
+                "curiosity": None,
+                "task_results": [],
+                "active_goals": "",
+            }
+        )
 
         result = await gather_state_node(_minimal_state(), bot=bot)
         assert result["activity"]["summary"] == "User edited code"
@@ -352,9 +358,11 @@ class TestEnrichC2Node:
 
         c2 = AsyncMock()
         c2.is_running = True
-        c2.get_context = AsyncMock(return_value={
-            "chosen": [{"text": "Python best practices", "store": "kg"}],
-        })
+        c2.get_context = AsyncMock(
+            return_value={
+                "chosen": [{"text": "Python best practices", "store": "kg"}],
+            }
+        )
         c2.events = AsyncMock(return_value={"events": []})
 
         bot = MagicMock()
@@ -423,12 +431,14 @@ class TestEnrichC2Node:
         c2 = AsyncMock()
         c2.is_running = True
         c2.get_context = AsyncMock(return_value={"chosen": []})
-        c2.events = AsyncMock(return_value={
-            "events": [
-                {"intent": "decision", "input": "Analyze code patterns"},
-                {"intent": "task_result", "input": "Found 3 issues"},
-            ],
-        })
+        c2.events = AsyncMock(
+            return_value={
+                "events": [
+                    {"intent": "decision", "input": "Analyze code patterns"},
+                    {"intent": "task_result", "input": "Found 3 issues"},
+                ],
+            }
+        )
 
         bot = MagicMock()
         bot.c2 = c2
@@ -512,7 +522,10 @@ class TestDispatchAgentNode:
         )
 
         result = await dispatch_agent_node(
-            state, agent_llm=agent_llm, tools=[], bot=bot,
+            state,
+            agent_llm=agent_llm,
+            tools=[],
+            bot=bot,
         )
 
         assert len(result["agent_results"]) == 1
@@ -553,7 +566,10 @@ class TestDispatchAgentNode:
         )
 
         result = await dispatch_agent_node(
-            state, agent_llm=agent_llm, tools=[], bot=MagicMock(),
+            state,
+            agent_llm=agent_llm,
+            tools=[],
+            bot=MagicMock(),
         )
         assert len(result["agent_results"]) == 1
         assert result["agent_results"][0]["success"] is False
@@ -569,12 +585,16 @@ class TestPostResultsNode:
         bot.c2 = None
         bot.settings.TASK_AGENT_MODEL = "test/model"
 
-        state = _minimal_state(agent_results=[{
-            "action": {"type": "analyze", "description": "Test task"},
-            "result": "Analysis complete.",
-            "success": True,
-            "tool_calls": [],
-        }])
+        state = _minimal_state(
+            agent_results=[
+                {
+                    "action": {"type": "analyze", "description": "Test task"},
+                    "result": "Analysis complete.",
+                    "success": True,
+                    "tool_calls": [],
+                }
+            ]
+        )
 
         result = await post_results_node(state, bot=bot)
         assert result == {}
@@ -586,12 +606,16 @@ class TestPostResultsNode:
 
         bot = MagicMock(spec=[])  # No router attribute.
 
-        state = _minimal_state(agent_results=[{
-            "action": {"type": "analyze", "description": "Test"},
-            "result": "Done.",
-            "success": True,
-            "tool_calls": [],
-        }])
+        state = _minimal_state(
+            agent_results=[
+                {
+                    "action": {"type": "analyze", "description": "Test"},
+                    "result": "Done.",
+                    "success": True,
+                    "tool_calls": [],
+                }
+            ]
+        )
 
         # Should not raise.
         result = await post_results_node(state, bot=bot)
@@ -610,12 +634,16 @@ class TestPostResultsNode:
         bot.memory_store.store = AsyncMock()
         bot.settings.TASK_AGENT_MODEL = "test/model"
 
-        state = _minimal_state(agent_results=[{
-            "action": {"type": "research", "description": "Investigate bug"},
-            "result": "Found the root cause in module X.",
-            "success": True,
-            "tool_calls": [],
-        }])
+        state = _minimal_state(
+            agent_results=[
+                {
+                    "action": {"type": "research", "description": "Investigate bug"},
+                    "result": "Found the root cause in module X.",
+                    "success": True,
+                    "tool_calls": [],
+                }
+            ]
+        )
 
         await post_results_node(state, bot=bot)
 
@@ -637,12 +665,16 @@ class TestPostResultsNode:
         bot.embeddings.embed_one = AsyncMock()
         bot.memory_store.store = AsyncMock()
 
-        state = _minimal_state(agent_results=[{
-            "action": {"type": "analyze", "description": "Test task"},
-            "result": "Error occurred.",
-            "success": False,
-            "tool_calls": [],
-        }])
+        state = _minimal_state(
+            agent_results=[
+                {
+                    "action": {"type": "analyze", "description": "Test task"},
+                    "result": "Error occurred.",
+                    "success": False,
+                    "tool_calls": [],
+                }
+            ]
+        )
 
         await post_results_node(state, bot=bot)
 
@@ -657,9 +689,11 @@ class TestOrchestratorDecideC2Write:
 
         # Mock LLM response with a valid action.
         mock_response = MagicMock()
-        mock_response.content = json.dumps([
-            {"type": "research", "description": "Look into auth patterns"},
-        ])
+        mock_response.content = json.dumps(
+            [
+                {"type": "research", "description": "Look into auth patterns"},
+            ]
+        )
 
         orchestrator_llm = AsyncMock()
         orchestrator_llm.ainvoke = AsyncMock(return_value=mock_response)
@@ -676,7 +710,9 @@ class TestOrchestratorDecideC2Write:
         )
 
         await orchestrator_decide_node(
-            state, orchestrator_llm=orchestrator_llm, bot=bot,
+            state,
+            orchestrator_llm=orchestrator_llm,
+            bot=bot,
         )
 
         # C2 write_event should be called with the decision.
@@ -703,7 +739,9 @@ class TestOrchestratorDecideC2Write:
         bot.c2 = c2
 
         await orchestrator_decide_node(
-            _minimal_state(), orchestrator_llm=orchestrator_llm, bot=bot,
+            _minimal_state(),
+            orchestrator_llm=orchestrator_llm,
+            bot=bot,
         )
 
         c2.write_event.assert_not_called()
@@ -854,12 +892,14 @@ class TestBuildTools:
 
         tools = build_tools(bot)
         write_event = next(t for t in tools if t.name == "write_c2_event")
-        result = await write_event.ainvoke({
-            "actor": "task_agent",
-            "intent": "discovery",
-            "summary": "Found a pattern",
-            "tags": "code,analysis",
-        })
+        result = await write_event.ainvoke(
+            {
+                "actor": "task_agent",
+                "intent": "discovery",
+                "summary": "Found a pattern",
+                "tags": "code,analysis",
+            }
+        )
         assert "logged" in result.lower()
 
     @pytest.mark.asyncio
@@ -917,10 +957,12 @@ class TestBuildTools:
 
         tools = build_tools(bot)
         remember = next(t for t in tools if t.name == "remember_finding")
-        result = await remember.ainvoke({
-            "content": "Auth tokens expire after 24h by default",
-            "importance": 8,
-        })
+        result = await remember.ainvoke(
+            {
+                "content": "Auth tokens expire after 24h by default",
+                "importance": 8,
+            }
+        )
         assert "stored" in result.lower()
         bot.memory_store.store.assert_called_once()
         call_kwargs = bot.memory_store.store.call_args[1]
@@ -1001,9 +1043,7 @@ class TestMessageFormatter:
     def test_short_content_returns_single_embed(self):
         from nexus.channels.formatter import MessageFormatter
 
-        embeds = MessageFormatter.format_response_multi(
-            "minimax/minimax-m2.5", "Short message."
-        )
+        embeds = MessageFormatter.format_response_multi("minimax/minimax-m2.5", "Short message.")
         assert len(embeds) == 1
         assert "Short message." in embeds[0].description
 
@@ -1013,7 +1053,8 @@ class TestMessageFormatter:
         # Create content that exceeds 4096 chars.
         content = ("A" * 2000 + "\n\n") * 3  # ~6006 chars with paragraph breaks
         embeds = MessageFormatter.format_response_multi(
-            "minimax/minimax-m2.5", content,
+            "minimax/minimax-m2.5",
+            content,
         )
         assert len(embeds) >= 2
         # First embed has author header
@@ -1071,9 +1112,7 @@ class TestDocumentExtractor:
         from nexus.integrations.ocr import DocumentExtractor
 
         extractor = DocumentExtractor()
-        result = await extractor.extract_from_url(
-            "https://example.com/file.xyz", "file.xyz"
-        )
+        result = await extractor.extract_from_url("https://example.com/file.xyz", "file.xyz")
         assert result is None
 
     @pytest.mark.asyncio
@@ -1219,12 +1258,14 @@ class TestSessionManager:
         bot = MagicMock()
         bot.c2 = AsyncMock()
         bot.c2.is_running = True
-        bot.c2.events = AsyncMock(return_value={
-            "events": [
-                {"intent": "response", "output": "some response"},
-                {"intent": "session_end", "output": "Previous session summary text"},
-            ]
-        })
+        bot.c2.events = AsyncMock(
+            return_value={
+                "events": [
+                    {"intent": "response", "output": "some response"},
+                    {"intent": "session_end", "output": "Previous session summary text"},
+                ]
+            }
+        )
         session = SessionManager(bot)
         result = await session.on_startup()
         assert result == "Previous session summary text"

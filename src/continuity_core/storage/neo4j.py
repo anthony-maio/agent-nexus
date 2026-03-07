@@ -47,7 +47,10 @@ class Neo4jGraphStore:
     # -- Resolution graph operations ------------------------------------
 
     def supersede_node(
-        self, old_text: str, new_text: str, reason: str = "",
+        self,
+        old_text: str,
+        new_text: str,
+        reason: str = "",
     ) -> bool:
         """Mark a node as superseded by a newer version.
 
@@ -71,7 +74,9 @@ class Neo4jGraphStore:
         try:
             with self._driver.session() as session:
                 result = session.run(
-                    query, old_text=old_text, new_text=new_text,
+                    query,
+                    old_text=old_text,
+                    new_text=new_text,
                     reason=reason,
                 )
                 return result.single() is not None
@@ -79,7 +84,11 @@ class Neo4jGraphStore:
             return False
 
     def weaken_edge(
-        self, start_text: str, end_text: str, rel_type: str, factor: float,
+        self,
+        start_text: str,
+        end_text: str,
+        rel_type: str,
+        factor: float,
     ) -> bool:
         """Multiply an edge's confidence by *factor* (0–1)."""
         query = """
@@ -92,16 +101,22 @@ class Neo4jGraphStore:
         try:
             with self._driver.session() as session:
                 result = session.run(
-                    query, start_text=start_text, end_text=end_text,
-                    rel_type=rel_type, factor=factor,
+                    query,
+                    start_text=start_text,
+                    end_text=end_text,
+                    rel_type=rel_type,
+                    factor=factor,
                 )
                 return result.single() is not None
         except Exception:
             return False
 
     def bridge_clusters(
-        self, node_a_text: str, node_b_text: str,
-        evidence: str = "", confidence: float = 0.5,
+        self,
+        node_a_text: str,
+        node_b_text: str,
+        evidence: str = "",
+        confidence: float = 0.5,
     ) -> bool:
         """Create a RELATED_TO edge bridging two weakly connected clusters."""
         query = """
@@ -120,8 +135,11 @@ class Neo4jGraphStore:
         try:
             with self._driver.session() as session:
                 result = session.run(
-                    query, a_text=node_a_text, b_text=node_b_text,
-                    evidence=evidence, confidence=confidence,
+                    query,
+                    a_text=node_a_text,
+                    b_text=node_b_text,
+                    evidence=evidence,
+                    confidence=confidence,
                 )
                 return result.single() is not None
         except Exception:
@@ -129,7 +147,9 @@ class Neo4jGraphStore:
 
     # -- Query -----------------------------------------------------------
 
-    def query_nodes(self, text: Optional[str], node_types: Optional[List[NodeType]], limit: int = 20) -> List[Dict]:
+    def query_nodes(
+        self, text: Optional[str], node_types: Optional[List[NodeType]], limit: int = 20
+    ) -> List[Dict]:
         query = "MATCH (n:PKMNode) WHERE 1=1"
         params: Dict[str, object] = {"limit": limit}
         if text:

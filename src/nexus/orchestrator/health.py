@@ -122,9 +122,7 @@ class HealthMonitor:
             snap.orchestrator_running = orch.is_running
             snap.orchestrator_cycles = orch.cycles_completed
             if orch.last_cycle_time is not None:
-                ago = (
-                    datetime.now(timezone.utc) - orch.last_cycle_time
-                ).total_seconds()
+                ago = (datetime.now(timezone.utc) - orch.last_cycle_time).total_seconds()
                 snap.orchestrator_last_cycle_ago_seconds = ago
                 if ago > self.stall_threshold:
                     alerts.append(
@@ -210,7 +208,8 @@ class HealthMonitor:
                 snap = await self.check_now()
                 if snap.alerts:
                     log.warning(
-                        "Health alerts: %s", "; ".join(snap.alerts),
+                        "Health alerts: %s",
+                        "; ".join(snap.alerts),
                     )
                     await self._post_alerts(snap)
                 else:
@@ -235,18 +234,12 @@ class HealthMonitor:
             )
             embed.add_field(
                 name="Orchestrator",
-                value=(
-                    f"Running: {snap.orchestrator_running}\n"
-                    f"Cycles: {snap.orchestrator_cycles}"
-                ),
+                value=(f"Running: {snap.orchestrator_running}\nCycles: {snap.orchestrator_cycles}"),
                 inline=True,
             )
             embed.add_field(
                 name="Tasks",
-                value=(
-                    f"Success: {snap.dispatch_success}\n"
-                    f"Failures: {snap.dispatch_failures}"
-                ),
+                value=(f"Success: {snap.dispatch_success}\nFailures: {snap.dispatch_failures}"),
                 inline=True,
             )
             embed.add_field(
@@ -272,7 +265,5 @@ class HealthMonitor:
 
     def __repr__(self) -> str:
         status = "running" if self._running else "stopped"
-        healthy = (
-            self._last_snapshot.is_healthy if self._last_snapshot else "unknown"
-        )
+        healthy = self._last_snapshot.is_healthy if self._last_snapshot else "unknown"
         return f"HealthMonitor(status={status!r}, healthy={healthy})"

@@ -93,39 +93,59 @@ class ContradictionClassifier:
         # Check truncation first — most common artifact
         if self._is_truncation(s1, s2):
             return ClassifiedContradiction(
-                s1=s1, s2=s2, score=score, similarity=similarity,
-                type=ContradictionType.TRUNCATION, confidence=0.9,
+                s1=s1,
+                s2=s2,
+                score=score,
+                similarity=similarity,
+                type=ContradictionType.TRUNCATION,
+                confidence=0.9,
                 metadata=meta,
             )
 
         # Check duplicate
         if self._is_duplicate(score, similarity):
             return ClassifiedContradiction(
-                s1=s1, s2=s2, score=score, similarity=similarity,
-                type=ContradictionType.DUPLICATE, confidence=0.85,
+                s1=s1,
+                s2=s2,
+                score=score,
+                similarity=similarity,
+                type=ContradictionType.DUPLICATE,
+                confidence=0.85,
                 metadata=meta,
             )
 
         # Check outdated (requires timestamps in metadata)
         if self._is_outdated(s1, s2, meta):
             return ClassifiedContradiction(
-                s1=s1, s2=s2, score=score, similarity=similarity,
-                type=ContradictionType.OUTDATED, confidence=0.75,
+                s1=s1,
+                s2=s2,
+                score=score,
+                similarity=similarity,
+                type=ContradictionType.OUTDATED,
+                confidence=0.75,
                 metadata=meta,
             )
 
         # Genuine contradiction
         if score >= self.genuine_min_score:
             return ClassifiedContradiction(
-                s1=s1, s2=s2, score=score, similarity=similarity,
-                type=ContradictionType.GENUINE, confidence=score,
+                s1=s1,
+                s2=s2,
+                score=score,
+                similarity=similarity,
+                type=ContradictionType.GENUINE,
+                confidence=score,
                 metadata=meta,
             )
 
         # Below threshold — treat as duplicate/noise
         return ClassifiedContradiction(
-            s1=s1, s2=s2, score=score, similarity=similarity,
-            type=ContradictionType.DUPLICATE, confidence=0.6,
+            s1=s1,
+            s2=s2,
+            score=score,
+            similarity=similarity,
+            type=ContradictionType.DUPLICATE,
+            confidence=0.6,
             metadata=meta,
         )
 
@@ -137,8 +157,9 @@ class ContradictionClassifier:
 
         # Truncation marker check
         truncation_markers = ("...", "(truncated)", "[truncated]", "…")
-        has_marker = any(s1.rstrip().endswith(m) or s2.rstrip().endswith(m)
-                        for m in truncation_markers)
+        has_marker = any(
+            s1.rstrip().endswith(m) or s2.rstrip().endswith(m) for m in truncation_markers
+        )
 
         # Length ratio + high word overlap = truncation
         len1, len2 = len(s1), len(s2)
@@ -167,8 +188,7 @@ class ContradictionClassifier:
 
     def _is_duplicate(self, score: float, similarity: float) -> bool:
         """High similarity + low contradiction = duplicate, not conflict."""
-        return (similarity >= self.duplicate_similarity
-                and score < self.duplicate_max_contradiction)
+        return similarity >= self.duplicate_similarity and score < self.duplicate_max_contradiction
 
     def _is_outdated(self, s1: str, s2: str, meta: Dict[str, Any]) -> bool:
         """Same topic at different times — older version is stale."""
@@ -221,13 +241,15 @@ class ResolutionEngine:
             resolved=True,
             action_taken="superseded_shorter",
             summary=f"Truncation artifact resolved: kept complete version ({len(longer)} chars), "
-                    f"superseded fragment ({len(shorter)} chars).",
-            graph_ops=[{
-                "op": "supersede",
-                "superseded_text": shorter,
-                "superseding_text": longer,
-                "reason": "truncation",
-            }],
+            f"superseded fragment ({len(shorter)} chars).",
+            graph_ops=[
+                {
+                    "op": "supersede",
+                    "superseded_text": shorter,
+                    "superseding_text": longer,
+                    "reason": "truncation",
+                }
+            ],
         )
 
     def _resolve_duplicate(self, c: ClassifiedContradiction) -> ResolutionResult:
@@ -238,12 +260,14 @@ class ResolutionEngine:
             resolved=True,
             action_taken="merged",
             summary=f"Duplicate resolved: merged into primary version ({len(primary)} chars).",
-            graph_ops=[{
-                "op": "supersede",
-                "superseded_text": secondary,
-                "superseding_text": primary,
-                "reason": "duplicate",
-            }],
+            graph_ops=[
+                {
+                    "op": "supersede",
+                    "superseded_text": secondary,
+                    "superseding_text": primary,
+                    "reason": "duplicate",
+                }
+            ],
         )
 
     def _resolve_outdated(self, c: ClassifiedContradiction) -> ResolutionResult:
@@ -259,12 +283,14 @@ class ResolutionEngine:
             resolved=True,
             action_taken="superseded_older",
             summary="Outdated info resolved: superseded older version, kept newer.",
-            graph_ops=[{
-                "op": "supersede",
-                "superseded_text": older,
-                "superseding_text": newer,
-                "reason": "outdated",
-            }],
+            graph_ops=[
+                {
+                    "op": "supersede",
+                    "superseded_text": older,
+                    "superseding_text": newer,
+                    "reason": "outdated",
+                }
+            ],
         )
 
     def _escalate(self, c: ClassifiedContradiction) -> ResolutionResult:
@@ -273,7 +299,6 @@ class ResolutionEngine:
             contradiction=c,
             resolved=False,
             action_taken="escalated",
-            summary=f"Genuine contradiction (score={c.score:.2f}): "
-                    f"\"{c.s1[:80]}\" vs \"{c.s2[:80]}\"",
+            summary=f'Genuine contradiction (score={c.score:.2f}): "{c.s1[:80]}" vs "{c.s2[:80]}"',
             graph_ops=[],
         )

@@ -129,9 +129,7 @@ async def test_bridge_api_client_uses_sessions_and_refreshes_on_401(
     assert len(items) == 1
     session_call_count = sum(1 for _, url, _ in calls if url.endswith("/sessions"))
     assert session_call_count == 2
-    approval_auth_headers = [
-        auth for _, url, auth in calls if url.endswith("/approvals/pending")
-    ]
+    approval_auth_headers = [auth for _, url, auth in calls if url.endswith("/approvals/pending")]
     assert approval_auth_headers == ["Bearer token-1", "Bearer token-2"]
 
 

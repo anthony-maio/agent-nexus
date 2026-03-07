@@ -199,8 +199,7 @@ class BridgeCommands(commands.Cog):
             await ctx.send("No pending approvals.")
             return
         lines = [
-            f"- run `{i['run_id']}` step `{i['step_id']}` `{i['action_type']}`"
-            for i in items[:10]
+            f"- run `{i['run_id']}` step `{i['step_id']}` `{i['action_type']}`" for i in items[:10]
         ]
         await ctx.send("Pending approvals:\n" + "\n".join(lines))
 
@@ -208,8 +207,7 @@ class BridgeCommands(commands.Cog):
     async def runstatus(self, ctx: commands.Context, run_id: str) -> None:
         run = await self.bot.api.run_status(run_id)
         await ctx.send(
-            f"Run `{run['id']}` status: **{run['status']}** "
-            f"({len(run.get('steps', []))} step(s))"
+            f"Run `{run['id']}` status: **{run['status']}** ({len(run.get('steps', []))} step(s))"
         )
 
     @commands.command(name="approve")

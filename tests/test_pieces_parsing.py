@@ -9,50 +9,52 @@ from nexus.integrations.pieces import ActivityDigest, parse_activity_response
 # =====================================================================
 
 # Realistic PiecesOS response matching the format seen in production.
-SAMPLE_STRUCTURED = json.dumps({
-    "summaries": [
-        {
-            "created": "2026-02-23 13:25:55.076568Z",
-            "score": 0.284,
-            "combined_string": (
-                "Automated Summary:\n"
-                "Created: 5 hrs ago\n"
-                "## TL;DR\n"
-                "Yesterday was a high-output session balancing a deep dive "
-                "into medical data review with significant technical milestones "
-                "for CoDA-GQA-L, including the merge of the dynamic bank "
-                "expansion branch.\n"
-                "### Core Tasks & Projects\n"
-                "- CoDA-GQA-L Optimization: Finalized Triton kernel updates\n"
-                "- Agent Nexus Infrastructure: Updated configuration\n"
-                "- Medical Data Review: Processed clinical dataset\n"
-            ),
-        },
-        {
-            "created": "2026-02-22 18:55:04.546658Z",
-            "score": 0.214,
-            "combined_string": (
-                "Automated Summary:\n"
-                "### Core Tasks & Projects\n"
-                "- CoDA-GQA-L Triton Kernel Optimization: Finalized updates\n"
-            ),
-        },
-    ],
-    "events": [
-        {
-            "created": "2026-02-23 05:56:19.748255Z",
-            "app_title": "Discord.exe",
-            "window_title": "#human | Secret Club - Discord",
-            "score": 1.22,
-        },
-        {
-            "created": "2026-02-23 05:50:00.000000Z",
-            "app_title": "Code.exe",
-            "window_title": "pieces.py - agent-nexus",
-            "score": 0.9,
-        },
-    ],
-})
+SAMPLE_STRUCTURED = json.dumps(
+    {
+        "summaries": [
+            {
+                "created": "2026-02-23 13:25:55.076568Z",
+                "score": 0.284,
+                "combined_string": (
+                    "Automated Summary:\n"
+                    "Created: 5 hrs ago\n"
+                    "## TL;DR\n"
+                    "Yesterday was a high-output session balancing a deep dive "
+                    "into medical data review with significant technical milestones "
+                    "for CoDA-GQA-L, including the merge of the dynamic bank "
+                    "expansion branch.\n"
+                    "### Core Tasks & Projects\n"
+                    "- CoDA-GQA-L Optimization: Finalized Triton kernel updates\n"
+                    "- Agent Nexus Infrastructure: Updated configuration\n"
+                    "- Medical Data Review: Processed clinical dataset\n"
+                ),
+            },
+            {
+                "created": "2026-02-22 18:55:04.546658Z",
+                "score": 0.214,
+                "combined_string": (
+                    "Automated Summary:\n"
+                    "### Core Tasks & Projects\n"
+                    "- CoDA-GQA-L Triton Kernel Optimization: Finalized updates\n"
+                ),
+            },
+        ],
+        "events": [
+            {
+                "created": "2026-02-23 05:56:19.748255Z",
+                "app_title": "Discord.exe",
+                "window_title": "#human | Secret Club - Discord",
+                "score": 1.22,
+            },
+            {
+                "created": "2026-02-23 05:50:00.000000Z",
+                "app_title": "Code.exe",
+                "window_title": "pieces.py - agent-nexus",
+                "score": 0.9,
+            },
+        ],
+    }
+)
 
 
 class TestStructuredParsing:
@@ -75,25 +77,23 @@ class TestStructuredParsing:
 
     def test_focus_uses_most_recent_not_highest_scored(self):
         """The most recently created summary should drive focus, not score."""
-        raw = json.dumps({
-            "summaries": [
-                {
-                    "created": "2026-02-20 10:00:00Z",
-                    "score": 0.9,
-                    "combined_string": (
-                        "## TL;DR\nOld high-scored summary.\n"
-                    ),
-                },
-                {
-                    "created": "2026-02-23 10:00:00Z",
-                    "score": 0.1,
-                    "combined_string": (
-                        "## TL;DR\nFresh low-scored summary.\n"
-                    ),
-                },
-            ],
-            "events": [],
-        })
+        raw = json.dumps(
+            {
+                "summaries": [
+                    {
+                        "created": "2026-02-20 10:00:00Z",
+                        "score": 0.9,
+                        "combined_string": ("## TL;DR\nOld high-scored summary.\n"),
+                    },
+                    {
+                        "created": "2026-02-23 10:00:00Z",
+                        "score": 0.1,
+                        "combined_string": ("## TL;DR\nFresh low-scored summary.\n"),
+                    },
+                ],
+                "events": [],
+            }
+        )
         digest = parse_activity_response(raw)
         assert "Fresh low-scored" in digest.recent_focus
         assert "Old high-scored" not in digest.recent_focus
@@ -149,25 +149,29 @@ class TestStructuredParsing:
 
 class TestGarbageFiltering:
     def test_filters_could_not_retrieve(self):
-        raw = json.dumps({
-            "summaries": [{
-                "created": "2026-02-23",
-                "score": 0.5,
-                "combined_string": "## TL;DR\nWorking.\n",
-            }],
-            "events": [
-                {
-                    "app_title": "[COULD NOT RETRIEVE APP TITLE]",
-                    "window_title": "something",
-                    "score": 1.0,
-                },
-                {
-                    "app_title": "Code.exe",
-                    "window_title": "file.py",
-                    "score": 0.9,
-                },
-            ],
-        })
+        raw = json.dumps(
+            {
+                "summaries": [
+                    {
+                        "created": "2026-02-23",
+                        "score": 0.5,
+                        "combined_string": "## TL;DR\nWorking.\n",
+                    }
+                ],
+                "events": [
+                    {
+                        "app_title": "[COULD NOT RETRIEVE APP TITLE]",
+                        "window_title": "something",
+                        "score": 1.0,
+                    },
+                    {
+                        "app_title": "Code.exe",
+                        "window_title": "file.py",
+                        "score": 0.9,
+                    },
+                ],
+            }
+        )
         digest = parse_activity_response(raw)
         assert "[COULD NOT RETRIEVE APP TITLE]" not in digest.active_apps
         assert "Code" in digest.active_apps
@@ -236,27 +240,35 @@ class TestEdgeCases:
         assert digest.active_apps == []
 
     def test_truncation_safety(self):
-        raw = json.dumps({
-            "summaries": [{
-                "created": "2026-01-01",
-                "score": 1.0,
-                "combined_string": "x" * 10000,
-            }],
-            "events": [],
-        })
+        raw = json.dumps(
+            {
+                "summaries": [
+                    {
+                        "created": "2026-01-01",
+                        "score": 1.0,
+                        "combined_string": "x" * 10000,
+                    }
+                ],
+                "events": [],
+            }
+        )
         digest = parse_activity_response(raw)
         # raw_summaries should be capped.
         assert len(digest.raw_summaries[0]) <= 2000
 
     def test_events_without_app_title(self):
-        raw = json.dumps({
-            "summaries": [{
-                "created": "2026-01-01",
-                "score": 0.5,
-                "combined_string": "## TL;DR\nWorking on tests.\n",
-            }],
-            "events": [{"window_title": "terminal - bash", "score": 0.5}],
-        })
+        raw = json.dumps(
+            {
+                "summaries": [
+                    {
+                        "created": "2026-01-01",
+                        "score": 0.5,
+                        "combined_string": "## TL;DR\nWorking on tests.\n",
+                    }
+                ],
+                "events": [{"window_title": "terminal - bash", "score": 0.5}],
+            }
+        )
         digest = parse_activity_response(raw)
         assert "terminal - bash" in digest.active_apps
 

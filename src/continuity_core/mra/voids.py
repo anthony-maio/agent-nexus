@@ -11,8 +11,9 @@ class VoidReport:
 
 
 class VoidDetector:
-    def detect_voids(self, graph: Dict[str, Set[str]], min_size: int = 2,
-                     max_pairs: int = 5) -> VoidReport:
+    def detect_voids(
+        self, graph: Dict[str, Set[str]], min_size: int = 2, max_pairs: int = 5
+    ) -> VoidReport:
         components = self._components(graph)
         components = [c for c in components if len(c) >= min_size]
         voids: List[Tuple[Set[str], Set[str], int]] = []

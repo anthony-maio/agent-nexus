@@ -83,10 +83,7 @@ class DocumentExtractor:
             return None
 
         if not _HAS_PYMUPDF and not _HAS_DOCLING:
-            log.warning(
-                "No document extraction library available. "
-                "Install pymupdf or docling."
-            )
+            log.warning("No document extraction library available. Install pymupdf or docling.")
             return None
 
         # Download to a temporary file.
@@ -141,7 +138,8 @@ class DocumentExtractor:
                         return None
 
                     tmp = tempfile.NamedTemporaryFile(
-                        suffix=ext, delete=False,
+                        suffix=ext,
+                        delete=False,
                     )
                     tmp_path = Path(tmp.name)
                     data = await resp.read()
@@ -196,8 +194,7 @@ class DocumentExtractor:
         if _HAS_DOCLING:
             return await asyncio.to_thread(self._docling_extract, path)
         log.warning(
-            "Office document extraction requires docling. "
-            "Install with: pip install docling"
+            "Office document extraction requires docling. Install with: pip install docling"
         )
         return ""
 

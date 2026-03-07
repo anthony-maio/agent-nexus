@@ -9,7 +9,9 @@ class C2Config:
     # Core stores
     redis_url: str = os.getenv("C2_REDIS_URL", "redis://localhost:6379/0")
     qdrant_url: str = os.getenv("C2_QDRANT_URL", "http://localhost:6333")
-    postgres_url: str = os.getenv("C2_POSTGRES_URL", "postgresql://c2:c2@localhost:5432/continuity_core")
+    postgres_url: str = os.getenv(
+        "C2_POSTGRES_URL", "postgresql://c2:c2@localhost:5432/continuity_core"
+    )
     neo4j_uri: str = os.getenv("C2_NEO4J_URI", "bolt://localhost:7687")
     neo4j_user: str = os.getenv("C2_NEO4J_USER", "neo4j")
     neo4j_password: str = os.getenv("C2_NEO4J_PASSWORD", "letmein")

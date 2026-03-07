@@ -13,7 +13,13 @@ from continuity_core.memory.embeddings import build_embedder
 from continuity_core.memory.stores import InMemoryStore
 from continuity_core.mra.stress import StressResult
 from continuity_core.mra.voids import VoidReport
-from continuity_core.storage import Neo4jGraphStore, PostgresEventStore, QdrantMemoryStore, QdrantResult, RedisWorkingContext
+from continuity_core.storage import (
+    Neo4jGraphStore,
+    PostgresEventStore,
+    QdrantMemoryStore,
+    QdrantResult,
+    RedisWorkingContext,
+)
 
 
 @dataclass
@@ -28,6 +34,7 @@ class ScoredMemory:
 @dataclass
 class MRACache:
     """Holds the most recent MRA stress and void results."""
+
     last_stress: Optional[StressResult] = None
     last_voids: Optional[VoidReport] = None
     resolution_summary: str = ""
@@ -70,8 +77,15 @@ class TieredMemorySystem:
     def neo4j(self) -> Optional[Neo4jGraphStore]:
         return self._neo4j
 
-    def write_event(self, actor: str, intent: str, inp: str, out: str,
-                    tags: Optional[List[str]] = None, metadata: Optional[Dict[str, str]] = None) -> None:
+    def write_event(
+        self,
+        actor: str,
+        intent: str,
+        inp: str,
+        out: str,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
         self._event_log.log(actor, intent, inp, out, tags=tags, metadata=metadata)
 
     def append_working_context(self, thread_id: str, message: Dict[str, Any]) -> None:
@@ -84,8 +98,13 @@ class TieredMemorySystem:
             return []
         return self._redis.get_recent(thread_id, limit=limit)
 
-    def remember(self, content: str, memory_type: str, importance: int = 5,
-                 metadata: Optional[Dict[str, Any]] = None) -> str:
+    def remember(
+        self,
+        content: str,
+        memory_type: str,
+        importance: int = 5,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
         if self._qdrant is not None:
             return self._qdrant.remember(content, memory_type, importance, metadata)
         # Fallback store for offline tests
@@ -165,8 +184,7 @@ class TieredMemorySystem:
         if h > 0.01 and self._fallback is not None:
             now = time.time()
             recent_ids = [
-                item.id for item in self._fallback._items
-                if (now - item.last_access) < 3600
+                item.id for item in self._fallback._items if (now - item.last_access) < 3600
             ]
             if recent_ids:
                 self.credit(recent_ids, signal=min(1.0, h))
@@ -175,7 +193,9 @@ class TieredMemorySystem:
 
     # -- Recall with decay + consolidation gating -------------------------
 
-    def recall(self, query: str, top_k: int = 5, type_filter: Optional[str] = None) -> List[ScoredMemory]:
+    def recall(
+        self, query: str, top_k: int = 5, type_filter: Optional[str] = None
+    ) -> List[ScoredMemory]:
         self._recall_count += 1
 
         # Periodic decay sweep
@@ -198,13 +218,15 @@ class TieredMemorySystem:
             # Consolidation gating: check if this recall should reinforce the item
             if self._consolidator.should_consolidate(sim, occupancy):
                 item.touch()
-            out.append(ScoredMemory(
-                id=item.id,
-                score=sim,
-                content=str(item.content),
-                memory_type=item.metadata.get("type", "unknown"),
-                payload=item.metadata,
-            ))
+            out.append(
+                ScoredMemory(
+                    id=item.id,
+                    score=sim,
+                    content=str(item.content),
+                    memory_type=item.metadata.get("type", "unknown"),
+                    payload=item.metadata,
+                )
+            )
         return out
 
     def _run_decay(self) -> None:
@@ -221,13 +243,15 @@ class TieredMemorySystem:
             recency = self._recency_score(payload.get("last_accessed"))
             importance = float(payload.get("importance", 5)) / 10.0
             score = (0.5 * r.score) + (0.3 * recency) + (0.2 * importance)
-            out.append(ScoredMemory(
-                id=r.id,
-                score=score,
-                content=payload.get("content", ""),
-                memory_type=payload.get("type", "unknown"),
-                payload=payload,
-            ))
+            out.append(
+                ScoredMemory(
+                    id=r.id,
+                    score=score,
+                    content=payload.get("content", ""),
+                    memory_type=payload.get("type", "unknown"),
+                    payload=payload,
+                )
+            )
         out.sort(key=lambda x: x.score, reverse=True)
         return out
 
@@ -242,7 +266,9 @@ class TieredMemorySystem:
             store = PostgresEventStore(self.config.postgres_url)
             return EventLog(store)
         except Exception as exc:
-            logging.getLogger(__name__).warning("Postgres event log unavailable, falling back to in-memory: %s", exc)
+            logging.getLogger(__name__).warning(
+                "Postgres event log unavailable, falling back to in-memory: %s", exc
+            )
             return EventLog()
 
     def _init_redis(self) -> Optional[RedisWorkingContext]:
@@ -263,13 +289,17 @@ class TieredMemorySystem:
             )
             return store, None
         except Exception as exc:
-            logging.getLogger(__name__).warning("Qdrant memory store unavailable, using in-memory fallback: %s", exc)
+            logging.getLogger(__name__).warning(
+                "Qdrant memory store unavailable, using in-memory fallback: %s", exc
+            )
             fallback = InMemoryStore(capacity=5000, embed_fn=self.embedder.embed)
             return None, fallback
 
     def _init_neo4j(self) -> Optional[Neo4jGraphStore]:
         try:
-            return Neo4jGraphStore(self.config.neo4j_uri, self.config.neo4j_user, self.config.neo4j_password)
+            return Neo4jGraphStore(
+                self.config.neo4j_uri, self.config.neo4j_user, self.config.neo4j_password
+            )
         except Exception as exc:
             logging.getLogger(__name__).warning("Neo4j graph store unavailable: %s", exc)
             return None

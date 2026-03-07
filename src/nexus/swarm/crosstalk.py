@@ -71,9 +71,9 @@ class CrosstalkManager:
                 if spec is None:
                     return 0
                 strengths = set(getattr(spec, "strengths", []))
-                return sum(
-                    1 for s in strengths if s in _PREFERRED
-                ) - sum(1 for s in strengths if s in _DEPRIORITISED)
+                return sum(1 for s in strengths if s in _PREFERRED) - sum(
+                    1 for s in strengths if s in _DEPRIORITISED
+                )
 
             others.sort(key=_score, reverse=True)
         else:

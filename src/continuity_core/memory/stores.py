@@ -4,8 +4,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, List, Optional, Protocol, Tuple
-
+from typing import Any, Callable, List, Optional, Protocol, Tuple
 
 EmbedFn = Callable[[str], List[float]]
 
@@ -27,19 +26,21 @@ class MemoryItem:
 
 
 class MemoryStore(Protocol):
-    def add(self, content: Any, embedding: Optional[List[float]] = None,
-            salience: float = 1.0, metadata: Optional[dict] = None) -> MemoryItem:
-        ...
+    def add(
+        self,
+        content: Any,
+        embedding: Optional[List[float]] = None,
+        salience: float = 1.0,
+        metadata: Optional[dict] = None,
+    ) -> MemoryItem: ...
 
-    def query(self, query: str, embedding: Optional[List[float]] = None,
-              top_k: int = 5) -> List[Tuple[MemoryItem, float]]:
-        ...
+    def query(
+        self, query: str, embedding: Optional[List[float]] = None, top_k: int = 5
+    ) -> List[Tuple[MemoryItem, float]]: ...
 
-    def apply_decay(self, decay_rate: float, time_unit_sec: float) -> None:
-        ...
+    def apply_decay(self, decay_rate: float, time_unit_sec: float) -> None: ...
 
-    def prune(self, min_salience: float) -> int:
-        ...
+    def prune(self, min_salience: float) -> int: ...
 
 
 class InMemoryStore:
@@ -48,20 +49,28 @@ class InMemoryStore:
         self.embed_fn = embed_fn
         self._items: List[MemoryItem] = []
 
-    def add(self, content: Any, embedding: Optional[List[float]] = None,
-            salience: float = 1.0, metadata: Optional[dict] = None) -> MemoryItem:
+    def add(
+        self,
+        content: Any,
+        embedding: Optional[List[float]] = None,
+        salience: float = 1.0,
+        metadata: Optional[dict] = None,
+    ) -> MemoryItem:
         if embedding is None:
             if not self.embed_fn:
                 raise ValueError("embed_fn required when embedding is not provided")
             embedding = self.embed_fn(str(content))
-        item = MemoryItem(content=content, embedding=embedding, salience=salience, metadata=metadata or {})
+        item = MemoryItem(
+            content=content, embedding=embedding, salience=salience, metadata=metadata or {}
+        )
         if len(self._items) >= self.capacity:
             self._items.pop(0)
         self._items.append(item)
         return item
 
-    def query(self, query: str, embedding: Optional[List[float]] = None,
-              top_k: int = 5) -> List[Tuple[MemoryItem, float]]:
+    def query(
+        self, query: str, embedding: Optional[List[float]] = None, top_k: int = 5
+    ) -> List[Tuple[MemoryItem, float]]:
         if not self._items:
             return []
         if embedding is None:
@@ -82,7 +91,7 @@ class InMemoryStore:
         for item in self._items:
             elapsed = max(0.0, now - item.last_access)
             periods = elapsed / max(1.0, time_unit_sec)
-            item.salience *= (decay_rate ** periods)
+            item.salience *= decay_rate**periods
 
     def prune(self, min_salience: float) -> int:
         before = len(self._items)

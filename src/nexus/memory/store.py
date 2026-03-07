@@ -7,7 +7,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams, Filter, FieldCondition, MatchValue
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 
 log = logging.getLogger(__name__)
 
@@ -15,13 +22,14 @@ log = logging.getLogger(__name__)
 @dataclass
 class Memory:
     """A single memory entry."""
+
     id: str
     content: str
-    source: str          # Who created it: model_id or "human"
-    channel: str         # Which channel context: "human", "nexus", "memory"
+    source: str  # Who created it: model_id or "human"
+    channel: str  # Which channel context: "human", "nexus", "memory"
     timestamp: datetime
     metadata: dict = field(default_factory=dict)
-    score: float = 0.0   # Relevance score from search
+    score: float = 0.0  # Relevance score from search
 
 
 class MemoryStore:
@@ -42,6 +50,7 @@ class MemoryStore:
     async def initialize(self) -> None:
         """Connect to Qdrant and ensure collection exists."""
         from qdrant_client import QdrantClient
+
         self._client = QdrantClient(url=self.url)
         loop = asyncio.get_running_loop()
         collections = await loop.run_in_executor(
@@ -103,25 +112,35 @@ class MemoryStore:
         loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(
             None,
-            lambda: client.query_points(
-                collection_name=self.collection,
-                query=query_vector,
-                limit=limit,
-                query_filter=search_filter,
-            ).points,
+            lambda: (
+                client.query_points(
+                    collection_name=self.collection,
+                    query=query_vector,
+                    limit=limit,
+                    query_filter=search_filter,
+                ).points
+            ),
         )
         memories = []
         for point in results:
             payload = point.payload
-            memories.append(Memory(
-                id=str(point.id),
-                content=payload.get("content", ""),
-                source=payload.get("source", "unknown"),
-                channel=payload.get("channel", "unknown"),
-                timestamp=datetime.fromisoformat(payload.get("timestamp", datetime.now(timezone.utc).isoformat())),
-                metadata={k: v for k, v in payload.items() if k not in ("content", "source", "channel", "timestamp")},
-                score=point.score if hasattr(point, "score") else 0.0,
-            ))
+            memories.append(
+                Memory(
+                    id=str(point.id),
+                    content=payload.get("content", ""),
+                    source=payload.get("source", "unknown"),
+                    channel=payload.get("channel", "unknown"),
+                    timestamp=datetime.fromisoformat(
+                        payload.get("timestamp", datetime.now(timezone.utc).isoformat())
+                    ),
+                    metadata={
+                        k: v
+                        for k, v in payload.items()
+                        if k not in ("content", "source", "channel", "timestamp")
+                    },
+                    score=point.score if hasattr(point, "score") else 0.0,
+                )
+            )
         return memories
 
     async def delete(self, memory_id: str) -> None:
@@ -129,16 +148,15 @@ class MemoryStore:
         client = self._ensure_client()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None, lambda: client.delete(collection_name=self.collection, points_selector=[memory_id])
+            None,
+            lambda: client.delete(collection_name=self.collection, points_selector=[memory_id]),
         )
 
     async def count(self) -> int:
         """Get total number of memories."""
         client = self._ensure_client()
         loop = asyncio.get_running_loop()
-        info = await loop.run_in_executor(
-            None, lambda: client.get_collection(self.collection)
-        )
+        info = await loop.run_in_executor(None, lambda: client.get_collection(self.collection))
         return info.points_count
 
     @property

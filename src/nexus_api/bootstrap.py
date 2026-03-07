@@ -112,11 +112,7 @@ def write_bootstrap_config(
 def _load_env_values(path) -> dict[str, str]:
     if not path.exists():
         return {}
-    return {
-        key: value
-        for key, value in dotenv_values(path).items()
-        if key and value is not None
-    }
+    return {key: value for key, value in dotenv_values(path).items() if key and value is not None}
 
 
 def _render_env_file(values: dict[str, str]) -> str:

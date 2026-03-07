@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Tuple
 
-
 EmbedFn = Callable[[str], List[float]]
 NliFn = Callable[[str, str], Dict[str, float]]
 
@@ -21,12 +20,18 @@ class StressResult:
 
 
 class EpistemicStressMonitor:
-    def __init__(self, nli_fn: NliFn | None = None, embed_fn: EmbedFn | None = None,
-                 alpha: float = 0.4, beta: float = 0.35, gamma: float = 0.25,
-                 trigger_threshold: float = 0.3,
-                 deep_tension_contradiction_threshold: float = 0.7,
-                 deep_tension_similarity_threshold: float = 0.6,
-                 deep_tension_multiplier: float = 1.5) -> None:
+    def __init__(
+        self,
+        nli_fn: NliFn | None = None,
+        embed_fn: EmbedFn | None = None,
+        alpha: float = 0.4,
+        beta: float = 0.35,
+        gamma: float = 0.25,
+        trigger_threshold: float = 0.3,
+        deep_tension_contradiction_threshold: float = 0.7,
+        deep_tension_similarity_threshold: float = 0.6,
+        deep_tension_multiplier: float = 1.5,
+    ) -> None:
         total = alpha + beta + gamma
         self.alpha = alpha / total
         self.beta = beta / total
@@ -38,11 +43,16 @@ class EpistemicStressMonitor:
         self.deep_tension_similarity_threshold = deep_tension_similarity_threshold
         self.deep_tension_multiplier = deep_tension_multiplier
 
-    def compute(self, statements: List[str], concept_contexts: Dict[str, List[str]] | None = None,
-                graph_sparsity: float = 0.0,
-                origins: List[str] | None = None) -> StressResult:
+    def compute(
+        self,
+        statements: List[str],
+        concept_contexts: Dict[str, List[str]] | None = None,
+        graph_sparsity: float = 0.0,
+        origins: List[str] | None = None,
+    ) -> StressResult:
         d_log, contradictions, deep_tensions = self._logical_dissonance(
-            statements, origins=origins,
+            statements,
+            origins=origins,
         )
         d_sem = self._semantic_divergence(concept_contexts or {})
         v_top = graph_sparsity
@@ -69,16 +79,14 @@ class EpistemicStressMonitor:
         self,
         statements: List[str],
         origins: List[str] | None = None,
-    ) -> Tuple[
-        float, List[Tuple[str, str, float]], List[Tuple[str, str, float, float]]
-    ]:
+    ) -> Tuple[float, List[Tuple[str, str, float]], List[Tuple[str, str, float, float]]]:
         if len(statements) < 2:
             return 0.0, [], []
         scores: List[float] = []
         contradictions: List[Tuple[str, str, float]] = []
         deep_tensions: List[Tuple[str, str, float, float]] = []
         for i, s1 in enumerate(statements):
-            for j, s2 in enumerate(statements[i + 1:], i + 1):
+            for j, s2 in enumerate(statements[i + 1 :], i + 1):
                 # Skip bot-vs-bot pairs — these create self-feeding cascades
                 # where model discussion is ingested and compared against itself.
                 if origins is not None:
@@ -90,8 +98,10 @@ class EpistemicStressMonitor:
                 # Deep tension: high contradiction AND high semantic similarity
                 # means tightly-coupled opposing views — fundamental instability.
                 similarity = self._pair_similarity(s1, s2)
-                if (score >= self.deep_tension_contradiction_threshold
-                        and similarity >= self.deep_tension_similarity_threshold):
+                if (
+                    score >= self.deep_tension_contradiction_threshold
+                    and similarity >= self.deep_tension_similarity_threshold
+                ):
                     score = min(1.0, score * self.deep_tension_multiplier)
                     deep_tensions.append((s1, s2, score, similarity))
                 scores.append(score)

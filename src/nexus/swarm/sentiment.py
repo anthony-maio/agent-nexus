@@ -183,8 +183,7 @@ class SentimentTracker:
 
         tone_hints: dict[Mood, str] = {
             Mood.POSITIVE: (
-                "The user seems to be in a positive mood. "
-                "Match their energy and be enthusiastic."
+                "The user seems to be in a positive mood. Match their energy and be enthusiastic."
             ),
             Mood.NEGATIVE: (
                 "The user seems unhappy or dissatisfied. "
