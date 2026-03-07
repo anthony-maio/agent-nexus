@@ -27,6 +27,9 @@ jobs:
           uv venv
           uv pip install -e ".[dev]"
 
+      - name: Release smoke check
+        run: uv run python scripts/release-smoke.py
+
       - name: Lint app-first Python scope
         run: >
           uv run ruff check
