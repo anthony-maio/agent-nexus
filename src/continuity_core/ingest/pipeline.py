@@ -86,11 +86,18 @@ class IngestPipeline:
 
         for path in files:
             try:
-                doc = load_text_file(path, max_bytes=self.max_bytes if self.max_bytes > 0 else None)
+                doc = load_text_file(
+                    path,
+                    max_bytes=self.max_bytes if self.max_bytes > 0 else None,
+                )
                 if doc is None:
                     result.skipped += 1
                     continue
-                chunks = chunk_text(doc.text, chunk_size=self.chunk_size, overlap=self.chunk_overlap)
+                chunks = chunk_text(
+                    doc.text,
+                    chunk_size=self.chunk_size,
+                    overlap=self.chunk_overlap,
+                )
                 if not chunks:
                     result.skipped += 1
                     continue
@@ -158,7 +165,12 @@ def _excerpt(text: str, limit: int) -> str:
     return compact[:limit]
 
 
-def _log_ingest_event(event_log: EventLog, doc: Document, chunk_count: int, memory_type: str) -> None:
+def _log_ingest_event(
+    event_log: EventLog,
+    doc: Document,
+    chunk_count: int,
+    memory_type: str,
+) -> None:
     metadata = {
         "source_id": doc.source_id,
         "source_name": str(doc.metadata.get("source_name", "")),

@@ -21,8 +21,13 @@ class Candidate:
 
 
 class ContextComposer:
-    def __init__(self, token_budget: int = 2048, epsilon: float = 0.05, lambda_penalty: float = 0.001,
-                 recency_half_life_sec: float = 6 * 3600) -> None:
+    def __init__(
+        self,
+        token_budget: int = 2048,
+        epsilon: float = 0.05,
+        lambda_penalty: float = 0.001,
+        recency_half_life_sec: float = 6 * 3600,
+    ) -> None:
         self.token_budget = token_budget
         self.epsilon = epsilon
         self.lambda_penalty = lambda_penalty
@@ -33,8 +38,13 @@ class ContextComposer:
 
     def expected_utility(self, cand: Candidate) -> float:
         rec = self._recency_weight(cand.recency_sec)
-        score = (cand.relevance * rec * (0.5 + 0.5 * cand.centrality) *
-                 (0.5 + 0.5 * cand.confidence) * (0.5 + 0.5 * cand.task_match))
+        score = (
+            cand.relevance
+            * rec
+            * (0.5 + 0.5 * cand.centrality)
+            * (0.5 + 0.5 * cand.confidence)
+            * (0.5 + 0.5 * cand.task_match)
+        )
         score *= (0.7 + 0.6 * cand.salience)
         penalty = self.lambda_penalty * cand.token_cost
         return score - penalty

@@ -3,20 +3,58 @@ from __future__ import annotations
 import argparse
 from typing import List, Set
 
-from continuity_core.ingest.loaders import DEFAULT_EXCLUDE_DIRS, DEFAULT_TEXT_EXTS, discover_files, normalize_exts
+from continuity_core.ingest.loaders import (
+    DEFAULT_EXCLUDE_DIRS,
+    DEFAULT_TEXT_EXTS,
+    discover_files,
+    normalize_exts,
+)
 from continuity_core.ingest.pipeline import IngestPipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Continuity Core ingestion pipeline")
-    parser.add_argument("paths", nargs="*", default=["."], help="Files or directories to ingest")
-    parser.add_argument("--ext", nargs="*", default=None, help="Allowed extensions, e.g. .md .txt .py")
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        default=["."],
+        help="Files or directories to ingest",
+    )
+    parser.add_argument(
+        "--ext",
+        nargs="*",
+        default=None,
+        help="Allowed extensions, e.g. .md .txt .py",
+    )
     parser.add_argument("--chunk-size", type=int, default=1200, help="Chunk size in characters")
-    parser.add_argument("--chunk-overlap", type=int, default=200, help="Chunk overlap in characters")
-    parser.add_argument("--max-bytes", type=int, default=2_000_000, help="Skip files larger than this size")
-    parser.add_argument("--include-hidden", action="store_true", help="Include hidden files and folders")
-    parser.add_argument("--include-private", action="store_true", help="Include the private/ directory")
-    parser.add_argument("--exclude", nargs="*", default=None, help="Additional directory names to exclude")
+    parser.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=200,
+        help="Chunk overlap in characters",
+    )
+    parser.add_argument(
+        "--max-bytes",
+        type=int,
+        default=2_000_000,
+        help="Skip files larger than this size",
+    )
+    parser.add_argument(
+        "--include-hidden",
+        action="store_true",
+        help="Include hidden files and folders",
+    )
+    parser.add_argument(
+        "--include-private",
+        action="store_true",
+        help="Include the private/ directory",
+    )
+    parser.add_argument(
+        "--exclude",
+        nargs="*",
+        default=None,
+        help="Additional directory names to exclude",
+    )
     parser.add_argument("--memory-type", default="document_chunk", help="Memory type label")
     parser.add_argument("--importance", type=int, default=5, help="Importance score (1-10)")
     parser.add_argument("--no-graph", action="store_true", help="Skip Neo4j source node upserts")
@@ -28,7 +66,10 @@ def main(argv: List[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    allowed_exts = normalize_exts(args.ext) if args.ext is not None else normalize_exts(DEFAULT_TEXT_EXTS)
+    if args.ext is not None:
+        allowed_exts = normalize_exts(args.ext)
+    else:
+        allowed_exts = normalize_exts(DEFAULT_TEXT_EXTS)
     excludes: Set[str] = {d.lower() for d in DEFAULT_EXCLUDE_DIRS}
     if args.include_private:
         excludes.discard("private")
@@ -60,7 +101,10 @@ def main(argv: List[str] | None = None) -> int:
     )
     result = pipeline.ingest_paths(args.paths)
     print(
-        "files={files} docs={docs} chunks={chunks} skipped={skipped} errors={errors} duration={duration:.2f}s".format(
+        (
+            "files={files} docs={docs} chunks={chunks} skipped={skipped} "
+            "errors={errors} duration={duration:.2f}s"
+        ).format(
             files=result.files_seen,
             docs=result.docs_ingested,
             chunks=result.chunks_ingested,

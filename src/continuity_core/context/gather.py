@@ -5,7 +5,6 @@ import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from continuity_core.context.composer import Candidate
-from continuity_core.event_log import EventLog
 from continuity_core.memory.system import MRACache, ScoredMemory, TieredMemorySystem
 from continuity_core.storage.neo4j import Neo4jGraphStore
 
@@ -13,11 +12,20 @@ MAX_MRA_INJECTIONS = 5
 
 
 class CandidateGatherer:
-    def __init__(self, memory_system: TieredMemorySystem, max_mra_injections: int = MAX_MRA_INJECTIONS) -> None:
+    def __init__(
+        self,
+        memory_system: TieredMemorySystem,
+        max_mra_injections: int = MAX_MRA_INJECTIONS,
+    ) -> None:
         self._memory = memory_system
         self._max_mra_injections = max_mra_injections
 
-    def gather(self, query: str, thread_id: Optional[str] = None, top_k: int = 8) -> Tuple[List[Candidate], List[Dict[str, Any]]]:
+    def gather(
+        self,
+        query: str,
+        thread_id: Optional[str] = None,
+        top_k: int = 8,
+    ) -> Tuple[List[Candidate], List[Dict[str, Any]]]:
         candidates: List[Candidate] = []
         working_context: List[Dict[str, Any]] = []
         now = time.time()
@@ -45,10 +53,16 @@ class CandidateGatherer:
         # contradiction pairs themselves.
         mra = self._memory.get_mra_signals()
         if mra is not None and mra.resolution_summary:
-            candidates.append(_candidate_from_text(
-                "mra", mra.resolution_summary, now,
-                base_relevance=0.5, salience=0.5, confidence=0.9,
-            ))
+            candidates.append(
+                _candidate_from_text(
+                    "mra",
+                    mra.resolution_summary,
+                    now,
+                    base_relevance=0.5,
+                    salience=0.5,
+                    confidence=0.9,
+                )
+            )
 
         return candidates, working_context
 
@@ -67,7 +81,16 @@ class CandidateGatherer:
                 f"(contradiction: {score:.2f}, similarity: {sim:.2f}). "
                 "These views are tightly coupled yet contradictory — resolve or investigate."
             )
-            out.append(_candidate_from_text("mra", text, now, base_relevance=0.95, salience=0.95, confidence=0.9))
+            out.append(
+                _candidate_from_text(
+                    "mra",
+                    text,
+                    now,
+                    base_relevance=0.95,
+                    salience=0.95,
+                    confidence=0.9,
+                )
+            )
 
         # Regular contradictions (skip those already covered by deep tensions).
         deep_pairs: Set[Tuple[str, str]] = {(s1, s2) for s1, s2, _, _ in stress.deep_tensions}
@@ -77,7 +100,16 @@ class CandidateGatherer:
             if (s1, s2) in deep_pairs:
                 continue
             text = f"[Contradiction] \"{s1}\" vs \"{s2}\" (score: {score:.2f})"
-            out.append(_candidate_from_text("mra", text, now, base_relevance=0.9, salience=0.9, confidence=0.85))
+            out.append(
+                _candidate_from_text(
+                    "mra",
+                    text,
+                    now,
+                    base_relevance=0.9,
+                    salience=0.9,
+                    confidence=0.85,
+                )
+            )
 
         # Bridging questions from void detection.
         voids = mra.last_voids
@@ -86,11 +118,25 @@ class CandidateGatherer:
                 if len(out) >= self._max_mra_injections:
                     break
                 text = f"[Knowledge Gap] {question}"
-                out.append(_candidate_from_text("mra", text, now, base_relevance=0.85, salience=0.85, confidence=0.8))
+                out.append(
+                    _candidate_from_text(
+                        "mra",
+                        text,
+                        now,
+                        base_relevance=0.85,
+                        salience=0.85,
+                        confidence=0.8,
+                    )
+                )
 
         return out
 
-    def _graph_candidates(self, query: str, graph: Neo4jGraphStore, now: float) -> List[Candidate]:
+    def _graph_candidates(
+        self,
+        query: str,
+        graph: Neo4jGraphStore,
+        now: float,
+    ) -> List[Candidate]:
         nodes = graph.query_nodes(text=query, node_types=None, limit=8)
         out: List[Candidate] = []
         for node in nodes:
@@ -100,18 +146,20 @@ class CandidateGatherer:
             # Derive centrality from graph degree if available.
             degree = int(node.get("degree", 0))
             centrality = min(1.0, degree / 20.0) if degree > 0 else 0.3
-            out.append(Candidate(
-                id=_stable_id("graph", text),
-                text=text,
-                store="graph",
-                token_cost=_token_cost(text),
-                relevance=0.6,
-                recency_sec=0.0,
-                centrality=centrality,
-                confidence=0.7,
-                task_match=0.7,
-                salience=0.6,
-            ))
+            out.append(
+                Candidate(
+                    id=_stable_id("graph", text),
+                    text=text,
+                    store="graph",
+                    token_cost=_token_cost(text),
+                    relevance=0.6,
+                    recency_sec=0.0,
+                    centrality=centrality,
+                    confidence=0.7,
+                    task_match=0.7,
+                    salience=0.6,
+                )
+            )
         return out
 
     def _adjust_confidence_from_mra(self, candidates: List[Candidate], mra: MRACache) -> None:
@@ -151,8 +199,14 @@ def _candidate_from_memory(mem: ScoredMemory, now: float) -> Candidate:
     )
 
 
-def _candidate_from_text(store: str, text: str, now: float, base_relevance: float = 0.5,
-                          salience: float = 0.6, confidence: float = 0.7) -> Candidate:
+def _candidate_from_text(
+    store: str,
+    text: str,
+    now: float,
+    base_relevance: float = 0.5,
+    salience: float = 0.6,
+    confidence: float = 0.7,
+) -> Candidate:
     return Candidate(
         id=_stable_id(store, text),
         text=text,

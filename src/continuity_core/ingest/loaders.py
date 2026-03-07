@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Set
 
-
 DEFAULT_TEXT_EXTS = {
     ".cfg",
     ".csv",

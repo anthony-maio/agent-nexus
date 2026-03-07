@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from continuity_core.config import C2Config, load_config
 from continuity_core.context.composer import Candidate, ContextComposer
 from continuity_core.context.gather import CandidateGatherer
 from continuity_core.memory.system import TieredMemorySystem
 from continuity_core.pilot.verification import ConsciousnessPilot, VerificationResult
-from continuity_core.config import C2Config, load_config
 
 
 @dataclass
@@ -18,9 +18,12 @@ class ContextResult:
 
 
 class ContextPipeline:
-    def __init__(self, memory_system: Optional[TieredMemorySystem] = None,
-                 config: Optional[C2Config] = None,
-                 pilot: Optional[ConsciousnessPilot] = None) -> None:
+    def __init__(
+        self,
+        memory_system: Optional[TieredMemorySystem] = None,
+        config: Optional[C2Config] = None,
+        pilot: Optional[ConsciousnessPilot] = None,
+    ) -> None:
         self.config = config or load_config()
         self.memory_system = memory_system or TieredMemorySystem(self.config)
         self.gatherer = CandidateGatherer(self.memory_system)
@@ -31,8 +34,17 @@ class ContextPipeline:
         )
         self.pilot = pilot or ConsciousnessPilot()
 
-    def run(self, query: str, thread_id: Optional[str] = None, top_k: int = 8) -> ContextResult:
-        candidates, working_context = self.gatherer.gather(query, thread_id=thread_id, top_k=top_k)
+    def run(
+        self,
+        query: str,
+        thread_id: Optional[str] = None,
+        top_k: int = 8,
+    ) -> ContextResult:
+        candidates, working_context = self.gatherer.gather(
+            query,
+            thread_id=thread_id,
+            top_k=top_k,
+        )
         chosen = self.composer.select(candidates)
 
         verdict = self.pilot.verify(

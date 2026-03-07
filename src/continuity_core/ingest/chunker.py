@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import List
 
 
-def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 200, min_chunk_size: int = 200) -> List[str]:
+def chunk_text(
+    text: str,
+    chunk_size: int = 1200,
+    overlap: int = 200,
+    min_chunk_size: int = 200,
+) -> List[str]:
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
     if not text:
