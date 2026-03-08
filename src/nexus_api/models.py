@@ -46,10 +46,30 @@ class Run(Base):
     objective: Mapped[str] = mapped_column(Text, nullable=False)
     mode: Mapped[str] = mapped_column(String(24), nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False)
+    parent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("runs.id"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
+    parent_run: Mapped["Run | None"] = relationship(
+        "Run",
+        remote_side="Run.id",
+        back_populates="child_runs",
+    )
+    child_runs: Mapped[list["Run"]] = relationship(back_populates="parent_run")
     steps: Mapped[list["RunStep"]] = relationship(back_populates="run")
+    outbound_delegations: Mapped[list["RunDelegation"]] = relationship(
+        back_populates="parent_run",
+        foreign_keys="RunDelegation.parent_run_id",
+    )
+    inbound_delegation: Mapped["RunDelegation | None"] = relationship(
+        back_populates="child_run",
+        foreign_keys="RunDelegation.child_run_id",
+        uselist=False,
+    )
 
 
 class RunStep(Base):
@@ -69,6 +89,36 @@ class RunStep(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     run: Mapped["Run"] = relationship(back_populates="steps")
+
+
+class RunDelegation(Base):
+    __tablename__ = "run_delegations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    parent_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False, index=True)
+    child_run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    parent_run: Mapped["Run"] = relationship(
+        "Run",
+        back_populates="outbound_delegations",
+        foreign_keys=[parent_run_id],
+    )
+    child_run: Mapped["Run"] = relationship(
+        "Run",
+        back_populates="inbound_delegation",
+        foreign_keys=[child_run_id],
+    )
 
 
 class Approval(Base):

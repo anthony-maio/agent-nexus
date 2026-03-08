@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from nexus_api.models import Approval, Artifact, Citation, Promotion, Run, RunStep
+from nexus_api.models import Approval, Artifact, Citation, Promotion, Run, RunDelegation, RunStep
 from nexus_core.models import RiskTier, RunStatus, StepDefinition, StepStatus
 from nexus_core.policy import risk_tier_for_action
 
@@ -23,10 +23,35 @@ class SqlRunRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def create_run(self, objective: str, mode: str, steps: list[StepDefinition]) -> dict[str, Any]:
-        run = Run(objective=objective, mode=mode, status=RunStatus.RUNNING.value)
+    def create_run(
+        self,
+        objective: str,
+        mode: str,
+        steps: list[StepDefinition],
+        parent_run_id: str | None = None,
+        delegation: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        run = Run(
+            objective=objective,
+            mode=mode,
+            status=RunStatus.RUNNING.value,
+            parent_run_id=parent_run_id or None,
+        )
         self.session.add(run)
         self.session.flush()
+
+        if parent_run_id:
+            delegation_payload = delegation or {}
+            self.session.add(
+                RunDelegation(
+                    parent_run_id=parent_run_id,
+                    child_run_id=run.id,
+                    role=str(delegation_payload.get("role", "worker")),
+                    objective=str(delegation_payload.get("objective", objective)),
+                    status=str(delegation_payload.get("status", "pending")),
+                    summary=str(delegation_payload.get("summary", "")),
+                )
+            )
 
         for idx, step in enumerate(steps):
             risk = risk_tier_for_action(step.action_type, step.instruction)
@@ -89,6 +114,7 @@ class SqlRunRepository:
                     "objective": run.objective,
                     "mode": run.mode,
                     "status": run.status,
+                    "parent_run_id": run.parent_run_id,
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                     "updated_at": run.updated_at.isoformat() if run.updated_at else None,
                     "step_count": len(steps),
@@ -112,9 +138,12 @@ class SqlRunRepository:
             "objective": run.objective,
             "mode": run.mode,
             "status": run.status,
+            "parent_run_id": run.parent_run_id,
             "created_at": run.created_at.isoformat() if run.created_at else None,
             "updated_at": run.updated_at.isoformat() if run.updated_at else None,
             "steps": steps,
+            "delegation": self._delegation_for_child(run_id),
+            "child_runs": self.list_child_runs(run_id),
         }
 
     def list_steps(self, run_id: str) -> list[dict[str, Any]]:
@@ -430,6 +459,50 @@ class SqlRunRepository:
             )
         events.sort(key=lambda e: e.get("timestamp") or "")
         return events
+
+    def list_child_runs(self, parent_run_id: str) -> list[dict[str, Any]]:
+        rows = self.session.execute(
+            select(RunDelegation, Run)
+            .join(Run, Run.id == RunDelegation.child_run_id)
+            .where(RunDelegation.parent_run_id == parent_run_id)
+            .order_by(Run.created_at.asc(), Run.id.asc())
+        ).all()
+        child_runs: list[dict[str, Any]] = []
+        for delegation, run in rows:
+            child_runs.append(
+                {
+                    "id": run.id,
+                    "objective": run.objective,
+                    "mode": run.mode,
+                    "status": run.status,
+                    "parent_run_id": run.parent_run_id,
+                    "created_at": run.created_at.isoformat() if run.created_at else None,
+                    "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+                    "delegation_role": delegation.role,
+                    "delegation_objective": delegation.objective,
+                    "delegation_status": delegation.status,
+                    "delegation_summary": delegation.summary,
+                }
+            )
+        return child_runs
+
+    def _delegation_for_child(self, child_run_id: str) -> dict[str, Any] | None:
+        delegation = self.session.scalar(
+            select(RunDelegation).where(RunDelegation.child_run_id == child_run_id)
+        )
+        if delegation is None:
+            return None
+        return {
+            "id": delegation.id,
+            "parent_run_id": delegation.parent_run_id,
+            "child_run_id": delegation.child_run_id,
+            "role": delegation.role,
+            "objective": delegation.objective,
+            "status": delegation.status,
+            "summary": delegation.summary,
+            "created_at": delegation.created_at.isoformat() if delegation.created_at else None,
+            "updated_at": delegation.updated_at.isoformat() if delegation.updated_at else None,
+        }
 
     @staticmethod
     def _step_to_dict(step: RunStep) -> dict[str, Any]:

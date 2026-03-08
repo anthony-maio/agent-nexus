@@ -47,7 +47,16 @@ class SessionCreateResponse(BaseModel):
 class RunCreateRequest(BaseModel):
     objective: str = Field(min_length=1, max_length=2000)
     mode: RunMode = RunMode.SUPERVISED
+    parent_run_id: str = Field(default="", max_length=32)
+    delegation: "DelegationRequest | None" = None
     steps: list[StepDefinition] = Field(default_factory=list)
+
+
+class DelegationRequest(BaseModel):
+    role: str = Field(min_length=1, max_length=64)
+    objective: str = Field(min_length=1, max_length=2000)
+    status: str = Field(default="pending", pattern="^(pending|running|completed|failed)$")
+    summary: str = Field(default="", max_length=4000)
 
 
 class ApprovalRequest(BaseModel):

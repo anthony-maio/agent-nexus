@@ -568,6 +568,56 @@ def test_run_adapts_execute_code_into_read_file(tmp_path: Path) -> None:
     assert run["steps"][3]["status"] == "completed"
 
 
+def test_parent_child_run_persistence_and_delegation_summary(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    parent = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Primary operator objective",
+            "mode": "manual",
+            "steps": [],
+        },
+    )
+    assert parent.status_code == 200
+    parent_id = parent.json()["id"]
+
+    child = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research competitor docs",
+            "mode": "manual",
+            "parent_run_id": parent_id,
+            "delegation": {
+                "role": "researcher",
+                "objective": "Collect relevant docs",
+                "status": "completed",
+                "summary": "Collected 3 relevant docs",
+            },
+            "steps": [
+                {"action_type": "search_web", "instruction": "collect relevant docs"},
+            ],
+        },
+    )
+    assert child.status_code == 200
+    child_run = child.json()
+    assert child_run["parent_run_id"] == parent_id
+    assert child_run["delegation"]["role"] == "researcher"
+    assert child_run["delegation"]["summary"] == "Collected 3 relevant docs"
+
+    parent_detail = client.get(f"/runs/{parent_id}", headers=headers)
+    assert parent_detail.status_code == 200
+    child_runs = parent_detail.json()["child_runs"]
+    assert len(child_runs) == 1
+    assert child_runs[0]["id"] == child_run["id"]
+    assert child_runs[0]["delegation_role"] == "researcher"
+    assert child_runs[0]["delegation_status"] == "completed"
+    assert child_runs[0]["delegation_summary"] == "Collected 3 relevant docs"
+
+
 def test_run_adapts_when_extract_returns_no_citations(tmp_path: Path) -> None:
     client = _client(tmp_path, execution_adapter=AdaptiveExecutionAdapter(tmp_path))
     headers = _auth_header(client)

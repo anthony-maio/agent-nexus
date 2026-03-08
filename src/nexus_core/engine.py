@@ -33,6 +33,8 @@ class EngineRepository(Protocol):
         objective: str,
         mode: str,
         steps: list[StepDefinition],
+        parent_run_id: str | None = None,
+        delegation: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
     def get_run(self, run_id: str) -> dict[str, Any] | None: ...
@@ -113,9 +115,17 @@ class RunEngine:
         objective: str,
         mode: RunMode,
         steps: list[StepDefinition],
+        parent_run_id: str | None = None,
+        delegation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a run and execute until completion or approval gate."""
-        run = self.repo.create_run(objective=objective, mode=mode.value, steps=steps)
+        run = self.repo.create_run(
+            objective=objective,
+            mode=mode.value,
+            steps=steps,
+            parent_run_id=parent_run_id,
+            delegation=delegation,
+        )
         await self._publish(run["id"], "run.created", {"objective": objective})
         await self._execute_until_gate(run["id"])
         return self.repo.get_run(run["id"]) or run

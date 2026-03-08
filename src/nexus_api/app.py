@@ -183,6 +183,12 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             objective=request.objective,
             mode=RunMode(request.mode),
             steps=steps,
+            parent_run_id=request.parent_run_id.strip() or None,
+            delegation=(
+                request.delegation.model_dump()
+                if request.delegation is not None
+                else None
+            ),
         )
         run["created_by"] = user["username"]
         return run
