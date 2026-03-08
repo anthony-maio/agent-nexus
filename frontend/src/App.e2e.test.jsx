@@ -111,6 +111,19 @@ function createRunState() {
           delegation_role: "researcher",
           delegation_status: "completed",
           delegation_summary: "Collected 3 relevant docs",
+          delegation_context: {
+            parent_objective: "failed export retry",
+            handoff_note: "Start from prior research",
+            workspace_paths: ["reports/summary.md"],
+            citations: [{ url: "https://example.com/research", title: "Research brief" }],
+            artifacts: [
+              {
+                kind: "text",
+                name: "research-notes.txt",
+                rel_path: "run-failed/research-notes.txt"
+              }
+            ]
+          },
           steps: [
             {
               id: "child-step-1",
@@ -325,6 +338,10 @@ describe("App run inbox e2e", () => {
     expect(screen.getByText("updated")).toBeInTheDocument();
     expect(screen.getByText("Delegated researcher")).toBeInTheDocument();
     expect(screen.getByText("Collected 3 relevant docs")).toBeInTheDocument();
+    expect(screen.getByText("Start from prior research")).toBeInTheDocument();
+    expect(screen.getByText("reports/summary.md")).toBeInTheDocument();
+    expect(screen.getByText("1 inherited citation")).toBeInTheDocument();
+    expect(screen.getByText("research-notes.txt")).toBeInTheDocument();
     expect(screen.getByText("search_web")).toBeInTheDocument();
     expect(screen.getByText("collect competitor docs")).toBeInTheDocument();
     expect(screen.getByText("notes/competitors.md")).toBeInTheDocument();

@@ -87,6 +87,44 @@ function buildTranscriptDetails(step) {
   return details;
 }
 
+function formatInheritedCount(count, label) {
+  return `${count} inherited ${label}${count === 1 ? "" : "s"}`;
+}
+
+function buildDelegationContextDetails(context) {
+  if (!context || typeof context !== "object") {
+    return [];
+  }
+
+  const details = [];
+  const workspacePaths = Array.isArray(context.workspace_paths)
+    ? context.workspace_paths.filter(Boolean)
+    : [];
+  const citations = Array.isArray(context.citations) ? context.citations.filter(Boolean) : [];
+  const artifacts = Array.isArray(context.artifacts) ? context.artifacts.filter(Boolean) : [];
+  const artifactNames = artifacts
+    .map((artifact) => (typeof artifact?.name === "string" ? artifact.name : ""))
+    .filter(Boolean);
+
+  if (typeof context.handoff_note === "string" && context.handoff_note) {
+    details.push({ label: "Handoff", value: context.handoff_note });
+  }
+  if (typeof context.parent_objective === "string" && context.parent_objective) {
+    details.push({ label: "Parent", value: context.parent_objective });
+  }
+  if (workspacePaths.length) {
+    details.push({ label: "Workspace", value: workspacePaths.join(", ") });
+  }
+  if (citations.length) {
+    details.push({ label: "Evidence", value: formatInheritedCount(citations.length, "citation") });
+  }
+  if (artifactNames.length) {
+    details.push({ label: "Artifacts", value: artifactNames.join(", ") });
+  }
+
+  return details;
+}
+
 function TranscriptStep({ step, variant = "assistant" }) {
   const details = buildTranscriptDetails(step);
 
@@ -698,35 +736,51 @@ function App() {
                   {(run.steps || []).map((step) => (
                     <TranscriptStep key={step.id} step={step} />
                   ))}
-                  {(run.child_runs || []).map((childRun) => (
-                    <article key={childRun.id} className="transcript-bubble delegate">
-                      <span className="transcript-role">
-                        Delegated {childRun.delegation_role || "worker"}
-                      </span>
-                      <div className="transcript-meta">
-                        <strong>{childRun.objective}</strong>
-                        <span
-                          className={`run-status ${
-                            childRun.delegation_status || childRun.status || "completed"
-                          }`}
-                        >
-                          {childRun.delegation_status || childRun.status}
+                  {(run.child_runs || []).map((childRun) => {
+                    const contextDetails = buildDelegationContextDetails(childRun.delegation_context);
+                    return (
+                      <article key={childRun.id} className="transcript-bubble delegate">
+                        <span className="transcript-role">
+                          Delegated {childRun.delegation_role || "worker"}
                         </span>
-                      </div>
-                      <p>{childRun.delegation_summary || childRun.delegation_objective}</p>
-                      {childRun.steps?.length ? (
-                        <div className="delegate-steps">
-                          {childRun.steps.map((step) => (
-                            <TranscriptStep
-                              key={step.id}
-                              step={step}
-                              variant="child-step"
-                            />
-                          ))}
+                        <div className="transcript-meta">
+                          <strong>{childRun.objective}</strong>
+                          <span
+                            className={`run-status ${
+                              childRun.delegation_status || childRun.status || "completed"
+                            }`}
+                          >
+                            {childRun.delegation_status || childRun.status}
+                          </span>
                         </div>
-                      ) : null}
-                    </article>
-                  ))}
+                        <p>{childRun.delegation_summary || childRun.delegation_objective}</p>
+                        {contextDetails.length ? (
+                          <dl className="transcript-details delegate-context">
+                            {contextDetails.map((detail) => (
+                              <div
+                                key={`${childRun.id}-${detail.label}-${detail.value}`}
+                                className="transcript-detail"
+                              >
+                                <dt>{detail.label}</dt>
+                                <dd>{detail.value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        ) : null}
+                        {childRun.steps?.length ? (
+                          <div className="delegate-steps">
+                            {childRun.steps.map((step) => (
+                              <TranscriptStep
+                                key={step.id}
+                                step={step}
+                                variant="child-step"
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
             ) : null}
