@@ -304,6 +304,14 @@ button:disabled {
   background: rgba(255, 255, 255, 0.82);
 }
 
+.transcript-bubble.delegate {
+  justify-self: start;
+  margin-left: 1.5rem;
+  background: rgba(217, 240, 235, 0.56);
+  border-style: dashed;
+  border-color: rgba(14, 109, 114, 0.28);
+}
+
 .transcript-bubble.assistant.failed {
   border-color: rgba(159, 43, 29, 0.2);
   background: rgba(251, 230, 223, 0.68);

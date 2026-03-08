@@ -100,7 +100,19 @@ function createRunState() {
       ],
       citations: [],
       artifacts: [],
-      approvals: []
+      approvals: [],
+      child_runs: [
+        {
+          id: "child-1",
+          objective: "Collect competitor docs",
+          mode: "manual",
+          status: "completed",
+          parent_run_id: "run-failed",
+          delegation_role: "researcher",
+          delegation_status: "completed",
+          delegation_summary: "Collected 3 relevant docs"
+        }
+      ]
     },
     "run-pending": {
       id: "run-pending",
@@ -297,6 +309,8 @@ describe("App run inbox e2e", () => {
     expect(screen.getByText("python -c print(1)")).toBeInTheDocument();
     expect(screen.getByText("reports/generated.txt")).toBeInTheDocument();
     expect(screen.getByText("updated")).toBeInTheDocument();
+    expect(screen.getByText("Delegated researcher")).toBeInTheDocument();
+    expect(screen.getByText("Collected 3 relevant docs")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Retry Failed Steps"));
     await waitFor(() => {

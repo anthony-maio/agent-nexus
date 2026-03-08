@@ -695,6 +695,24 @@ function App() {
                       </article>
                     );
                   })}
+                  {(run.child_runs || []).map((childRun) => (
+                    <article key={childRun.id} className="transcript-bubble delegate">
+                      <span className="transcript-role">
+                        Delegated {childRun.delegation_role || "worker"}
+                      </span>
+                      <div className="transcript-meta">
+                        <strong>{childRun.objective}</strong>
+                        <span
+                          className={`run-status ${
+                            childRun.delegation_status || childRun.status || "completed"
+                          }`}
+                        >
+                          {childRun.delegation_status || childRun.status}
+                        </span>
+                      </div>
+                      <p>{childRun.delegation_summary || childRun.delegation_objective}</p>
+                    </article>
+                  ))}
                 </div>
               </section>
             ) : null}
