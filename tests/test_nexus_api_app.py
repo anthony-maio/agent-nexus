@@ -380,7 +380,7 @@ def test_approved_step_failure_marks_run_failed(tmp_path: Path) -> None:
     assert approve.json()["status"] == "failed"
 
 
-def test_default_research_run_uses_richer_browser_plan(tmp_path: Path) -> None:
+def test_default_research_run_bootstraps_autonomous_tool_loop(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)
 
@@ -396,14 +396,12 @@ def test_default_research_run_uses_richer_browser_plan(tmp_path: Path) -> None:
     run = create.json()
 
     assert [step["action_type"] for step in run["steps"]] == [
-        "navigate",
-        "inspect",
-        "scroll",
+        "search_web",
+        "fetch_url",
         "extract",
         "export",
     ]
     assert [step["status"] for step in run["steps"]] == [
-        "completed",
         "completed",
         "completed",
         "completed",
@@ -412,7 +410,7 @@ def test_default_research_run_uses_richer_browser_plan(tmp_path: Path) -> None:
     assert run["status"] == "pending_approval"
 
 
-def test_default_workflow_run_gates_on_first_write_action(tmp_path: Path) -> None:
+def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)
 
@@ -432,20 +430,12 @@ def test_default_workflow_run_gates_on_first_write_action(tmp_path: Path) -> Non
         "inspect",
         "extract",
         "type",
-        "click",
-        "wait",
-        "submit",
-        "export",
     ]
     assert [step["status"] for step in run["steps"]] == [
         "completed",
         "completed",
         "completed",
         "pending_approval",
-        "pending",
-        "pending",
-        "pending",
-        "pending",
     ]
     assert run["status"] == "pending_approval"
 

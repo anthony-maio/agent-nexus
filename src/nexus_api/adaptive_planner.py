@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from nexus_core.models import StepDefinition, StepExecutionResult
+from nexus_core.models import RunMode, StepDefinition, StepExecutionResult
 from nexus_core.planner import AdaptivePlanner
 
 log = logging.getLogger(__name__)
@@ -33,6 +33,46 @@ class OpenRouterAdaptivePlanner:
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
         self.max_steps = max(1, min(max_steps, 8))
+
+    async def plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+    ) -> list[StepDefinition]:
+        if not self.api_key or not self.model:
+            return []
+
+        payload = {
+            "objective": objective,
+            "mode": mode.value,
+            "constraints": {
+                "allowed_actions": [
+                    "search_web",
+                    "fetch_url",
+                    "navigate",
+                    "inspect",
+                    "scroll",
+                    "extract",
+                    "read",
+                    "click",
+                    "type",
+                    "wait",
+                    "write",
+                    "submit",
+                    "export",
+                ],
+                "max_steps": min(self.max_steps, 2),
+            },
+        }
+        parsed = await self._request_plan(
+            prompt=(
+                "Return strict JSON with shape "
+                '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
+                "Plan only the first one or two grounded tool calls. No prose."
+            ),
+            payload=payload,
+        )
+        return self._step_definitions_from_payload(parsed, limit=min(self.max_steps, 2))
 
     async def propose_follow_up(
         self,
@@ -78,12 +118,21 @@ class OpenRouterAdaptivePlanner:
                 "max_steps": self.max_steps,
             },
         }
-        prompt = (
-            "Return strict JSON with shape "
-            '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
-            "No prose. Use at most max_steps items."
+        parsed = await self._request_plan(
+            prompt=(
+                "Return strict JSON with shape "
+                '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
+                "No prose. Use at most max_steps items."
+            ),
+            payload=payload,
         )
+        return self._step_definitions_from_payload(parsed, limit=self.max_steps)
 
+    async def _request_plan(
+        self,
+        prompt: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -107,18 +156,21 @@ class OpenRouterAdaptivePlanner:
                 data = response.json()
         except Exception as exc:
             log.warning("OpenRouter adaptive replanner request failed: %s", exc)
-            return []
-
+            return {}
         content = str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
-        parsed = _parse_model_json(content)
-        if not parsed:
-            return []
-        raw_steps = parsed.get("next_steps")
+        return _parse_model_json(content)
+
+    def _step_definitions_from_payload(
+        self,
+        payload: dict[str, Any],
+        limit: int,
+    ) -> list[StepDefinition]:
+        raw_steps = payload.get("next_steps")
         if not isinstance(raw_steps, list):
             return []
 
         steps: list[StepDefinition] = []
-        for item in raw_steps[: self.max_steps]:
+        for item in raw_steps[:limit]:
             if not isinstance(item, dict):
                 continue
             action_type = str(item.get("action_type", "")).strip()
@@ -126,12 +178,7 @@ class OpenRouterAdaptivePlanner:
             if not action_type or not instruction:
                 continue
             try:
-                steps.append(
-                    StepDefinition(
-                        action_type=action_type,
-                        instruction=instruction,
-                    )
-                )
+                steps.append(StepDefinition(action_type=action_type, instruction=instruction))
             except Exception:
                 continue
         return steps
@@ -142,6 +189,13 @@ class RuleFallbackAdaptivePlanner:
 
     def __init__(self, planner: AdaptivePlanner) -> None:
         self.planner = planner
+
+    async def plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+    ) -> list[StepDefinition]:
+        return await self.planner.plan_initial_steps(objective=objective, mode=mode)
 
     async def propose_follow_up(
         self,

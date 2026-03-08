@@ -595,6 +595,33 @@ function App() {
                 Create a run to produce citations, artifacts, and approval-gated actions.
               </p>
             )}
+            {run ? (
+              <section className="transcript-panel">
+                <div className="transcript-header">
+                  <h3>Run Transcript</h3>
+                  <span className={`run-status ${run.status}`}>{run.status}</span>
+                </div>
+                <div className="transcript">
+                  <article className="transcript-bubble user">
+                    <span className="transcript-role">Objective</span>
+                    <p>{run.objective}</p>
+                  </article>
+                  {(run.steps || []).map((step) => (
+                    <article key={step.id} className={`transcript-bubble assistant ${step.status}`}>
+                      <div className="transcript-meta">
+                        <strong>{step.action_type}</strong>
+                        <span className={`run-status ${step.status}`}>{step.status}</span>
+                      </div>
+                      <p>{step.instruction}</p>
+                      {step.output_text ? (
+                        <p className="transcript-output">{step.output_text}</p>
+                      ) : null}
+                      {step.error_text ? <p className="transcript-error">{step.error_text}</p> : null}
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </section>
 
           <aside className="card sidebar">

@@ -423,14 +423,20 @@ class RunEngine:
         result: StepExecutionResult,
     ) -> None:
         completed_action = str(completed_step.get("action_type", "")).strip().lower()
-        if completed_action not in {"extract", "inspect", "scroll"}:
+        existing_steps = self.repo.list_steps(run["id"])
+        if not self._should_plan_follow_up(
+            completed_step=completed_step,
+            completed_action=completed_action,
+            result=result,
+            existing_steps=existing_steps,
+        ):
             return
 
         proposed_steps = await self.adaptive_planner.propose_follow_up(
             objective=run["objective"],
             completed_step=completed_step,
             result=result,
-            existing_steps=self.repo.list_steps(run["id"]),
+            existing_steps=existing_steps,
         )
         follow_up_steps = apply_follow_up_policy(
             proposed_steps,
@@ -456,6 +462,51 @@ class RunEngine:
 
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         await self.events.publish(RunEvent(run_id=run_id, event_type=event_type, payload=payload))
+
+    @staticmethod
+    def _should_plan_follow_up(
+        completed_step: dict[str, Any],
+        completed_action: str,
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, Any]],
+    ) -> bool:
+        if RunEngine._has_pending_steps_after(completed_step, existing_steps):
+            if result.metadata.get("next_steps"):
+                return True
+            if completed_action == "extract" and not result.citations:
+                return True
+            return (
+                completed_action == "extract"
+                and RunEngine._next_pending_action_after(completed_step, existing_steps) == "export"
+            )
+        return completed_action not in {"export", "write"}
+
+    @staticmethod
+    def _has_pending_steps_after(
+        completed_step: dict[str, Any],
+        existing_steps: list[dict[str, Any]],
+    ) -> bool:
+        return bool(RunEngine._next_pending_action_after(completed_step, existing_steps))
+
+    @staticmethod
+    def _next_pending_action_after(
+        completed_step: dict[str, Any],
+        existing_steps: list[dict[str, Any]],
+    ) -> str:
+        try:
+            step_index = int(completed_step.get("step_index", -1))
+        except (TypeError, ValueError):
+            step_index = -1
+        for step in existing_steps:
+            try:
+                candidate_index = int(step.get("step_index", -1))
+            except (TypeError, ValueError):
+                candidate_index = -1
+            if candidate_index <= step_index:
+                continue
+            if str(step.get("status", "")).strip().lower() == StepStatus.PENDING.value:
+                return str(step.get("action_type", "")).strip().lower()
+        return ""
 
     @staticmethod
     def _sha256(path: Path) -> str:

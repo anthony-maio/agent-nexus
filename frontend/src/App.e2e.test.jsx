@@ -265,6 +265,9 @@ describe("App run inbox e2e", () => {
     await waitFor(() => {
       expect(screen.getByText("run-failed")).toBeInTheDocument();
     });
+    expect(screen.getByText("Run Transcript")).toBeInTheDocument();
+    expect(screen.getByText("open docs")).toBeInTheDocument();
+    expect(screen.getByText("export report artifact")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Retry Failed Steps"));
     await waitFor(() => {

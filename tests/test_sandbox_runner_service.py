@@ -24,9 +24,10 @@ def test_execute_step_creates_artifact_for_extract(tmp_path: Path, monkeypatch) 
     assert resp.status_code == 200
     data = resp.json()
     assert "output_text" in data
-    assert len(data["citations"]) == 1
+    assert data["citations"] == []
     assert len(data["artifacts"]) == 1
     assert data["metadata"]["executor_backend"] == "local"
+    assert data["metadata"]["session_path"]
 
     artifact = data["artifacts"][0]
     assert Path(artifact["sandbox_path"]).exists()
@@ -35,6 +36,15 @@ def test_execute_step_creates_artifact_for_extract(tmp_path: Path, monkeypatch) 
 
 def test_execute_step_no_artifact_for_navigate(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors._fetch_url_content",
+        lambda url, timeout_sec=10.0: {
+            "url": url,
+            "title": "Open Docs",
+            "text": "Grounded page body",
+            "snippet": "Grounded page body",
+        },
+    )
     client = TestClient(create_app())
 
     resp = client.post(
@@ -43,18 +53,39 @@ def test_execute_step_no_artifact_for_navigate(tmp_path: Path, monkeypatch) -> N
             "run_id": "run123",
             "step_id": "step124",
             "action_type": "navigate",
-            "instruction": "open docs",
+            "instruction": "open https://docs.example.org",
         },
     )
     assert resp.status_code == 200
     data = resp.json()
     assert data["artifacts"] == []
     assert len(data["citations"]) == 1
+    assert data["citations"][0]["url"] == "https://docs.example.org"
 
 
 def test_execute_step_supports_inspect_action(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors._fetch_url_content",
+        lambda url, timeout_sec=10.0: {
+            "url": url,
+            "title": "Inspect Page",
+            "text": "Form fields and confirmation copy",
+            "snippet": "Form fields and confirmation copy",
+        },
+    )
     client = TestClient(create_app())
+
+    navigate = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step124a",
+            "action_type": "navigate",
+            "instruction": "open https://docs.example.org",
+        },
+    )
+    assert navigate.status_code == 200
 
     resp = client.post(
         "/execute-step",
@@ -70,6 +101,7 @@ def test_execute_step_supports_inspect_action(tmp_path: Path, monkeypatch) -> No
     assert data["artifacts"] == []
     assert len(data["citations"]) == 1
     assert "inspect" in data["output_text"].lower()
+    assert data["metadata"]["current_url"] == "https://docs.example.org"
 
 
 def test_execute_step_supports_type_action(tmp_path: Path, monkeypatch) -> None:
@@ -90,6 +122,60 @@ def test_execute_step_supports_type_action(tmp_path: Path, monkeypatch) -> None:
     assert data["artifacts"] == []
     assert data["citations"] == []
     assert "type" in data["output_text"].lower()
+
+
+def test_execute_step_supports_grounded_search_and_fetch_actions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors._search_web",
+        lambda query, max_results=5: [
+            {
+                "url": "https://docs.example.org/start",
+                "title": f"Search result for {query}",
+                "snippet": "Grounded result",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors._fetch_url_content",
+        lambda url, timeout_sec=10.0: {
+            "url": url,
+            "title": "Fetched page",
+            "text": "Grounded fetched text",
+            "snippet": "Grounded fetched text",
+        },
+    )
+    client = TestClient(create_app())
+
+    search = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step-search",
+            "action_type": "search_web",
+            "instruction": "grounded runtime docs",
+        },
+    )
+    assert search.status_code == 200
+    search_data = search.json()
+    assert search_data["citations"][0]["url"] == "https://docs.example.org/start"
+
+    fetch = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step-fetch",
+            "action_type": "fetch_url",
+            "instruction": "open the best result from the current session",
+        },
+    )
+    assert fetch.status_code == 200
+    fetch_data = fetch.json()
+    assert fetch_data["citations"][0]["url"] == "https://docs.example.org/start"
+    assert fetch_data["metadata"]["current_url"] == "https://docs.example.org/start"
 
 
 def test_execute_step_rejects_unsupported_action(tmp_path: Path, monkeypatch) -> None:

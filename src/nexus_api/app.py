@@ -158,7 +158,17 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         user: dict[str, Any] = Depends(current_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        steps = request.steps or default_steps_for_objective(request.objective)
+        if request.steps:
+            steps = request.steps
+        else:
+            planner_fn = getattr(ctx.adaptive_planner, "plan_initial_steps", None)
+            planner_steps = []
+            if callable(planner_fn):
+                planner_steps = await planner_fn(
+                    objective=request.objective,
+                    mode=request.mode,
+                )
+            steps = planner_steps or default_steps_for_objective(request.objective)
         repo = SqlRunRepository(session)
         engine = RunEngine(
             repository=repo,

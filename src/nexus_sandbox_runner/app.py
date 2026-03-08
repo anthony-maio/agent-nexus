@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -17,6 +18,8 @@ from nexus_sandbox_runner.executors import (
 _ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
     {
+        "search_web",
+        "fetch_url",
         "navigate",
         "inspect",
         "scroll",
@@ -43,7 +46,7 @@ class ExecuteStepResponse(BaseModel):
     output_text: str
     citations: list[dict[str, str]]
     artifacts: list[dict[str, str]]
-    metadata: dict[str, str]
+    metadata: dict[str, Any]
 
 
 def create_app() -> FastAPI:

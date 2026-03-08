@@ -99,7 +99,12 @@ def test_docker_executor_build_command_contains_isolation_flags(tmp_path: Path) 
     )
     workspace = tmp_path / "w"
     workspace.mkdir(parents=True, exist_ok=True)
-    command = executor.build_command(request, workspace, workspace / "result.json")
+    command = executor.build_command(
+        request,
+        tmp_path / "sandbox" / request.run_id,
+        workspace,
+        workspace / "result.json",
+    )
 
     assert command[0] == "docker"
     assert "--rm" in command
@@ -115,6 +120,64 @@ def test_docker_executor_build_command_contains_isolation_flags(tmp_path: Path) 
     assert "--cap-drop" in command
     assert "ALL" in command
     assert "--pids-limit" in command
+    assert command.count("-v") == 2
+    assert any(str(tmp_path / "sandbox" / request.run_id) in part for part in command)
+
+
+def test_local_executor_persists_session_state_across_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors._search_web",
+        lambda query, max_results=5: [
+            {
+                "url": "https://docs.example.org/start",
+                "title": f"Result for {query}",
+                "snippet": "Grounded search result",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors._fetch_url_content",
+        lambda url, timeout_sec=10.0: {
+            "url": url,
+            "title": "Fetched page",
+            "text": "This page contains grounded details for extraction.",
+            "snippet": "This page contains grounded details for extraction.",
+        },
+    )
+
+    search_result = executor.execute(
+        StepRequest(
+            run_id="run-persist",
+            step_id="step-search",
+            action_type="search_web",
+            instruction="best docs for grounded runtime",
+        ),
+        sandbox_root,
+    )
+    fetch_result = executor.execute(
+        StepRequest(
+            run_id="run-persist",
+            step_id="step-fetch",
+            action_type="fetch_url",
+            instruction="Open the best result from the current session",
+        ),
+        sandbox_root,
+    )
+
+    session_path = Path(search_result.metadata["session_path"])
+    session_payload = json.loads(session_path.read_text(encoding="utf-8"))
+
+    assert search_result.citations[0]["url"] == "https://docs.example.org/start"
+    assert fetch_result.citations[0]["url"] == "https://docs.example.org/start"
+    assert fetch_result.metadata["current_url"] == "https://docs.example.org/start"
+    assert session_payload["current_url"] == "https://docs.example.org/start"
+    assert session_payload["search_results"][0]["url"] == "https://docs.example.org/start"
 
 
 def test_docker_executor_preflight_fails_real_mode_when_browser_missing(

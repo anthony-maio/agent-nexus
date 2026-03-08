@@ -36,6 +36,8 @@ _WORKFLOW_HINTS: tuple[str, ...] = (
 )
 _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
     {
+        "search_web",
+        "fetch_url",
         "navigate",
         "inspect",
         "scroll",
@@ -61,11 +63,11 @@ _MAX_FOLLOW_UP_STEPS = 4
 
 
 def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
-    """Return a browser-first run plan for the given objective."""
+    """Return bootstrap steps for an autonomous tool loop."""
     cleaned = " ".join(objective.split())
     if _looks_like_workflow(cleaned):
-        return _workflow_steps(cleaned)
-    return _research_steps(cleaned)
+        return _workflow_bootstrap_steps(cleaned)
+    return _research_bootstrap_steps(cleaned)
 
 
 def plan_follow_up_steps(
@@ -80,36 +82,146 @@ def plan_follow_up_steps(
         return metadata_steps
 
     action = str(completed_step.get("action_type", "")).strip().lower()
-    if action != "extract":
-        return []
-    if result.citations:
-        return []
-    if _count_adaptive_extracts(existing_steps) >= 2:
-        return []
-
     step_index = int(completed_step.get("step_index", -1))
-    if _has_action_after(existing_steps, step_index, "scroll"):
-        return []
+    if action == "search_web":
+        top_url = _top_result_url(result)
+        if not top_url:
+            return []
+        next_action = "navigate" if _looks_like_workflow(objective) else "fetch_url"
+        return [
+            StepDefinition(
+                action_type=next_action,
+                instruction=f"Use grounded result {top_url} for: {objective}",
+            )
+        ]
 
-    return [
-        StepDefinition(
-            action_type="scroll",
-            instruction=(
-                "Adaptive follow-up: gather additional page context because the last "
-                f"extraction returned no citations. Objective: {objective}"
+    if action in {"fetch_url", "navigate"}:
+        next_action = "inspect" if _looks_like_workflow(objective) else "extract"
+        if _has_action_after(existing_steps, step_index, next_action):
+            return []
+        instruction = (
+            "Inspect the current page structure, controls, and relevant sections "
+            f"for: {objective}"
+            if next_action == "inspect"
+            else f"Summarize the fetched page with citations for: {objective}"
+        )
+        return [StepDefinition(action_type=next_action, instruction=instruction)]
+
+    if action == "inspect":
+        if _looks_like_workflow(objective):
+            steps: list[StepDefinition] = []
+            if not _has_action_after(existing_steps, step_index, "extract"):
+                steps.append(
+                    StepDefinition(
+                        action_type="extract",
+                        instruction=(
+                            "Summarize the workflow state, required inputs, and next "
+                            f"approval point for: {objective}"
+                        ),
+                    )
+                )
+            if not _has_action_after(existing_steps, step_index, "type"):
+                steps.append(
+                    StepDefinition(
+                        action_type="type",
+                        instruction=(
+                            "Enter only the minimum draft input required to continue "
+                            f"the workflow for: {objective}"
+                        ),
+                    )
+                )
+            return steps
+        if _has_action_after(existing_steps, step_index, "extract"):
+            return []
+        return [
+            StepDefinition(
+                action_type="extract",
+                instruction=f"Summarize findings with citations for: {objective}",
+            )
+        ]
+
+    if action == "type":
+        if _has_action_after(existing_steps, step_index, "click"):
+            return []
+        return [
+            StepDefinition(
+                action_type="click",
+                instruction=f"Click the next non-destructive control for: {objective}",
             ),
-        ),
-        StepDefinition(
-            action_type="extract",
-            instruction=(
-                "Adaptive follow-up: re-run extraction after scrolling and include "
-                f"citations for: {objective}"
+            StepDefinition(
+                action_type="wait",
+                instruction=f"Wait for the page state to settle for: {objective}",
             ),
-        ),
-    ]
+            StepDefinition(
+                action_type="extract",
+                instruction=(
+                    "Summarize the updated workflow state and the next approval "
+                    f"point for: {objective}"
+                ),
+            ),
+        ]
+
+    if action == "extract":
+        if not result.citations:
+            if _count_adaptive_extracts(existing_steps) >= 2:
+                return []
+            if _has_action_after(existing_steps, step_index, "scroll"):
+                return []
+            return [
+                StepDefinition(
+                    action_type="scroll",
+                    instruction=(
+                        "Adaptive follow-up: gather additional page context because "
+                        f"the last extraction returned no citations. Objective: {objective}"
+                    ),
+                ),
+                StepDefinition(
+                    action_type="extract",
+                    instruction=(
+                        "Adaptive follow-up: re-run extraction after scrolling and "
+                        f"include citations for: {objective}"
+                    ),
+                ),
+            ]
+        if _looks_like_workflow(objective) and _has_action_before(existing_steps, step_index, "type"):
+            if _has_action_after(existing_steps, step_index, "submit"):
+                return []
+            return [
+                StepDefinition(
+                    action_type="submit",
+                    instruction=f"Submit the workflow only after approval for: {objective}",
+                )
+            ]
+        if _has_action_after(existing_steps, step_index, "export"):
+            return []
+        return [
+            StepDefinition(
+                action_type="export",
+                instruction=f"Prepare an exportable report artifact for: {objective}",
+            )
+        ]
+
+    if action == "submit":
+        if _has_action_after(existing_steps, step_index, "export"):
+            return []
+        return [
+            StepDefinition(
+                action_type="export",
+                instruction=f"Prepare an exportable workflow report for: {objective}",
+            )
+        ]
+
+    return []
 
 
 class AdaptivePlanner(Protocol):
+    async def plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+    ) -> list[StepDefinition]:
+        """Return the initial bootstrap steps for a run."""
+
     async def propose_follow_up(
         self,
         objective: str,
@@ -121,6 +233,14 @@ class AdaptivePlanner(Protocol):
 
 
 class RuleAdaptivePlanner:
+    async def plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+    ) -> list[StepDefinition]:
+        _ = mode
+        return plan_steps_for_objective(objective)
+
     async def propose_follow_up(
         self,
         objective: str,
@@ -139,6 +259,21 @@ class RuleAdaptivePlanner:
 class CompositeAdaptivePlanner:
     def __init__(self, planners: list[AdaptivePlanner]) -> None:
         self.planners = planners
+
+    async def plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+    ) -> list[StepDefinition]:
+        for planner in self.planners:
+            try:
+                proposed = await planner.plan_initial_steps(objective=objective, mode=mode)
+            except Exception as exc:
+                log.warning("Adaptive planner failed (%s): %s", type(planner).__name__, exc)
+                continue
+            if proposed:
+                return proposed
+        return []
 
     async def propose_follow_up(
         self,
@@ -207,90 +342,28 @@ def _navigation_instruction(objective: str) -> str:
     return f"Open a browser session and locate the best starting pages for: {objective}"
 
 
-def _research_steps(objective: str) -> list[StepDefinition]:
+def _research_bootstrap_steps(objective: str) -> list[StepDefinition]:
     return [
         StepDefinition(
-            action_type="navigate",
-            instruction=_navigation_instruction(objective),
-        ),
-        StepDefinition(
-            action_type="inspect",
-            instruction=(
-                "Inspect the current page structure, candidate sources, and "
-                f"relevant sections for: {objective}"
-            ),
-        ),
-        StepDefinition(
-            action_type="scroll",
-            instruction=(
-                f"Scroll through relevant content and gather more evidence for: {objective}"
-            ),
-        ),
-        StepDefinition(
-            action_type="extract",
-            instruction=(
-                "Summarize findings with citations and call out remaining open "
-                f"questions for: {objective}"
-            ),
-        ),
-        StepDefinition(
-            action_type="export",
-            instruction=(
-                "Prepare an exportable report artifact for promotion into the "
-                f"canonical workspace. Objective: {objective}"
-            ),
+            action_type="search_web",
+            instruction=f"Search the web for the best grounded sources for: {objective}",
         ),
     ]
 
 
-def _workflow_steps(objective: str) -> list[StepDefinition]:
+def _workflow_bootstrap_steps(objective: str) -> list[StepDefinition]:
+    url = _extract_url(objective)
+    if not url:
+        return [
+            StepDefinition(
+                action_type="search_web",
+                instruction=f"Find the best starting page for this workflow: {objective}",
+            )
+        ]
     return [
         StepDefinition(
             action_type="navigate",
-            instruction=_navigation_instruction(objective),
-        ),
-        StepDefinition(
-            action_type="inspect",
-            instruction=(
-                "Inspect the page layout, required fields, and safe next controls "
-                f"before any write action for: {objective}"
-            ),
-        ),
-        StepDefinition(
-            action_type="extract",
-            instruction=(
-                "Summarize the workflow state, required inputs, and upcoming "
-                f"approval points with citations for: {objective}"
-            ),
-        ),
-        StepDefinition(
-            action_type="type",
-            instruction=(
-                "Enter only the minimum draft input required to continue this "
-                f"workflow without final submission for: {objective}"
-            ),
-        ),
-        StepDefinition(
-            action_type="click",
-            instruction=(
-                "Click the next non-destructive control required to continue "
-                f"the workflow for: {objective}"
-            ),
-        ),
-        StepDefinition(
-            action_type="wait",
-            instruction=f"Wait for the page state to settle and verify the result for: {objective}",
-        ),
-        StepDefinition(
-            action_type="submit",
-            instruction=f"Submit the workflow only after approval for: {objective}",
-        ),
-        StepDefinition(
-            action_type="export",
-            instruction=(
-                "Prepare an exportable workflow report artifact for promotion into "
-                f"the canonical workspace. Objective: {objective}"
-            ),
+            instruction=f"Navigate directly to {url} and begin this workflow: {objective}",
         ),
     ]
 
@@ -326,6 +399,17 @@ def _count_adaptive_extracts(existing_steps: list[dict[str, Any]]) -> int:
     return count
 
 
+def _top_result_url(result: StepExecutionResult) -> str:
+    raw_results = result.metadata.get("search_results")
+    if isinstance(raw_results, list):
+        for item in raw_results:
+            if isinstance(item, dict) and str(item.get("url", "")).strip():
+                return str(item["url"])
+    if result.citations:
+        return result.citations[0].url
+    return ""
+
+
 def _has_action_after(
     existing_steps: list[dict[str, Any]],
     after_step_index: int,
@@ -337,6 +421,23 @@ def _has_action_after(
         except (TypeError, ValueError):
             step_index = -1
         if step_index <= after_step_index:
+            continue
+        if str(step.get("action_type", "")).strip().lower() == action_type:
+            return True
+    return False
+
+
+def _has_action_before(
+    existing_steps: list[dict[str, Any]],
+    before_step_index: int,
+    action_type: str,
+) -> bool:
+    for step in existing_steps:
+        try:
+            step_index = int(step.get("step_index", -1))
+        except (TypeError, ValueError):
+            step_index = -1
+        if step_index >= before_step_index:
             continue
         if str(step.get("action_type", "")).strip().lower() == action_type:
             return True
