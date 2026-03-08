@@ -498,6 +498,7 @@ class SqlRunRepository:
                     "parent_run_id": run.parent_run_id,
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                     "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+                    "steps": self.list_steps(run.id),
                     "delegation_role": delegation.role,
                     "delegation_objective": delegation.objective,
                     "delegation_status": delegation.status,

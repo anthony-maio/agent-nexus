@@ -616,6 +616,9 @@ def test_parent_child_run_persistence_and_delegation_summary(tmp_path: Path) -> 
     assert child_runs[0]["delegation_role"] == "researcher"
     assert child_runs[0]["delegation_status"] == "completed"
     assert child_runs[0]["delegation_summary"] == "Collected 3 relevant docs"
+    assert child_runs[0]["steps"]
+    assert child_runs[0]["steps"][0]["action_type"] == "search_web"
+    assert child_runs[0]["steps"][0]["instruction"] == "collect relevant docs"
 
 
 def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:

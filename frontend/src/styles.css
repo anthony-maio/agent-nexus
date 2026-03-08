@@ -312,6 +312,23 @@ button:disabled {
   border-color: rgba(14, 109, 114, 0.28);
 }
 
+.delegate-steps {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px dashed rgba(14, 109, 114, 0.22);
+}
+
+.transcript-bubble.child-step {
+  max-width: 100%;
+  margin-left: 0;
+  padding: 0.8rem 0.85rem;
+  background: rgba(255, 255, 255, 0.72);
+  border-style: solid;
+  box-shadow: none;
+}
+
 .transcript-bubble.assistant.failed {
   border-color: rgba(159, 43, 29, 0.2);
   background: rgba(251, 230, 223, 0.68);

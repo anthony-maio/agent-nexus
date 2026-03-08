@@ -110,7 +110,21 @@ function createRunState() {
           parent_run_id: "run-failed",
           delegation_role: "researcher",
           delegation_status: "completed",
-          delegation_summary: "Collected 3 relevant docs"
+          delegation_summary: "Collected 3 relevant docs",
+          steps: [
+            {
+              id: "child-step-1",
+              action_type: "search_web",
+              status: "completed",
+              instruction: "collect competitor docs"
+            },
+            {
+              id: "child-step-2",
+              action_type: "read_file",
+              status: "completed",
+              instruction: "{\"path\":\"notes/competitors.md\"}"
+            }
+          ]
         }
       ]
     },
@@ -311,6 +325,9 @@ describe("App run inbox e2e", () => {
     expect(screen.getByText("updated")).toBeInTheDocument();
     expect(screen.getByText("Delegated researcher")).toBeInTheDocument();
     expect(screen.getByText("Collected 3 relevant docs")).toBeInTheDocument();
+    expect(screen.getByText("search_web")).toBeInTheDocument();
+    expect(screen.getByText("collect competitor docs")).toBeInTheDocument();
+    expect(screen.getByText("notes/competitors.md")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Retry Failed Steps"));
     await waitFor(() => {

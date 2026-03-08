@@ -87,6 +87,35 @@ function buildTranscriptDetails(step) {
   return details;
 }
 
+function TranscriptStep({ step, variant = "assistant" }) {
+  const details = buildTranscriptDetails(step);
+
+  return (
+    <article className={`transcript-bubble ${variant} ${step.status}`}>
+      <div className="transcript-meta">
+        <strong>{step.action_type}</strong>
+        <span className={`run-status ${step.status}`}>{step.status}</span>
+      </div>
+      <p>{step.instruction}</p>
+      {details.length ? (
+        <dl className="transcript-details">
+          {details.map((detail) => (
+            <div
+              key={`${step.id}-${detail.label}-${detail.value}`}
+              className="transcript-detail"
+            >
+              <dt>{detail.label}</dt>
+              <dd>{detail.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {step.output_text ? <p className="transcript-output">{step.output_text}</p> : null}
+      {step.error_text ? <p className="transcript-error">{step.error_text}</p> : null}
+    </article>
+  );
+}
+
 function App() {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
@@ -666,35 +695,9 @@ function App() {
                     <span className="transcript-role">Objective</span>
                     <p>{run.objective}</p>
                   </article>
-                  {(run.steps || []).map((step) => {
-                    const details = buildTranscriptDetails(step);
-                    return (
-                      <article key={step.id} className={`transcript-bubble assistant ${step.status}`}>
-                        <div className="transcript-meta">
-                          <strong>{step.action_type}</strong>
-                          <span className={`run-status ${step.status}`}>{step.status}</span>
-                        </div>
-                        <p>{step.instruction}</p>
-                        {details.length ? (
-                          <dl className="transcript-details">
-                            {details.map((detail) => (
-                              <div
-                                key={`${step.id}-${detail.label}-${detail.value}`}
-                                className="transcript-detail"
-                              >
-                                <dt>{detail.label}</dt>
-                                <dd>{detail.value}</dd>
-                              </div>
-                            ))}
-                          </dl>
-                        ) : null}
-                        {step.output_text ? (
-                          <p className="transcript-output">{step.output_text}</p>
-                        ) : null}
-                        {step.error_text ? <p className="transcript-error">{step.error_text}</p> : null}
-                      </article>
-                    );
-                  })}
+                  {(run.steps || []).map((step) => (
+                    <TranscriptStep key={step.id} step={step} />
+                  ))}
                   {(run.child_runs || []).map((childRun) => (
                     <article key={childRun.id} className="transcript-bubble delegate">
                       <span className="transcript-role">
@@ -711,6 +714,17 @@ function App() {
                         </span>
                       </div>
                       <p>{childRun.delegation_summary || childRun.delegation_objective}</p>
+                      {childRun.steps?.length ? (
+                        <div className="delegate-steps">
+                          {childRun.steps.map((step) => (
+                            <TranscriptStep
+                              key={step.id}
+                              step={step}
+                              variant="child-step"
+                            />
+                          ))}
+                        </div>
+                      ) : null}
                     </article>
                   ))}
                 </div>
