@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from nexus_core.models import ApprovalDecision, RunMode, StepDefinition
@@ -57,6 +59,7 @@ class DelegationRequest(BaseModel):
     objective: str = Field(min_length=1, max_length=2000)
     status: str = Field(default="pending", pattern="^(pending|running|completed|failed)$")
     summary: str = Field(default="", max_length=4000)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalRequest(BaseModel):

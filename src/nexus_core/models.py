@@ -67,6 +67,7 @@ class DelegationStepPayload(BaseModel):
     objective: str = Field(min_length=1, max_length=2000)
     mode: RunMode = RunMode.MANUAL
     summary: str = Field(default="", max_length=4000)
+    context: dict[str, Any] = Field(default_factory=dict)
     steps: list[StepDefinition] = Field(default_factory=list)
 
 

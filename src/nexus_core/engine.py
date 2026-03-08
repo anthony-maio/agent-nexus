@@ -459,6 +459,7 @@ class RunEngine:
                 "objective": payload.objective,
                 "status": RunStatus.RUNNING.value,
                 "summary": payload.summary,
+                "context": self._build_delegation_context(step["run_id"], payload.context),
             },
         )
         child_run_id = child_run["id"]
@@ -599,6 +600,39 @@ class RunEngine:
                 )
             )
         return artifacts
+
+    def _build_delegation_context(
+        self,
+        parent_run_id: str,
+        explicit_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        run = self.repo.get_run(parent_run_id) or {}
+        context = dict(explicit_context)
+        context.setdefault("parent_run_id", parent_run_id)
+        context.setdefault("parent_objective", str(run.get("objective", "")))
+        context.setdefault(
+            "citations",
+            [
+                {
+                    "url": str(item.get("url", "")),
+                    "title": str(item.get("title", "")),
+                    "snippet": str(item.get("snippet", "")),
+                }
+                for item in self.repo.list_citations(parent_run_id)
+            ],
+        )
+        context.setdefault(
+            "artifacts",
+            [
+                {
+                    "kind": str(item.get("kind", "text")),
+                    "name": str(item.get("name", "")),
+                    "rel_path": str(item.get("rel_path", "")),
+                }
+                for item in self.repo.list_artifacts(parent_run_id)
+            ],
+        )
+        return context
 
     @staticmethod
     def _should_plan_follow_up(

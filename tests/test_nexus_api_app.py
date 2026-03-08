@@ -596,6 +596,10 @@ def test_parent_child_run_persistence_and_delegation_summary(tmp_path: Path) -> 
                 "objective": "Collect relevant docs",
                 "status": "completed",
                 "summary": "Collected 3 relevant docs",
+                "context": {
+                    "handoff_note": "Start from prior research",
+                    "workspace_paths": ["reports/summary.md"],
+                },
             },
             "steps": [
                 {"action_type": "search_web", "instruction": "collect relevant docs"},
@@ -607,6 +611,7 @@ def test_parent_child_run_persistence_and_delegation_summary(tmp_path: Path) -> 
     assert child_run["parent_run_id"] == parent_id
     assert child_run["delegation"]["role"] == "researcher"
     assert child_run["delegation"]["summary"] == "Collected 3 relevant docs"
+    assert child_run["delegation"]["context"]["handoff_note"] == "Start from prior research"
 
     parent_detail = client.get(f"/runs/{parent_id}", headers=headers)
     assert parent_detail.status_code == 200
@@ -616,9 +621,60 @@ def test_parent_child_run_persistence_and_delegation_summary(tmp_path: Path) -> 
     assert child_runs[0]["delegation_role"] == "researcher"
     assert child_runs[0]["delegation_status"] == "completed"
     assert child_runs[0]["delegation_summary"] == "Collected 3 relevant docs"
+    assert child_runs[0]["delegation_context"]["workspace_paths"] == ["reports/summary.md"]
     assert child_runs[0]["steps"]
     assert child_runs[0]["steps"][0]["action_type"] == "search_web"
     assert child_runs[0]["steps"][0]["instruction"] == "collect relevant docs"
+
+
+def test_delegate_step_inherits_parent_context_snapshot(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with inherited context",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "extract",
+                    "instruction": "summarize parent evidence",
+                },
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Collect competitor docs",
+                            "mode": "manual",
+                            "steps": [
+                                {
+                                    "action_type": "search_web",
+                                    "instruction": "collect competitor docs",
+                                }
+                            ],
+                        }
+                    ),
+                },
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert len(run["child_runs"]) == 1
+
+    child = run["child_runs"][0]
+    context = child["delegation_context"]
+    assert context["parent_run_id"] == run["id"]
+    assert context["parent_objective"] == "Parent run with inherited context"
+    assert context["citations"][0]["url"] == "https://example.com"
+    assert context["artifacts"][0]["kind"] == "text"
+
+    child_detail = client.get(f"/runs/{child['id']}", headers=headers)
+    assert child_detail.status_code == 200
+    assert child_detail.json()["delegation"]["context"]["parent_run_id"] == run["id"]
 
 
 def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:

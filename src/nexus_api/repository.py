@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -50,6 +51,7 @@ class SqlRunRepository:
                     objective=str(delegation_payload.get("objective", objective)),
                     status=str(delegation_payload.get("status", "pending")),
                     summary=str(delegation_payload.get("summary", "")),
+                    context_json=self._serialize_context(delegation_payload.get("context")),
                 )
             )
 
@@ -503,6 +505,7 @@ class SqlRunRepository:
                     "delegation_objective": delegation.objective,
                     "delegation_status": delegation.status,
                     "delegation_summary": delegation.summary,
+                    "delegation_context": self._deserialize_context(delegation.context_json),
                 }
             )
         return child_runs
@@ -522,6 +525,7 @@ class SqlRunRepository:
                 "objective": delegation.objective,
                 "status": delegation.status,
                 "summary": delegation.summary,
+                "context": self._deserialize_context(delegation.context_json),
                 "created_at": delegation.created_at.isoformat() if delegation.created_at else None,
                 "updated_at": delegation.updated_at.isoformat() if delegation.updated_at else None,
             }
@@ -553,6 +557,7 @@ class SqlRunRepository:
             "objective": delegation.objective,
             "status": delegation.status,
             "summary": delegation.summary,
+            "context": self._deserialize_context(delegation.context_json),
             "created_at": delegation.created_at.isoformat() if delegation.created_at else None,
             "updated_at": delegation.updated_at.isoformat() if delegation.updated_at else None,
         }
@@ -574,3 +579,22 @@ class SqlRunRepository:
             "ended_at": step.ended_at.isoformat() if step.ended_at else None,
             "requires_approval": step.risk_tier == RiskTier.HIGH.value,
         }
+
+    @staticmethod
+    def _serialize_context(value: Any) -> str:
+        if not isinstance(value, dict) or not value:
+            return "{}"
+        try:
+            return json.dumps(value)
+        except TypeError:
+            return "{}"
+
+    @staticmethod
+    def _deserialize_context(raw: str | None) -> dict[str, Any]:
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
