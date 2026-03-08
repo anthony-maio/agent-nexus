@@ -8,6 +8,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nexus_sandbox_runner.app import create_app
+from nexus_sandbox_runner.executors import StepResult
+
+
+class _StubExecutor:
+    backend_name = "stub"
+
+    def execute(self, request, sandbox_root: Path) -> StepResult:
+        return StepResult(
+            output_text=f"handled {request.action_type}",
+            citations=[],
+            artifacts=[],
+            metadata={
+                "handled_action": request.action_type,
+                "sandbox_root": str(sandbox_root),
+            },
+        )
 
 
 def test_execute_step_creates_artifact_for_extract(tmp_path: Path, monkeypatch) -> None:
@@ -176,6 +192,49 @@ def test_execute_step_supports_grounded_search_and_fetch_actions(
     fetch_data = fetch.json()
     assert fetch_data["citations"][0]["url"] == "https://docs.example.org/start"
     assert fetch_data["metadata"]["current_url"] == "https://docs.example.org/start"
+
+
+@pytest.mark.parametrize(
+    "action_type,instruction",
+    [
+        ("list_files", "list the workspace files"),
+        ("read_file", "read workspace/notes.txt"),
+        ("write_file", "write workspace/report.txt with the latest summary"),
+        ("edit_file", "replace TODO with done in workspace/report.txt"),
+        ("execute_code", "run python -c \"print('ok')\""),
+    ],
+)
+def test_execute_step_supports_workspace_and_code_action_contract(
+    tmp_path: Path,
+    monkeypatch,
+    action_type: str,
+    instruction: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.app.build_executor_from_env",
+        lambda env: _StubExecutor(),
+    )
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.app.run_executor_preflight",
+        lambda executor: {"status": "ok", "backend": executor.backend_name},
+    )
+    client = TestClient(create_app())
+
+    resp = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": f"step-{action_type}",
+            "action_type": action_type,
+            "instruction": instruction,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["output_text"] == f"handled {action_type}"
+    assert data["metadata"]["handled_action"] == action_type
 
 
 def test_execute_step_rejects_unsupported_action(tmp_path: Path, monkeypatch) -> None:

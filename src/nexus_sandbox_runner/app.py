@@ -20,6 +20,11 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
         "fetch_url",
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "execute_code",
         "navigate",
         "inspect",
         "scroll",
