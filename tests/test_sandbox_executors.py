@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -178,6 +179,110 @@ def test_local_executor_persists_session_state_across_steps(
     assert fetch_result.metadata["current_url"] == "https://docs.example.org/start"
     assert session_payload["current_url"] == "https://docs.example.org/start"
     assert session_payload["search_results"][0]["url"] == "https://docs.example.org/start"
+
+
+def test_local_executor_supports_workspace_file_tools(tmp_path: Path) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+
+    write_result = executor.execute(
+        StepRequest(
+            run_id="run-files",
+            step_id="step-write",
+            action_type="write_file",
+            instruction=json.dumps({"path": "notes/todo.txt", "content": "TODO\nship it"}),
+        ),
+        sandbox_root,
+    )
+    list_result = executor.execute(
+        StepRequest(
+            run_id="run-files",
+            step_id="step-list",
+            action_type="list_files",
+            instruction=json.dumps({"path": "."}),
+        ),
+        sandbox_root,
+    )
+    read_result = executor.execute(
+        StepRequest(
+            run_id="run-files",
+            step_id="step-read",
+            action_type="read_file",
+            instruction=json.dumps({"path": "notes/todo.txt"}),
+        ),
+        sandbox_root,
+    )
+    edit_result = executor.execute(
+        StepRequest(
+            run_id="run-files",
+            step_id="step-edit",
+            action_type="edit_file",
+            instruction=json.dumps(
+                {"path": "notes/todo.txt", "old": "TODO", "new": "DONE"}
+            ),
+        ),
+        sandbox_root,
+    )
+    reread_result = executor.execute(
+        StepRequest(
+            run_id="run-files",
+            step_id="step-reread",
+            action_type="read_file",
+            instruction=json.dumps({"path": "notes/todo.txt"}),
+        ),
+        sandbox_root,
+    )
+
+    assert write_result.metadata["file_path"] == "notes/todo.txt"
+    assert Path(write_result.artifacts[0]["sandbox_path"]).exists()
+    assert "notes/todo.txt" in list_result.metadata["files"]
+    assert "TODO" in read_result.output_text
+    assert edit_result.metadata["changed"] is True
+    assert edit_result.metadata["file_path"] == "notes/todo.txt"
+    assert "DONE" in reread_result.output_text
+
+
+def test_local_executor_execute_code_creates_workspace_artifacts(tmp_path: Path) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+
+    result = executor.execute(
+        StepRequest(
+            run_id="run-code",
+            step_id="step-code",
+            action_type="execute_code",
+            instruction=json.dumps(
+                {
+                    "command": [
+                        sys.executable,
+                        "-c",
+                        (
+                            "from pathlib import Path; "
+                            "Path('generated.txt').write_text('artifact', encoding='utf-8'); "
+                            "print('code-ok')"
+                        ),
+                    ]
+                }
+            ),
+        ),
+        sandbox_root,
+    )
+    list_result = executor.execute(
+        StepRequest(
+            run_id="run-code",
+            step_id="step-list",
+            action_type="list_files",
+            instruction=json.dumps({"path": "."}),
+        ),
+        sandbox_root,
+    )
+
+    assert "code-ok" in result.output_text
+    assert result.metadata["exit_code"] == 0
+    assert "generated.txt" in result.metadata["touched_files"]
+    assert len(result.artifacts) == 1
+    assert Path(result.artifacts[0]["sandbox_path"]).read_text(encoding="utf-8") == "artifact"
+    assert "generated.txt" in list_result.metadata["files"]
 
 
 def test_docker_executor_preflight_fails_real_mode_when_browser_missing(

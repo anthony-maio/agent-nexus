@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -235,6 +237,90 @@ def test_execute_step_supports_workspace_and_code_action_contract(
     data = resp.json()
     assert data["output_text"] == f"handled {action_type}"
     assert data["metadata"]["handled_action"] == action_type
+
+
+def test_execute_step_runs_workspace_and_code_actions_end_to_end(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    client = TestClient(create_app())
+
+    write = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step-write",
+            "action_type": "write_file",
+            "instruction": json.dumps({"path": "notes.txt", "content": "draft"}),
+        },
+    )
+    assert write.status_code == 200
+    write_data = write.json()
+    assert write_data["metadata"]["file_path"] == "notes.txt"
+    assert Path(write_data["artifacts"][0]["sandbox_path"]).exists()
+
+    edit = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step-edit",
+            "action_type": "edit_file",
+            "instruction": json.dumps({"path": "notes.txt", "old": "draft", "new": "final"}),
+        },
+    )
+    assert edit.status_code == 200
+    assert edit.json()["metadata"]["changed"] is True
+
+    read = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step-read",
+            "action_type": "read_file",
+            "instruction": json.dumps({"path": "notes.txt"}),
+        },
+    )
+    assert read.status_code == 200
+    assert "final" in read.json()["output_text"]
+
+    execute = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step-code",
+            "action_type": "execute_code",
+            "instruction": json.dumps(
+                {
+                    "command": [
+                        sys.executable,
+                        "-c",
+                        (
+                            "from pathlib import Path; "
+                            "Path('generated.txt').write_text('artifact', encoding='utf-8'); "
+                            "print('code-ok')"
+                        ),
+                    ]
+                }
+            ),
+        },
+    )
+    assert execute.status_code == 200
+    execute_data = execute.json()
+    assert "code-ok" in execute_data["output_text"]
+    assert "generated.txt" in execute_data["metadata"]["touched_files"]
+
+    list_files = client.post(
+        "/execute-step",
+        json={
+            "run_id": "run123",
+            "step_id": "step-list",
+            "action_type": "list_files",
+            "instruction": json.dumps({"path": "."}),
+        },
+    )
+    assert list_files.status_code == 200
+    assert "generated.txt" in list_files.json()["metadata"]["files"]
 
 
 def test_execute_step_rejects_unsupported_action(tmp_path: Path, monkeypatch) -> None:

@@ -343,6 +343,7 @@ class DockerEphemeralExecutor:
     ) -> list[dict[str, str]]:
         artifacts: list[dict[str, str]] = []
         workspace_root = step_workspace.resolve()
+        run_root = run_dir.resolve()
         for spec in artifact_specs:
             source_name_raw = str(spec.get("name", "")).strip()
             if not source_name_raw:
@@ -352,17 +353,22 @@ class DockerEphemeralExecutor:
             if not source.is_absolute():
                 source = workspace_root / source
             source = source.resolve()
-            if workspace_root not in source.parents and source != workspace_root:
+            if not any(root == source or root in source.parents for root in (workspace_root, run_root)):
                 continue
             if not source.exists():
                 continue
-            final_path = run_dir / source_name
-            shutil.copy2(source, final_path)
+            if run_root == source or run_root in source.parents:
+                final_path = source
+                rel_suffix = source.relative_to(run_root).as_posix()
+            else:
+                final_path = run_dir / source_name
+                shutil.copy2(source, final_path)
+                rel_suffix = source_name
             artifacts.append(
                 {
-                    "kind": str(spec.get("kind", "text")),
+                    "kind": str(spec.get("kind", _artifact_kind_for_path(final_path))),
                     "name": source_name,
-                    "rel_path": f"{run_id}/{source_name}",
+                    "rel_path": f"{run_id}/{rel_suffix}",
                     "sandbox_path": str(final_path),
                     "sha256": _sha256(final_path),
                 }
@@ -448,7 +454,6 @@ def _execute_local_action(
     workspace_dir: Path,
     session: dict[str, Any],
 ) -> tuple[StepResult, dict[str, Any]]:
-    del workspace_dir
     action = request.action_type.strip().lower()
     instruction = request.instruction.strip()
     citations: list[dict[str, str]] = []
@@ -506,6 +511,111 @@ def _execute_local_action(
         _append_history(session, action, instruction)
         return StepResult(output, citations, artifacts, metadata), session
 
+    if action == "list_files":
+        payload = _parse_instruction_payload(instruction)
+        target = _resolve_workspace_path(
+            workspace_dir,
+            payload,
+            default_path=".",
+            must_exist=False,
+            allow_directory=True,
+        )
+        target.mkdir(parents=True, exist_ok=True)
+        files = _list_workspace_files(target, workspace_dir)
+        metadata["path"] = _relative_workspace_path(target, workspace_dir, directory_hint=True)
+        metadata["files"] = files
+        output = "\n".join(files) if files else "[sandbox-workspace] No files found."
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
+    if action == "read_file":
+        payload = _parse_instruction_payload(instruction)
+        target = _resolve_workspace_path(
+            workspace_dir,
+            payload,
+            must_exist=True,
+            allow_directory=False,
+        )
+        content = target.read_text(encoding="utf-8")
+        metadata["file_path"] = _relative_workspace_path(target, workspace_dir)
+        metadata["bytes_read"] = len(content.encode("utf-8"))
+        output = content
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
+    if action == "write_file":
+        payload = _parse_instruction_payload(instruction)
+        target = _resolve_workspace_path(
+            workspace_dir,
+            payload,
+            must_exist=False,
+            allow_directory=False,
+        )
+        content = str(payload.get("content", ""))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        metadata["file_path"] = _relative_workspace_path(target, workspace_dir)
+        metadata["bytes_written"] = target.stat().st_size
+        metadata["changed"] = True
+        artifacts.append(_workspace_file_artifact(target, workspace_dir, request.run_id))
+        output = f"[sandbox-workspace] Wrote {metadata['file_path']}"
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
+    if action == "edit_file":
+        payload = _parse_instruction_payload(instruction)
+        target = _resolve_workspace_path(
+            workspace_dir,
+            payload,
+            must_exist=True,
+            allow_directory=False,
+        )
+        original = target.read_text(encoding="utf-8")
+        old = str(payload.get("old", ""))
+        new = str(payload.get("new", ""))
+        if old:
+            updated = original.replace(old, new)
+        else:
+            updated = str(payload.get("content", original))
+        changed = updated != original
+        if changed:
+            target.write_text(updated, encoding="utf-8")
+            artifacts.append(_workspace_file_artifact(target, workspace_dir, request.run_id))
+        metadata["file_path"] = _relative_workspace_path(target, workspace_dir)
+        metadata["bytes_written"] = len(updated.encode("utf-8"))
+        metadata["changed"] = changed
+        output = (
+            f"[sandbox-workspace] Updated {metadata['file_path']}"
+            if changed
+            else f"[sandbox-workspace] No changes applied to {metadata['file_path']}"
+        )
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
+    if action == "execute_code":
+        payload = _parse_instruction_payload(instruction)
+        command = _command_from_payload(payload, instruction)
+        before = _snapshot_workspace(workspace_dir)
+        completed = _run_workspace_command(command, workspace_dir)
+        touched_files = _changed_workspace_files(before, _snapshot_workspace(workspace_dir))
+        for rel_path in touched_files:
+            artifacts.append(
+                _workspace_file_artifact(workspace_dir / Path(rel_path), workspace_dir, request.run_id)
+            )
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        metadata["command"] = _stringify_command(command)
+        metadata["exit_code"] = completed.returncode
+        metadata["touched_files"] = touched_files
+        if completed.returncode != 0:
+            detail = stderr or stdout or "command returned non-zero exit status"
+            raise RuntimeError(
+                f"Sandbox code execution failed (exit={completed.returncode}): {detail[:500]}"
+            )
+        output = stdout or stderr or "[sandbox-code] Command completed."
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
     if action == "type":
         draft_inputs = session.setdefault("draft_inputs", [])
         draft_inputs.append({"step_id": request.step_id, "instruction": instruction})
@@ -547,6 +657,132 @@ def _execute_local_action(
     metadata["current_url"] = str(session.get("current_url", ""))
     _append_history(session, action, instruction)
     return StepResult(output, citations, artifacts, metadata), session
+
+
+def _parse_instruction_payload(instruction: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(instruction)
+    except json.JSONDecodeError:
+        return {"raw": instruction}
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, list):
+        return {"command": payload}
+    return {"raw": instruction}
+
+
+def _resolve_workspace_path(
+    workspace_dir: Path,
+    payload: dict[str, Any],
+    *,
+    default_path: str = "",
+    must_exist: bool,
+    allow_directory: bool,
+) -> Path:
+    raw_path = str(payload.get("path") or payload.get("file") or default_path).strip()
+    if not raw_path:
+        raise RuntimeError("Workspace action requires a `path` in the instruction payload.")
+    candidate = workspace_dir if raw_path in {".", "./"} else workspace_dir / raw_path
+    resolved = candidate.resolve()
+    workspace_root = workspace_dir.resolve()
+    if resolved != workspace_root and workspace_root not in resolved.parents:
+        raise RuntimeError("Workspace path must stay within the run workspace.")
+    if must_exist and not resolved.exists():
+        raise RuntimeError(f"Workspace path does not exist: {raw_path}")
+    if not allow_directory and resolved.exists() and resolved.is_dir():
+        raise RuntimeError(f"Expected a file path, received a directory: {raw_path}")
+    return resolved
+
+
+def _relative_workspace_path(path: Path, workspace_dir: Path, *, directory_hint: bool = False) -> str:
+    workspace_root = workspace_dir.resolve()
+    resolved = path.resolve()
+    if resolved == workspace_root:
+        return "."
+    rel_path = resolved.relative_to(workspace_root).as_posix()
+    if directory_hint and not rel_path:
+        return "."
+    return rel_path
+
+
+def _list_workspace_files(target: Path, workspace_dir: Path) -> list[str]:
+    resolved = target.resolve()
+    if resolved.is_file():
+        return [_relative_workspace_path(resolved, workspace_dir)]
+    files = [
+        path.relative_to(workspace_dir.resolve()).as_posix()
+        for path in resolved.rglob("*")
+        if path.is_file()
+    ]
+    return sorted(files)
+
+
+def _workspace_file_artifact(path: Path, workspace_dir: Path, run_id: str) -> dict[str, str]:
+    resolved = path.resolve()
+    rel_path = resolved.relative_to(workspace_dir.resolve()).as_posix()
+    return {
+        "kind": _artifact_kind_for_path(resolved),
+        "name": resolved.name,
+        "rel_path": f"{run_id}/workspace/{rel_path}",
+        "sandbox_path": str(resolved),
+        "sha256": _sha256(resolved),
+    }
+
+
+def _artifact_kind_for_path(path: Path) -> str:
+    if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+        return "image"
+    return "text"
+
+
+def _snapshot_workspace(workspace_dir: Path) -> dict[str, tuple[int, int]]:
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in workspace_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        snapshot[path.relative_to(workspace_dir.resolve()).as_posix()] = (
+            stat.st_mtime_ns,
+            stat.st_size,
+        )
+    return snapshot
+
+
+def _changed_workspace_files(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+) -> list[str]:
+    return sorted(rel_path for rel_path, state in after.items() if before.get(rel_path) != state)
+
+
+def _command_from_payload(payload: dict[str, Any], instruction: str) -> str | list[str]:
+    command = payload.get("command")
+    if isinstance(command, list):
+        return [str(part) for part in command]
+    if isinstance(command, str) and command.strip():
+        return command.strip()
+    return instruction.strip()
+
+
+def _stringify_command(command: str | list[str]) -> str:
+    if isinstance(command, list):
+        return " ".join(command)
+    return command
+
+
+def _run_workspace_command(
+    command: str | list[str],
+    workspace_dir: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=workspace_dir,
+        shell=isinstance(command, str),
+        timeout=30,
+    )
 
 
 def _search_web(query: str, max_results: int = _DEFAULT_SEARCH_RESULTS) -> list[dict[str, str]]:
@@ -772,6 +1008,7 @@ def _container_script() -> str:
         import json
         import os
         import re
+        import subprocess
         import urllib.request
         from pathlib import Path
 
@@ -784,6 +1021,8 @@ def _container_script() -> str:
         browser_timeout_ms = int(os.environ.get("NEXUS_BROWSER_TIMEOUT_MS", "15000"))
         capture_screenshot = os.environ.get("NEXUS_CAPTURE_SCREENSHOT", "1") != "0"
         run_dir = session_path.parent
+        workspace_dir = run_dir / "workspace"
+        workspace_dir.mkdir(parents=True, exist_ok=True)
 
         def load_session():
             if not session_path.exists():
@@ -801,7 +1040,82 @@ def _container_script() -> str:
             match = re.search(r"https?://\\S+", text or "")
             return match.group(0) if match else ""
 
+        def parse_instruction():
+            try:
+                payload = json.loads(instruction)
+            except Exception:
+                return {"raw": instruction}
+            if isinstance(payload, dict):
+                return payload
+            if isinstance(payload, list):
+                return {"command": payload}
+            return {"raw": instruction}
+
+        def resolve_workspace_path(payload, default_path="", must_exist=False, allow_directory=False):
+            raw_path = str(payload.get("path") or payload.get("file") or default_path).strip()
+            if not raw_path:
+                raise RuntimeError("Workspace action requires a `path` in the instruction payload.")
+            target = workspace_dir if raw_path in {".", "./"} else workspace_dir / raw_path
+            resolved = target.resolve()
+            workspace_root = workspace_dir.resolve()
+            if resolved != workspace_root and workspace_root not in resolved.parents:
+                raise RuntimeError("Workspace path must stay within the run workspace.")
+            if must_exist and not resolved.exists():
+                raise RuntimeError(f"Workspace path does not exist: {raw_path}")
+            if not allow_directory and resolved.exists() and resolved.is_dir():
+                raise RuntimeError(f"Expected a file path, received a directory: {raw_path}")
+            return resolved
+
+        def relative_workspace_path(path):
+            resolved = path.resolve()
+            workspace_root = workspace_dir.resolve()
+            if resolved == workspace_root:
+                return "."
+            return resolved.relative_to(workspace_root).as_posix()
+
+        def list_workspace_files(target):
+            resolved = target.resolve()
+            if resolved.is_file():
+                return [relative_workspace_path(resolved)]
+            return sorted(
+                path.relative_to(workspace_dir.resolve()).as_posix()
+                for path in resolved.rglob("*")
+                if path.is_file()
+            )
+
+        def snapshot_workspace():
+            snapshot = {}
+            for path in workspace_dir.rglob("*"):
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+                snapshot[path.relative_to(workspace_dir.resolve()).as_posix()] = [
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                ]
+            return snapshot
+
+        def changed_workspace_files(before, after):
+            return sorted(path for path, state in after.items() if before.get(path) != state)
+
+        def artifact_kind(path):
+            return "image" if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"} else "text"
+
+        def workspace_artifact(path):
+            return {
+                "kind": artifact_kind(path),
+                "name": path.name,
+                "path": str(path.resolve()),
+                "workspace": str(run_dir),
+            }
+
+        def stringify_command(command):
+            if isinstance(command, list):
+                return " ".join(str(part) for part in command)
+            return str(command)
+
         session = load_session()
+        payload = parse_instruction()
         citations = []
         artifacts = []
         metadata = {"session_path": str(session_path)}
@@ -813,6 +1127,74 @@ def _container_script() -> str:
             session["search_results"] = citations
             metadata["top_url"] = top_url
             output = f"[sandbox-search] Collected grounded search results for: {instruction}"
+        elif action == "list_files":
+            target = resolve_workspace_path(payload, default_path=".", allow_directory=True)
+            target.mkdir(parents=True, exist_ok=True)
+            files = list_workspace_files(target)
+            metadata["path"] = relative_workspace_path(target)
+            metadata["files"] = files
+            output = "\\n".join(files) if files else "[sandbox-workspace] No files found."
+        elif action == "read_file":
+            target = resolve_workspace_path(payload, must_exist=True, allow_directory=False)
+            content = target.read_text(encoding="utf-8")
+            metadata["file_path"] = relative_workspace_path(target)
+            metadata["bytes_read"] = len(content.encode("utf-8"))
+            output = content
+        elif action == "write_file":
+            target = resolve_workspace_path(payload, must_exist=False, allow_directory=False)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            content = str(payload.get("content", ""))
+            target.write_text(content, encoding="utf-8")
+            metadata["file_path"] = relative_workspace_path(target)
+            metadata["bytes_written"] = target.stat().st_size
+            metadata["changed"] = True
+            artifacts.append(workspace_artifact(target))
+            output = f"[sandbox-workspace] Wrote {metadata['file_path']}"
+        elif action == "edit_file":
+            target = resolve_workspace_path(payload, must_exist=True, allow_directory=False)
+            original = target.read_text(encoding="utf-8")
+            old = str(payload.get("old", ""))
+            new = str(payload.get("new", ""))
+            if old:
+                updated = original.replace(old, new)
+            else:
+                updated = str(payload.get("content", original))
+            changed = updated != original
+            if changed:
+                target.write_text(updated, encoding="utf-8")
+                artifacts.append(workspace_artifact(target))
+            metadata["file_path"] = relative_workspace_path(target)
+            metadata["bytes_written"] = len(updated.encode("utf-8"))
+            metadata["changed"] = changed
+            output = (
+                f"[sandbox-workspace] Updated {metadata['file_path']}"
+                if changed
+                else f"[sandbox-workspace] No changes applied to {metadata['file_path']}"
+            )
+        elif action == "execute_code":
+            command = payload.get("command", instruction)
+            if isinstance(command, list):
+                command = [str(part) for part in command]
+            before = snapshot_workspace()
+            proc = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                cwd=workspace_dir,
+                shell=isinstance(command, str),
+                timeout=30,
+            )
+            touched_files = changed_workspace_files(before, snapshot_workspace())
+            for rel_path in touched_files:
+                artifacts.append(workspace_artifact(workspace_dir / rel_path))
+            metadata["command"] = stringify_command(command)
+            metadata["exit_code"] = proc.returncode
+            metadata["touched_files"] = touched_files
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "command returned non-zero exit status").strip()
+                raise RuntimeError(f"Sandbox code execution failed (exit={proc.returncode}): {detail[:500]}")
+            output = (proc.stdout or "").strip() or (proc.stderr or "").strip() or "[sandbox-code] Command completed."
         elif action in {"fetch_url", "navigate", "inspect", "scroll", "read", "extract"}:
             target_url = first_url(instruction) or session.get("current_url", "")
             if not target_url and session.get("search_results"):
