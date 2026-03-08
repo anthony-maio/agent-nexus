@@ -49,6 +49,11 @@ class OpenRouterAdaptivePlanner:
                 "allowed_actions": [
                     "search_web",
                     "fetch_url",
+                    "list_files",
+                    "read_file",
+                    "write_file",
+                    "edit_file",
+                    "execute_code",
                     "navigate",
                     "inspect",
                     "scroll",
@@ -68,7 +73,8 @@ class OpenRouterAdaptivePlanner:
             prompt=(
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
-                "Plan only the first one or two grounded tool calls. No prose."
+                "Plan only the first one or two grounded tool calls. "
+                "Prefer workspace or code tools when the objective references local files. No prose."
             ),
             payload=payload,
         )
@@ -103,6 +109,11 @@ class OpenRouterAdaptivePlanner:
             ],
             "constraints": {
                 "allowed_actions": [
+                    "list_files",
+                    "read_file",
+                    "write_file",
+                    "edit_file",
+                    "execute_code",
                     "navigate",
                     "inspect",
                     "scroll",
@@ -122,7 +133,7 @@ class OpenRouterAdaptivePlanner:
             prompt=(
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
-                "No prose. Use at most max_steps items."
+                "No prose. Use at most max_steps items. Prefer workspace and code tools when result metadata references files."
             ),
             payload=payload,
         )

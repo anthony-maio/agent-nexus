@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -114,6 +115,34 @@ class ModelSuggestionPlanner:
                 instruction="submit the prepared workflow changes",
             ),
         ]
+
+
+class WorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
+    async def execute_step(
+        self, run_id: str, step_id: str, action_type: str, instruction: str
+    ) -> StepExecutionResult:
+        if action_type == "list_files":
+            return StepExecutionResult(
+                output_text="done:list_files",
+                citations=[],
+                artifacts=[],
+                metadata={"files": ["reports/summary.md"]},
+            )
+        return await super().execute_step(run_id, step_id, action_type, instruction)
+
+
+class CodeArtifactExecutionAdapter(FakeExecutionAdapter):
+    async def execute_step(
+        self, run_id: str, step_id: str, action_type: str, instruction: str
+    ) -> StepExecutionResult:
+        if action_type == "execute_code":
+            return StepExecutionResult(
+                output_text="done:execute_code",
+                citations=[],
+                artifacts=[],
+                metadata={"touched_files": ["reports/generated.md"]},
+            )
+        return await super().execute_step(run_id, step_id, action_type, instruction)
 
 
 def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = None) -> TestClient:
@@ -445,6 +474,98 @@ def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: P
     assert len(items) == 1
     assert items[0]["run_id"] == run["id"]
     assert items[0]["action_type"] == "type"
+
+
+def test_default_workspace_file_run_bootstraps_with_read_file(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Read workspace/brief.txt and summarize the key points",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "read_file",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][0]["status"] == "completed"
+    assert run["steps"][1]["status"] == "completed"
+    assert run["steps"][2]["status"] == "pending_approval"
+    assert "brief.txt" in run["steps"][0]["instruction"]
+
+
+def test_run_adapts_list_files_into_read_file(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=WorkspaceDiscoveryExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Review the discovered report file and summarize it",
+            "mode": "supervised",
+            "steps": [
+                {
+                    "action_type": "list_files",
+                    "instruction": json.dumps({"path": "."}),
+                }
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "list_files",
+        "read_file",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][1]["status"] == "completed"
+    assert "reports/summary.md" in run["steps"][1]["instruction"]
+    assert run["steps"][3]["status"] == "pending_approval"
+
+
+def test_run_adapts_execute_code_into_read_file(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=CodeArtifactExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Generate a report file and summarize it",
+            "mode": "autopilot",
+            "steps": [
+                {
+                    "action_type": "execute_code",
+                    "instruction": json.dumps(
+                        {"command": ["python", "-c", "print('generate report')"]}
+                    ),
+                }
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "execute_code",
+        "read_file",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][1]["status"] == "completed"
+    assert "reports/generated.md" in run["steps"][1]["instruction"]
+    assert run["steps"][3]["status"] == "completed"
 
 
 def test_run_adapts_when_extract_returns_no_citations(tmp_path: Path) -> None:

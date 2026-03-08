@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Protocol
@@ -14,6 +15,10 @@ from nexus_core.policy import is_high_risk_action
 log = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s)>]+", re.IGNORECASE)
+_WORKSPACE_PATH_RE = re.compile(
+    r"(?P<path>(?:workspace[\\/])?[A-Za-z0-9_.\\/-]+\.(?:txt|md|markdown|json|csv|tsv|yaml|yml|xml|html|log|py|js|ts))",
+    re.IGNORECASE,
+)
 _WORKFLOW_HINTS: tuple[str, ...] = (
     "fill out",
     "fill in",
@@ -38,6 +43,11 @@ _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
         "fetch_url",
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "execute_code",
         "navigate",
         "inspect",
         "scroll",
@@ -65,6 +75,15 @@ _MAX_FOLLOW_UP_STEPS = 4
 def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
     """Return bootstrap steps for an autonomous tool loop."""
     cleaned = " ".join(objective.split())
+    if not _extract_url(cleaned):
+        workspace_path = _workspace_path_from_objective(cleaned)
+        if workspace_path:
+            return [
+                StepDefinition(
+                    action_type="read_file",
+                    instruction=_workspace_instruction(workspace_path),
+                )
+            ]
     if _looks_like_workflow(cleaned):
         return _workflow_bootstrap_steps(cleaned)
     return _research_bootstrap_steps(cleaned)
@@ -92,6 +111,56 @@ def plan_follow_up_steps(
             StepDefinition(
                 action_type=next_action,
                 instruction=f"Use grounded result {top_url} for: {objective}",
+            )
+        ]
+
+    if action == "list_files":
+        next_path = _preferred_workspace_path(objective, result, metadata_key="files")
+        if not next_path or _has_action_after(existing_steps, step_index, "read_file"):
+            return []
+        return [
+            StepDefinition(
+                action_type="read_file",
+                instruction=_workspace_instruction(next_path),
+            )
+        ]
+
+    if action == "read_file":
+        if _has_action_after(existing_steps, step_index, "extract"):
+            return []
+        return [
+            StepDefinition(
+                action_type="extract",
+                instruction=f"Summarize the file contents and key evidence for: {objective}",
+            )
+        ]
+
+    if action in {"write_file", "edit_file"}:
+        next_path = _preferred_workspace_path(objective, result, metadata_key="file_path")
+        if not next_path or _has_action_after(existing_steps, step_index, "read_file"):
+            return []
+        return [
+            StepDefinition(
+                action_type="read_file",
+                instruction=_workspace_instruction(next_path),
+            )
+        ]
+
+    if action == "execute_code":
+        next_path = _preferred_workspace_path(objective, result, metadata_key="touched_files")
+        if next_path and not _has_action_after(existing_steps, step_index, "read_file"):
+            return [
+                StepDefinition(
+                    action_type="read_file",
+                    instruction=_workspace_instruction(next_path),
+                )
+            ]
+        if _has_action_after(existing_steps, step_index, "extract"):
+            return []
+        return [
+            StepDefinition(
+                action_type="extract",
+                instruction=f"Summarize the code execution result for: {objective}",
             )
         ]
 
@@ -342,6 +411,17 @@ def _navigation_instruction(objective: str) -> str:
     return f"Open a browser session and locate the best starting pages for: {objective}"
 
 
+def _workspace_path_from_objective(objective: str) -> str:
+    match = _WORKSPACE_PATH_RE.search(objective)
+    if not match:
+        return ""
+    return _normalize_workspace_path(match.group("path"))
+
+
+def _workspace_instruction(path: str) -> str:
+    return json.dumps({"path": path})
+
+
 def _research_bootstrap_steps(objective: str) -> list[StepDefinition]:
     return [
         StepDefinition(
@@ -408,6 +488,35 @@ def _top_result_url(result: StepExecutionResult) -> str:
     if result.citations:
         return result.citations[0].url
     return ""
+
+
+def _preferred_workspace_path(
+    objective: str,
+    result: StepExecutionResult,
+    *,
+    metadata_key: str,
+) -> str:
+    objective_path = _workspace_path_from_objective(objective)
+    if objective_path:
+        return objective_path
+    raw_value = result.metadata.get(metadata_key)
+    if isinstance(raw_value, str) and raw_value.strip():
+        return _normalize_workspace_path(raw_value)
+    if isinstance(raw_value, list):
+        for item in raw_value:
+            normalized = _normalize_workspace_path(str(item))
+            if normalized:
+                return normalized
+    return ""
+
+
+def _normalize_workspace_path(path: str) -> str:
+    normalized = path.strip().replace("\\", "/").lstrip("./")
+    if not normalized:
+        return ""
+    if normalized.lower().startswith("workspace/"):
+        normalized = normalized[len("workspace/") :]
+    return normalized
 
 
 def _has_action_after(
