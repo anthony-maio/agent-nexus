@@ -69,8 +69,34 @@ function createRunState() {
       mode: "manual",
       status: "failed",
       steps: [
-        { id: "s1", action_type: "navigate", status: "completed", instruction: "open docs" },
-        { id: "s2", action_type: "export", status: "failed", instruction: "export report artifact" }
+        {
+          id: "s1",
+          action_type: "read_file",
+          status: "completed",
+          instruction: "{\"path\":\"notes/brief.txt\"}",
+          output_text: "Draft brief",
+          metadata: { file_path: "notes/brief.txt", bytes_read: 11 }
+        },
+        {
+          id: "s2",
+          action_type: "write_file",
+          status: "completed",
+          instruction: "{\"path\":\"reports/draft.txt\",\"content\":\"Final report\"}",
+          output_text: "[sandbox-workspace] Wrote reports/draft.txt",
+          metadata: { file_path: "reports/draft.txt", changed: true, bytes_written: 12 }
+        },
+        {
+          id: "s3",
+          action_type: "execute_code",
+          status: "failed",
+          instruction: "{\"command\":[\"python\",\"-c\",\"print(1)\"]}",
+          error_text: "command exited with status 1",
+          metadata: {
+            command: "python -c print(1)",
+            touched_files: ["reports/generated.txt"],
+            exit_code: 1
+          }
+        }
       ],
       citations: [],
       artifacts: [],
@@ -266,8 +292,11 @@ describe("App run inbox e2e", () => {
       expect(screen.getByText("run-failed")).toBeInTheDocument();
     });
     expect(screen.getByText("Run Transcript")).toBeInTheDocument();
-    expect(screen.getByText("open docs")).toBeInTheDocument();
-    expect(screen.getByText("export report artifact")).toBeInTheDocument();
+    expect(screen.getByText("notes/brief.txt")).toBeInTheDocument();
+    expect(screen.getByText("reports/draft.txt")).toBeInTheDocument();
+    expect(screen.getByText("python -c print(1)")).toBeInTheDocument();
+    expect(screen.getByText("reports/generated.txt")).toBeInTheDocument();
+    expect(screen.getByText("updated")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Retry Failed Steps"));
     await waitFor(() => {

@@ -323,6 +323,38 @@ button:disabled {
   line-height: 1.5;
 }
 
+.transcript-details {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.8rem 0 0;
+}
+
+.transcript-detail {
+  display: grid;
+  grid-template-columns: minmax(4.75rem, auto) 1fr;
+  gap: 0.45rem;
+  align-items: baseline;
+  padding: 0.45rem 0.55rem;
+  border-radius: 12px;
+  background: rgba(14, 109, 114, 0.05);
+}
+
+.transcript-detail dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.transcript-detail dd {
+  margin: 0;
+  color: var(--text);
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 0.88rem;
+  word-break: break-word;
+}
+
 .transcript-output {
   color: var(--accent-strong);
 }

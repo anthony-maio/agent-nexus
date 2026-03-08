@@ -27,6 +27,66 @@ const initialBootstrapForm = {
   acme_email: ""
 };
 
+function parseInstructionPayload(instruction) {
+  if (!instruction) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(instruction);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringifyCommand(command) {
+  if (Array.isArray(command)) {
+    return command.join(" ");
+  }
+  return typeof command === "string" ? command : "";
+}
+
+function buildTranscriptDetails(step) {
+  const metadata = step?.metadata && typeof step.metadata === "object" ? step.metadata : {};
+  const payload = parseInstructionPayload(step?.instruction);
+  const details = [];
+  const filePath =
+    typeof metadata.file_path === "string" && metadata.file_path
+      ? metadata.file_path
+      : typeof payload?.path === "string"
+        ? payload.path
+        : "";
+  const command =
+    typeof metadata.command === "string" && metadata.command
+      ? metadata.command
+      : stringifyCommand(payload?.command);
+  const touchedFiles = Array.isArray(metadata.touched_files)
+    ? metadata.touched_files.filter(Boolean)
+    : [];
+  const files = Array.isArray(metadata.files) ? metadata.files.filter(Boolean) : [];
+
+  if (filePath) {
+    details.push({ label: "File", value: filePath });
+  }
+  if (files.length) {
+    details.push({ label: "Files", value: files.join(", ") });
+  }
+  if (typeof metadata.changed === "boolean") {
+    details.push({ label: "Mutation", value: metadata.changed ? "updated" : "unchanged" });
+  }
+  if (command) {
+    details.push({ label: "Command", value: command });
+  }
+  if (touchedFiles.length) {
+    details.push({ label: "Touched", value: touchedFiles.join(", ") });
+  }
+  if (typeof metadata.exit_code === "number") {
+    details.push({ label: "Exit code", value: String(metadata.exit_code) });
+  }
+
+  return details;
+}
+
 function App() {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
@@ -606,19 +666,35 @@ function App() {
                     <span className="transcript-role">Objective</span>
                     <p>{run.objective}</p>
                   </article>
-                  {(run.steps || []).map((step) => (
-                    <article key={step.id} className={`transcript-bubble assistant ${step.status}`}>
-                      <div className="transcript-meta">
-                        <strong>{step.action_type}</strong>
-                        <span className={`run-status ${step.status}`}>{step.status}</span>
-                      </div>
-                      <p>{step.instruction}</p>
-                      {step.output_text ? (
-                        <p className="transcript-output">{step.output_text}</p>
-                      ) : null}
-                      {step.error_text ? <p className="transcript-error">{step.error_text}</p> : null}
-                    </article>
-                  ))}
+                  {(run.steps || []).map((step) => {
+                    const details = buildTranscriptDetails(step);
+                    return (
+                      <article key={step.id} className={`transcript-bubble assistant ${step.status}`}>
+                        <div className="transcript-meta">
+                          <strong>{step.action_type}</strong>
+                          <span className={`run-status ${step.status}`}>{step.status}</span>
+                        </div>
+                        <p>{step.instruction}</p>
+                        {details.length ? (
+                          <dl className="transcript-details">
+                            {details.map((detail) => (
+                              <div
+                                key={`${step.id}-${detail.label}-${detail.value}`}
+                                className="transcript-detail"
+                              >
+                                <dt>{detail.label}</dt>
+                                <dd>{detail.value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        ) : null}
+                        {step.output_text ? (
+                          <p className="transcript-output">{step.output_text}</p>
+                        ) : null}
+                        {step.error_text ? <p className="transcript-error">{step.error_text}</p> : null}
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
             ) : null}
