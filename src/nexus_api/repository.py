@@ -457,6 +457,26 @@ class SqlRunRepository:
                     "promoted_by": promotion["promoted_by"],
                 }
             )
+        for delegation in self.list_delegations(run_id):
+            events.append(
+                {
+                    "type": "delegate.started",
+                    "timestamp": delegation["created_at"],
+                    "child_run_id": delegation["child_run_id"],
+                    "role": delegation["role"],
+                    "objective": delegation["objective"],
+                }
+            )
+            if delegation["status"] in {"completed", "failed"}:
+                events.append(
+                    {
+                        "type": f"delegate.{delegation['status']}",
+                        "timestamp": delegation["updated_at"],
+                        "child_run_id": delegation["child_run_id"],
+                        "role": delegation["role"],
+                        "summary": delegation["summary"],
+                    }
+                )
         events.sort(key=lambda e: e.get("timestamp") or "")
         return events
 
@@ -485,6 +505,38 @@ class SqlRunRepository:
                 }
             )
         return child_runs
+
+    def list_delegations(self, parent_run_id: str) -> list[dict[str, Any]]:
+        rows = self.session.scalars(
+            select(RunDelegation)
+            .where(RunDelegation.parent_run_id == parent_run_id)
+            .order_by(RunDelegation.created_at.asc(), RunDelegation.id.asc())
+        ).all()
+        return [
+            {
+                "id": delegation.id,
+                "parent_run_id": delegation.parent_run_id,
+                "child_run_id": delegation.child_run_id,
+                "role": delegation.role,
+                "objective": delegation.objective,
+                "status": delegation.status,
+                "summary": delegation.summary,
+                "created_at": delegation.created_at.isoformat() if delegation.created_at else None,
+                "updated_at": delegation.updated_at.isoformat() if delegation.updated_at else None,
+            }
+            for delegation in rows
+        ]
+
+    def update_delegation(self, child_run_id: str, status: str, summary: str = "") -> None:
+        delegation = self.session.scalar(
+            select(RunDelegation).where(RunDelegation.child_run_id == child_run_id)
+        )
+        if delegation is None:
+            return
+        delegation.status = status
+        delegation.summary = summary
+        delegation.updated_at = _utc_now()
+        self.session.flush()
 
     def _delegation_for_child(self, child_run_id: str) -> dict[str, Any] | None:
         delegation = self.session.scalar(

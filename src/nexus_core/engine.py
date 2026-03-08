@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import shutil
 from pathlib import Path
 from typing import Any, Protocol
 
+from pydantic import ValidationError
+
 from nexus_core.adapters import ExecutionAdapter, InteractionAdapter
 from nexus_core.events import RunEventBus
 from nexus_core.models import (
     ApprovalDecision,
+    ArtifactRecord,
+    CitationRecord,
+    DelegationStepPayload,
     RunEvent,
     RunMode,
     RunStatus,
@@ -61,6 +67,10 @@ class EngineRepository(Protocol):
 
     def add_artifacts(self, run_id: str, step_id: str, artifacts: list[dict[str, str]]) -> None: ...
 
+    def list_citations(self, run_id: str) -> list[dict[str, Any]]: ...
+
+    def list_artifacts(self, run_id: str) -> list[dict[str, Any]]: ...
+
     def get_artifact(self, artifact_id: str) -> dict[str, Any] | None: ...
 
     def mark_artifact_promoted(self, artifact_id: str) -> None: ...
@@ -84,6 +94,8 @@ class EngineRepository(Protocol):
     ) -> None: ...
 
     def latest_approval_for_step(self, run_id: str, step_id: str) -> dict[str, Any] | None: ...
+
+    def update_delegation(self, child_run_id: str, status: str, summary: str = "") -> None: ...
 
 
 class RunEngine:
@@ -380,12 +392,15 @@ class RunEngine:
             },
         )
         try:
-            result = await self.execution.execute_step(
-                run_id=run_id,
-                step_id=step_id,
-                action_type=step["action_type"],
-                instruction=step["instruction"],
-            )
+            if str(step["action_type"]).strip().lower() == "delegate":
+                result = await self._execute_delegate_step(step)
+            else:
+                result = await self.execution.execute_step(
+                    run_id=run_id,
+                    step_id=step_id,
+                    action_type=step["action_type"],
+                    instruction=step["instruction"],
+                )
             self.repo.mark_step_status(
                 step_id,
                 StepStatus.COMPLETED.value,
@@ -425,6 +440,74 @@ class RunEngine:
                 {"step_id": step_id, "error": str(exc)},
             )
             return None
+
+    async def _execute_delegate_step(self, step: dict[str, Any]) -> StepExecutionResult:
+        payload = self._parse_delegate_payload(step["instruction"])
+        child_steps = payload.steps
+        if not child_steps:
+            child_steps = await self.adaptive_planner.plan_initial_steps(
+                objective=payload.objective,
+                mode=payload.mode,
+            )
+        child_run = self.repo.create_run(
+            objective=payload.objective,
+            mode=payload.mode.value,
+            steps=child_steps,
+            parent_run_id=step["run_id"],
+            delegation={
+                "role": payload.role,
+                "objective": payload.objective,
+                "status": RunStatus.RUNNING.value,
+                "summary": payload.summary,
+            },
+        )
+        child_run_id = child_run["id"]
+        await self._publish(
+            child_run_id,
+            "run.created",
+            {"objective": payload.objective, "delegated_from": step["run_id"]},
+        )
+        await self._publish(
+            step["run_id"],
+            "delegate.started",
+            {
+                "step_id": step["id"],
+                "child_run_id": child_run_id,
+                "role": payload.role,
+                "objective": payload.objective,
+            },
+        )
+        await self._execute_until_gate(child_run_id)
+        child_run = self.repo.get_run(child_run_id) or child_run
+        child_status = str(child_run.get("status", RunStatus.FAILED.value))
+        output_text = self._delegation_summary(payload, child_run)
+        self.repo.update_delegation(child_run_id, status=child_status, summary=output_text)
+        event_type = (
+            "delegate.completed"
+            if child_status == RunStatus.COMPLETED.value
+            else "delegate.failed"
+        )
+        await self._publish(
+            step["run_id"],
+            event_type,
+            {
+                "step_id": step["id"],
+                "child_run_id": child_run_id,
+                "role": payload.role,
+                "status": child_status,
+                "summary": output_text,
+            },
+        )
+        return StepExecutionResult(
+            output_text=output_text,
+            citations=self._merged_child_citations(child_run_id),
+            artifacts=self._merged_child_artifacts(child_run_id),
+            metadata={
+                "child_run_id": child_run_id,
+                "child_status": child_status,
+                "delegate_role": payload.role,
+            },
+        )
 
     async def _apply_follow_up_planning(
         self,
@@ -472,6 +555,50 @@ class RunEngine:
 
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         await self.events.publish(RunEvent(run_id=run_id, event_type=event_type, payload=payload))
+
+    @staticmethod
+    def _parse_delegate_payload(instruction: str) -> DelegationStepPayload:
+        try:
+            payload = json.loads(instruction)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Delegate steps require JSON instruction payloads.") from exc
+        try:
+            return DelegationStepPayload.model_validate(payload)
+        except ValidationError as exc:
+            raise RuntimeError(f"Invalid delegate payload: {exc}") from exc
+
+    @staticmethod
+    def _delegation_summary(payload: DelegationStepPayload, child_run: dict[str, Any]) -> str:
+        child_status = str(child_run.get("status", "unknown"))
+        if child_status == RunStatus.COMPLETED.value:
+            return payload.summary or f"{payload.role} completed: {payload.objective}"
+        return f"{payload.role} failed: {payload.objective}"
+
+    def _merged_child_citations(self, child_run_id: str) -> list[CitationRecord]:
+        citations: list[CitationRecord] = []
+        for item in self.repo.list_citations(child_run_id):
+            citations.append(
+                CitationRecord(
+                    url=str(item.get("url", "")),
+                    title=str(item.get("title", "")),
+                    snippet=str(item.get("snippet", "")),
+                )
+            )
+        return citations
+
+    def _merged_child_artifacts(self, child_run_id: str) -> list[ArtifactRecord]:
+        artifacts: list[ArtifactRecord] = []
+        for item in self.repo.list_artifacts(child_run_id):
+            artifacts.append(
+                ArtifactRecord(
+                    kind=str(item.get("kind", "text")),
+                    name=str(item.get("name", "")),
+                    rel_path=str(item.get("rel_path", "")),
+                    sandbox_path=str(item.get("sandbox_path", "")),
+                    sha256=str(item.get("sha256", "")),
+                )
+            )
+        return artifacts
 
     @staticmethod
     def _should_plan_follow_up(

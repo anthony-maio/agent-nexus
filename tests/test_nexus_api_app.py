@@ -618,6 +618,104 @@ def test_parent_child_run_persistence_and_delegation_summary(tmp_path: Path) -> 
     assert child_runs[0]["delegation_summary"] == "Collected 3 relevant docs"
 
 
+def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with delegation",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Collect competitor docs",
+                            "mode": "manual",
+                            "summary": "Collected competitor docs",
+                            "steps": [
+                                {
+                                    "action_type": "search_web",
+                                    "instruction": "collect competitor docs",
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "completed"
+    assert run["steps"][0]["status"] == "completed"
+    assert "Collected competitor docs" in run["steps"][0]["output_text"]
+    assert len(run["child_runs"]) == 1
+    assert run["child_runs"][0]["status"] == "completed"
+
+    details = client.get(f"/runs/{run['id']}", headers=headers)
+    assert details.status_code == 200
+    assert len(details.json()["citations"]) >= 1
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    event_types = [item["type"] for item in timeline.json()["timeline"]]
+    assert "delegate.started" in event_types
+    assert "delegate.completed" in event_types
+
+
+def test_delegate_step_records_child_failure_and_parent_continues(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=FailingExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with failing delegate",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Export delegated artifact",
+                            "mode": "manual",
+                            "steps": [
+                                {
+                                    "action_type": "export",
+                                    "instruction": "export delegated artifact",
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "completed"
+    assert run["steps"][0]["status"] == "completed"
+    assert "failed" in run["steps"][0]["output_text"].lower()
+    assert run["steps"][1]["status"] == "completed"
+    assert len(run["child_runs"]) == 1
+    assert run["child_runs"][0]["status"] == "failed"
+    assert run["child_runs"][0]["delegation_status"] == "failed"
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    event_types = [item["type"] for item in timeline.json()["timeline"]]
+    assert "delegate.started" in event_types
+    assert "delegate.failed" in event_types
+
+
 def test_run_adapts_when_extract_returns_no_citations(tmp_path: Path) -> None:
     client = _client(tmp_path, execution_adapter=AdaptiveExecutionAdapter(tmp_path))
     headers = _auth_header(client)

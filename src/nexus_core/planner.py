@@ -48,6 +48,7 @@ _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
         "write_file",
         "edit_file",
         "execute_code",
+        "delegate",
         "navigate",
         "inspect",
         "scroll",
