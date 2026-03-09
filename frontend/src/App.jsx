@@ -27,6 +27,12 @@ const initialBootstrapForm = {
   acme_email: ""
 };
 
+const quickPrompts = [
+  "Research and summarize sources",
+  "Run a delegated research pass",
+  "Collect evidence and draft output"
+];
+
 function parseInstructionPayload(instruction) {
   if (!instruction) {
     return null;
@@ -383,6 +389,7 @@ function App() {
       setStreamRetryNonce(0);
       setRun(data);
       setRunId(data.id);
+      setObjective("");
       await refreshRun(data.id);
       await refreshPending();
       await refreshRuns();
@@ -719,27 +726,57 @@ function App() {
       ) : (
         <main className="layout">
           <section className="card primary">
-            <h2>Assistant</h2>
-            <label>
-              Objective
-              <textarea
-                rows={5}
-                value={objective}
-                onChange={(event) => setObjective(event.target.value)}
-                placeholder="Research and execute a browser-first task..."
-              />
-            </label>
-            <div className="row">
-              <button onClick={createRun}>Create Run</button>
-              <button className="ghost" onClick={() => refreshRun()}>
-                Refresh Run
-              </button>
-              <button className="ghost" onClick={() => refreshRuns()}>
-                Refresh Inbox
-              </button>
-              <button className="ghost" onClick={() => setTraceOpen((open) => !open)}>
-                {traceOpen ? "Hide" : "Show"} Trace
-              </button>
+            <div className="session-header">
+              <div>
+                <h2>Operator Session</h2>
+                <p className="subtle">
+                  Use one message at a time and review live tool output in the transcript.
+                </p>
+              </div>
+              <div className="session-metrics">
+                <span className="metric-pill">
+                  <strong>Stream</strong> {streamState}
+                </span>
+                {run ? (
+                  <span className={`metric-pill status-pill ${run.status}`}>
+                    <strong>Status</strong> {run.status}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            <div className="composer">
+              <label>
+                Message
+                <textarea
+                  rows={4}
+                  value={objective}
+                  onChange={(event) => setObjective(event.target.value)}
+                  placeholder="Ask the operator to investigate, execute, or delegate a task..."
+                />
+              </label>
+              <div className="prompt-row">
+                {quickPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
+                    className="ghost prompt-chip"
+                    onClick={() => setObjective(prompt)}
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+              <div className="row">
+                <button onClick={createRun}>Send objective</button>
+                <button className="ghost" onClick={() => refreshRun()}>
+                  Refresh Run
+                </button>
+                <button className="ghost" onClick={() => refreshRuns()}>
+                  Refresh Inbox
+                </button>
+                <button className="ghost" onClick={() => setTraceOpen((open) => !open)}>
+                  {traceOpen ? "Hide" : "Show"} Trace
+                </button>
+              </div>
             </div>
             {run ? (
               <div className="result">

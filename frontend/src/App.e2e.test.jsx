@@ -526,6 +526,22 @@ describe("App run inbox e2e", () => {
     });
   });
 
+  it("renders chat-first composer controls for new objectives", async () => {
+    const state = createRunState();
+    global.fetch = createFetchMock(state);
+
+    render(<App />);
+    await login();
+
+    expect(screen.getByText("Operator Session")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send objective" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Research and summarize sources" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Research and summarize sources" }));
+    const messageBox = screen.getByLabelText("Message");
+    expect(messageBox.value).toContain("Research and summarize");
+  });
+
   it("reconnects stream after websocket close", async () => {
     const state = createRunState();
     global.fetch = createFetchMock(state);
