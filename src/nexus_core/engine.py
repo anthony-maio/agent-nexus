@@ -27,6 +27,7 @@ from nexus_core.models import (
 )
 from nexus_core.planner import AdaptivePlanner, RuleAdaptivePlanner, apply_follow_up_policy
 from nexus_core.policy import (
+    delegated_output_contract_violations,
     delegated_role_allows_action,
     delegated_workspace_path_allowed,
     is_high_risk_action,
@@ -504,6 +505,14 @@ class RunEngine:
         await self._execute_until_gate(child_run_id)
         child_run = self.repo.get_run(child_run_id) or child_run
         child_status = str(child_run.get("status", RunStatus.FAILED.value))
+        if child_status == RunStatus.COMPLETED.value:
+            contract_violations = self._delegated_output_contract_violations(child_run)
+            if contract_violations:
+                child_status = RunStatus.FAILED.value
+                self.repo.mark_run_status(child_run_id, child_status)
+                child_run = dict(child_run)
+                child_run["status"] = child_status
+                child_run["delegation_failure_reason"] = "; ".join(contract_violations)
         output_text = self._delegation_summary(payload, child_run)
         self.repo.update_delegation(child_run_id, status=child_status, summary=output_text)
         event_type = (
@@ -596,7 +605,30 @@ class RunEngine:
         child_status = str(child_run.get("status", "unknown"))
         if child_status == RunStatus.COMPLETED.value:
             return payload.summary or f"{payload.role} completed: {payload.objective}"
+        failure_reason = RunEngine._delegation_failure_reason(child_run)
+        if failure_reason:
+            return f"{payload.role} failed: {failure_reason}"
         return f"{payload.role} failed: {payload.objective}"
+
+    @staticmethod
+    def _delegation_failure_reason(child_run: dict[str, Any]) -> str:
+        explicit_reason = str(child_run.get("delegation_failure_reason", "")).strip()
+        if explicit_reason:
+            return explicit_reason
+
+        steps = child_run.get("steps")
+        if not isinstance(steps, list):
+            return ""
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("status", "")).strip().lower() != StepStatus.FAILED.value:
+                continue
+            error_text = str(step.get("error_text", "")).strip()
+            if error_text:
+                return error_text
+        return ""
 
     def _merged_child_citations(self, child_run_id: str) -> list[CitationRecord]:
         citations: list[CitationRecord] = []
@@ -657,6 +689,19 @@ class RunEngine:
         )
         return context
 
+    def _delegated_output_contract_violations(self, child_run: dict[str, Any]) -> list[str]:
+        delegation = child_run.get("delegation")
+        context: dict[str, Any] = {}
+        if isinstance(delegation, dict):
+            raw_context = delegation.get("context")
+            if isinstance(raw_context, dict):
+                context = raw_context
+        return delegated_output_contract_violations(
+            context,
+            citations=self.repo.list_citations(str(child_run.get("id", ""))),
+            artifacts=self.repo.list_artifacts(str(child_run.get("id", ""))),
+        )
+
     def _assert_delegated_step_allowed(
         self,
         run: dict[str, Any],
@@ -668,6 +713,8 @@ class RunEngine:
 
         role = str(delegation.get("role", "")).strip().lower()
         action = str(step.get("action_type", "")).strip().lower()
+        if action == "delegate":
+            raise PermissionError("Nested delegation is not allowed for delegated runs.")
         if not delegated_role_allows_action(role, action):
             raise PermissionError(f"Delegated role `{role or 'unknown'}` does not allow action `{action}`.")
 

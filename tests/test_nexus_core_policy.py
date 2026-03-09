@@ -7,6 +7,7 @@ import pytest
 from nexus_core.models import RiskTier
 from nexus_core.policy import (
     delegated_role_allows_action,
+    delegated_output_contract_violations,
     delegated_workspace_path_allowed,
     is_high_risk_action,
     risk_tier_for_action,
@@ -71,3 +72,28 @@ def test_delegate_workspace_paths_reject_out_of_scope_targets() -> None:
     assert not delegated_workspace_path_allowed(["reports/summary.md"], "reports")
     assert not delegated_workspace_path_allowed(["reports"], "notes/private.md")
     assert not delegated_workspace_path_allowed([], "reports/summary.md")
+
+
+def test_delegate_output_contract_accepts_satisfied_requirements() -> None:
+    violations = delegated_output_contract_violations(
+        {
+            "required_citation_count": 1,
+            "required_artifact_kinds": ["text"],
+        },
+        citations=[{"url": "https://example.com"}],
+        artifacts=[{"kind": "text", "name": "report.txt"}],
+    )
+    assert violations == []
+
+
+def test_delegate_output_contract_reports_missing_citations_and_artifacts() -> None:
+    violations = delegated_output_contract_violations(
+        {
+            "required_citation_count": 2,
+            "required_artifact_kinds": ["text", "image"],
+        },
+        citations=[{"url": "https://example.com"}],
+        artifacts=[{"kind": "text", "name": "report.txt"}],
+    )
+    assert "required at least 2 citation(s), received 1" in violations
+    assert "required artifact kind `image` was not produced" in violations

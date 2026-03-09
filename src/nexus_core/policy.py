@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from nexus_core.models import RiskTier
 
 _RESEARCHER_ACTIONS: frozenset[str] = frozenset(
@@ -122,9 +124,67 @@ def delegated_workspace_path_allowed(
     return False
 
 
+def delegated_output_contract_violations(
+    context: dict[str, Any] | None,
+    citations: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    artifacts: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> list[str]:
+    """Return unmet output-contract requirements for a delegated run."""
+    if not isinstance(context, dict):
+        return []
+
+    violations: list[str] = []
+    required_citation_count = _required_citation_count(context.get("required_citation_count"))
+    actual_citation_count = len(citations)
+    if required_citation_count and actual_citation_count < required_citation_count:
+        violations.append(
+            f"required at least {required_citation_count} citation(s), received {actual_citation_count}"
+        )
+
+    required_artifact_kinds = _required_artifact_kinds(context.get("required_artifact_kinds"))
+    if required_artifact_kinds:
+        actual_artifact_kinds = {
+            kind
+            for kind in (_artifact_kind(artifact) for artifact in artifacts)
+            if kind
+        }
+        for kind in required_artifact_kinds:
+            if kind not in actual_artifact_kinds:
+                violations.append(f"required artifact kind `{kind}` was not produced")
+
+    return violations
+
+
 def _normalize_workspace_path(raw_path: str) -> str:
     value = str(raw_path or "").strip().replace("\\", "/")
     while value.startswith("./"):
         value = value[2:]
     value = value.strip("/")
     return value or "."
+
+
+def _required_citation_count(raw_value: Any) -> int:
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return 0
+    return max(value, 0)
+
+
+def _required_artifact_kinds(raw_value: Any) -> list[str]:
+    if not isinstance(raw_value, list):
+        return []
+
+    kinds: list[str] = []
+    seen: set[str] = set()
+    for item in raw_value:
+        normalized = str(item or "").strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        kinds.append(normalized)
+        seen.add(normalized)
+    return kinds
+
+
+def _artifact_kind(artifact: dict[str, Any]) -> str:
+    return str(artifact.get("kind", "") or "").strip().lower()

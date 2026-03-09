@@ -800,6 +800,139 @@ def test_delegate_workspace_reads_stay_within_handoff_scope(tmp_path: Path) -> N
     assert allowed_run["child_runs"][0]["status"] == "completed"
 
 
+def test_delegate_nested_delegation_is_rejected(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with nested delegation attempt",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Attempt nested delegation",
+                            "mode": "manual",
+                            "steps": [
+                                {
+                                    "action_type": "delegate",
+                                    "instruction": json.dumps(
+                                        {
+                                            "role": "researcher",
+                                            "objective": "Nested child",
+                                            "mode": "manual",
+                                            "steps": [
+                                                {
+                                                    "action_type": "search_web",
+                                                    "instruction": "nested child search",
+                                                }
+                                            ],
+                                        }
+                                    ),
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "completed"
+    assert run["steps"][1]["status"] == "completed"
+    assert run["child_runs"][0]["status"] == "failed"
+    assert "nested delegation" in run["steps"][0]["output_text"].lower()
+
+    child_detail = client.get(f"/runs/{run['child_runs'][0]['id']}", headers=headers)
+    assert child_detail.status_code == 200
+    assert "Nested delegation is not allowed" in child_detail.json()["steps"][0]["error_text"]
+
+
+def test_delegate_output_contracts_enforce_required_evidence(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    blocked = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with evidence contract",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Collect evidence with contract",
+                            "mode": "manual",
+                            "context": {
+                                "required_citation_count": 4,
+                                "required_artifact_kinds": ["image"],
+                            },
+                            "steps": [
+                                {
+                                    "action_type": "search_web",
+                                    "instruction": "collect evidence",
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert blocked.status_code == 200
+    blocked_run = blocked.json()
+    assert blocked_run["status"] == "completed"
+    assert blocked_run["steps"][1]["status"] == "completed"
+    assert blocked_run["child_runs"][0]["status"] == "failed"
+    assert "required at least 4 citation" in blocked_run["steps"][0]["output_text"]
+    assert "required artifact kind `image` was not produced" in blocked_run["steps"][0]["output_text"]
+
+    allowed = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with satisfied evidence contract",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Collect evidence with contract",
+                            "mode": "manual",
+                            "context": {
+                                "required_citation_count": 1,
+                                "required_artifact_kinds": ["text"],
+                            },
+                            "steps": [
+                                {
+                                    "action_type": "extract",
+                                    "instruction": "collect evidence",
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ],
+        },
+    )
+    assert allowed.status_code == 200
+    allowed_run = allowed.json()
+    assert allowed_run["child_runs"][0]["status"] == "completed"
+
+
 def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)
