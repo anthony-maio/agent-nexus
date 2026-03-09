@@ -125,7 +125,7 @@ function buildDelegationContextDetails(context) {
   return details;
 }
 
-function TranscriptStep({ step, variant = "assistant" }) {
+function TranscriptStep({ step, variant = "assistant", approval = null, onDecide = null }) {
   const details = buildTranscriptDetails(step);
 
   return (
@@ -150,6 +150,28 @@ function TranscriptStep({ step, variant = "assistant" }) {
       ) : null}
       {step.output_text ? <p className="transcript-output">{step.output_text}</p> : null}
       {step.error_text ? <p className="transcript-error">{step.error_text}</p> : null}
+      {approval && onDecide ? (
+        <div className="approval inline-approval">
+          <p className="approval-heading">
+            <strong>Approval needed</strong>
+            {approval.risk_tier ? (
+              <span className="approval-risk">{`${approval.risk_tier} risk`}</span>
+            ) : null}
+          </p>
+          <p>{approval.instruction}</p>
+          <div className="row">
+            <button onClick={() => onDecide(approval.run_id, approval.step_id, "approve")}>
+              Approve
+            </button>
+            <button
+              className="danger"
+              onClick={() => onDecide(approval.run_id, approval.step_id, "reject")}
+            >
+              Reject
+            </button>
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -183,10 +205,43 @@ function App() {
   const reconnectTimerRef = useRef(null);
 
   const token = session?.token || "";
+  const approvalScopeIds = useMemo(() => {
+    const ids = [];
+    if (run?.id) {
+      ids.push(run.id);
+    } else if (runId) {
+      ids.push(runId);
+    }
+    const childRuns = Array.isArray(run?.child_runs) ? run.child_runs : [];
+    for (const childRun of childRuns) {
+      if (childRun?.id) {
+        ids.push(childRun.id);
+      }
+    }
+    return ids;
+  }, [run, runId]);
   const pendingForCurrent = useMemo(
-    () => pending.filter((item) => !runId || item.run_id === runId),
-    [pending, runId]
+    () => {
+      if (!approvalScopeIds.length) {
+        return pending;
+      }
+      const scope = new Set(approvalScopeIds);
+      return pending.filter((item) => scope.has(item.run_id));
+    },
+    [approvalScopeIds, pending]
   );
+  const pendingByStep = useMemo(() => {
+    const entries = pendingForCurrent.map((item) => [`${item.run_id}:${item.step_id}`, item]);
+    return new Map(entries);
+  }, [pendingForCurrent]);
+  const childRunsById = useMemo(() => {
+    const entries = Array.isArray(run?.child_runs)
+      ? run.child_runs
+          .filter((childRun) => childRun?.id)
+          .map((childRun) => [childRun.id, childRun])
+      : [];
+    return new Map(entries);
+  }, [run]);
   const hasMoreRuns = runs.length < runsTotal;
   const showBootstrap = bootstrapLoading || bootstrapRestarting || bootstrapStatus?.setup_required;
 
@@ -428,17 +483,17 @@ function App() {
     await refreshPending();
   }
 
-  async function decide(stepId, decision) {
-    if (!runId) {
+  async function decide(targetRunId, stepId, decision) {
+    if (!targetRunId) {
       return;
     }
     setError("");
     try {
-      await api(`/runs/${runId}/approvals/${stepId}`, "POST", token, {
+      await api(`/runs/${targetRunId}/approvals/${stepId}`, "POST", token, {
         decision,
         reason: `Decision from web app: ${decision}`
       });
-      await refreshRun(runId);
+      await refreshRun(runId || targetRunId);
       await refreshPending();
       await refreshRuns();
     } catch (err) {
@@ -734,7 +789,12 @@ function App() {
                     <p>{run.objective}</p>
                   </article>
                   {(run.steps || []).map((step) => (
-                    <TranscriptStep key={step.id} step={step} />
+                    <TranscriptStep
+                      key={step.id}
+                      step={step}
+                      approval={pendingByStep.get(`${run.id}:${step.id}`) || null}
+                      onDecide={decide}
+                    />
                   ))}
                   {(run.child_runs || []).map((childRun) => {
                     const contextDetails = buildDelegationContextDetails(childRun.delegation_context);
@@ -774,6 +834,8 @@ function App() {
                                 key={step.id}
                                 step={step}
                                 variant="child-step"
+                                approval={pendingByStep.get(`${childRun.id}:${step.id}`) || null}
+                                onDecide={decide}
                               />
                             ))}
                           </div>
@@ -875,11 +937,21 @@ function App() {
                 <div key={item.step_id} className="approval">
                   <p>
                     <strong>{item.action_type}</strong> ({item.step_id})
+                    {item.run_id !== run?.id && childRunsById.has(item.run_id) ? (
+                      <span className="approval-scope">
+                        {`Delegated ${childRunsById.get(item.run_id)?.delegation_role || "worker"}`}
+                      </span>
+                    ) : null}
                   </p>
                   <p>{item.instruction}</p>
                   <div className="row">
-                    <button onClick={() => decide(item.step_id, "approve")}>Approve</button>
-                    <button className="danger" onClick={() => decide(item.step_id, "reject")}>
+                    <button onClick={() => decide(item.run_id, item.step_id, "approve")}>
+                      Approve
+                    </button>
+                    <button
+                      className="danger"
+                      onClick={() => decide(item.run_id, item.step_id, "reject")}
+                    >
                       Reject
                     </button>
                   </div>

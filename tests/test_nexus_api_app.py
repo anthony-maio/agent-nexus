@@ -1179,6 +1179,51 @@ def test_approving_replanned_child_step_resumes_parent_delegate_run(tmp_path: Pa
     assert parent_run["child_runs"][0]["status"] == "completed"
 
 
+def test_list_runs_counts_delegated_child_pending_approvals(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=DelegateReplanApprovalPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run waiting on delegated child approval",
+            "mode": "supervised",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "operator",
+                            "objective": "Collect references via replanning",
+                            "mode": "manual",
+                            "context": {"workspace_paths": ["reports"]},
+                            "steps": [
+                                {
+                                    "action_type": "navigate",
+                                    "instruction": "open delegated workspace context",
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    listed = client.get("/runs", headers=headers)
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+
+    parent_item = next(item for item in items if item["id"] == run["id"])
+    child_item = next(item for item in items if item["id"] == run["child_runs"][0]["id"])
+    assert parent_item["pending_approval_count"] == 1
+    assert child_item["pending_approval_count"] == 1
+
+
 def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

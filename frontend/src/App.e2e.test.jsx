@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import App from "./App";
 
@@ -58,6 +58,17 @@ function createRunState() {
       created_at: "2026-03-06T12:05:00+00:00",
       updated_at: "2026-03-06T12:06:00+00:00",
       step_count: 3,
+      pending_approval_count: 1,
+      failed_count: 0
+    },
+    {
+      id: "run-delegate",
+      objective: "delegated approval handoff",
+      mode: "supervised",
+      status: "pending_approval",
+      created_at: "2026-03-06T12:08:00+00:00",
+      updated_at: "2026-03-06T12:09:00+00:00",
+      step_count: 2,
       pending_approval_count: 1,
       failed_count: 0
     }
@@ -153,6 +164,62 @@ function createRunState() {
       citations: [],
       artifacts: [],
       approvals: []
+    },
+    "run-delegate": {
+      id: "run-delegate",
+      objective: "delegated approval handoff",
+      mode: "supervised",
+      status: "pending_approval",
+      steps: [
+        {
+          id: "d1",
+          action_type: "delegate",
+          status: "running",
+          instruction:
+            "{\"role\":\"operator\",\"objective\":\"Collect references via replanning\"}"
+        },
+        {
+          id: "d2",
+          action_type: "navigate",
+          status: "pending",
+          instruction: "open follow-up page"
+        }
+      ],
+      citations: [],
+      artifacts: [],
+      approvals: [],
+      child_runs: [
+        {
+          id: "child-pending",
+          objective: "Collect references via replanning",
+          mode: "supervised",
+          status: "pending_approval",
+          parent_run_id: "run-delegate",
+          delegation_role: "operator",
+          delegation_status: "pending_approval",
+          delegation_summary: "operator awaiting delegated approval: Collect references via replanning",
+          delegation_context: {
+            parent_objective: "delegated approval handoff",
+            handoff_note: "Only update reports within the handed-off path",
+            workspace_paths: ["reports/summary.md"],
+            citations: [{ url: "https://example.com/source", title: "Source page" }]
+          },
+          steps: [
+            {
+              id: "child-p1",
+              action_type: "navigate",
+              status: "completed",
+              instruction: "open delegated workspace context"
+            },
+            {
+              id: "child-p2",
+              action_type: "write_file",
+              status: "pending_approval",
+              instruction: "{\"path\":\"reports/summary.md\",\"content\":\"delegated summary\"}"
+            }
+          ]
+        }
+      ]
     }
   };
   return {
@@ -160,11 +227,13 @@ function createRunState() {
     runDetails,
     timelines: {
       "run-failed": [],
-      "run-pending": []
+      "run-pending": [],
+      "run-delegate": []
     },
     citations: {
       "run-failed": [],
-      "run-pending": []
+      "run-pending": [],
+      "run-delegate": []
     },
     pending: [
       {
@@ -172,6 +241,13 @@ function createRunState() {
         step_id: "p2",
         action_type: "type",
         instruction: "enter draft",
+        risk_tier: "high"
+      },
+      {
+        run_id: "child-pending",
+        step_id: "child-p2",
+        action_type: "write_file",
+        instruction: "{\"path\":\"reports/summary.md\",\"content\":\"delegated summary\"}",
         risk_tier: "high"
       }
     ]
@@ -192,6 +268,20 @@ function jsonResponse(payload, status = 200) {
 }
 
 function createFetchMock(state) {
+  const findRun = (runId) => {
+    if (state.runDetails[runId]) {
+      return state.runDetails[runId];
+    }
+    for (const run of Object.values(state.runDetails)) {
+      const childRuns = Array.isArray(run.child_runs) ? run.child_runs : [];
+      const child = childRuns.find((item) => item.id === runId);
+      if (child) {
+        return child;
+      }
+    }
+    return null;
+  };
+
   return vi.fn(async (input, init = {}) => {
     const method = (init.method || "GET").toUpperCase();
     const rawUrl = typeof input === "string" ? input : input.url;
@@ -241,7 +331,8 @@ function createFetchMock(state) {
     const runMatch = path.match(/^\/api\/runs\/([^/]+)$/);
     if (runMatch && method === "GET") {
       const runId = runMatch[1];
-      return jsonResponse(state.runDetails[runId] || {}, state.runDetails[runId] ? 200 : 404);
+      const run = findRun(runId);
+      return jsonResponse(run || {}, run ? 200 : 404);
     }
     const timelineMatch = path.match(/^\/api\/runs\/([^/]+)\/timeline$/);
     if (timelineMatch && method === "GET") {
@@ -272,10 +363,53 @@ function createFetchMock(state) {
     const resumeMatch = path.match(/^\/api\/runs\/([^/]+)\/resume$/);
     if (resumeMatch && method === "POST") {
       const runId = resumeMatch[1];
-      const run = state.runDetails[runId];
+      const run = findRun(runId);
       if (!run) {
         return jsonResponse({ detail: "Run not found" }, 404);
       }
+      return jsonResponse(run);
+    }
+    const approvalMatch = path.match(/^\/api\/runs\/([^/]+)\/approvals\/([^/]+)$/);
+    if (approvalMatch && method === "POST") {
+      const runId = approvalMatch[1];
+      const stepId = approvalMatch[2];
+      const run = findRun(runId);
+      if (!run) {
+        return jsonResponse({ detail: "Run not found" }, 404);
+      }
+      const step = Array.isArray(run.steps) ? run.steps.find((item) => item.id === stepId) : null;
+      if (!step) {
+        return jsonResponse({ detail: "Step not found" }, 404);
+      }
+      step.status = "completed";
+      run.status = "completed";
+      state.pending = state.pending.filter((item) => item.step_id !== stepId);
+
+      if (runId === "child-pending") {
+        const parentRun = state.runDetails["run-delegate"];
+        if (parentRun) {
+          parentRun.status = "completed";
+          parentRun.steps = parentRun.steps.map((item) =>
+            item.id === "d1" || item.id === "d2" ? { ...item, status: "completed" } : item
+          );
+          parentRun.child_runs = parentRun.child_runs.map((childRun) =>
+            childRun.id === runId
+              ? {
+                  ...childRun,
+                  status: "completed",
+                  delegation_status: "completed",
+                  delegation_summary: "operator completed delegated write"
+                }
+              : childRun
+          );
+        }
+        state.runs = state.runs.map((item) =>
+          item.id === "run-delegate"
+            ? { ...item, status: "completed", pending_approval_count: 0 }
+            : item
+        );
+      }
+
       return jsonResponse(run);
     }
 
@@ -351,6 +485,44 @@ describe("App run inbox e2e", () => {
       expect(
         fetchMock.mock.calls.some(([url]) => String(url).includes("/api/runs/run-failed/retry"))
       ).toBe(true);
+    });
+  });
+
+  it("approves delegated child steps inline from the parent transcript", async () => {
+    const state = createRunState();
+    const fetchMock = createFetchMock(state);
+    global.fetch = fetchMock;
+
+    render(<App />);
+    await login();
+
+    fireEvent.click(screen.getByText("delegated approval handoff"));
+    await waitFor(() => {
+      expect(screen.getByText("run-delegate")).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText("Delegated operator").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("operator awaiting delegated approval: Collect references via replanning")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Only update reports within the handed-off path")).toBeInTheDocument();
+    expect(screen.getAllByText("reports/summary.md").length).toBeGreaterThan(0);
+
+    const transcript = screen.getByText("Run Transcript").closest("section");
+    expect(transcript).not.toBeNull();
+    const transcriptScope = within(transcript);
+    expect(transcriptScope.getByText("Approval needed")).toBeInTheDocument();
+    fireEvent.click(transcriptScope.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => String(url).includes("/api/runs/child-pending/approvals/child-p2")
+        )
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.getByText("operator completed delegated write")).toBeInTheDocument();
     });
   });
 

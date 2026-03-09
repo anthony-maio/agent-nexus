@@ -110,6 +110,10 @@ class SqlRunRepository:
         items: list[dict[str, Any]] = []
         for run in rows:
             steps = self.list_steps(run.id)
+            delegated_pending_approvals = self._child_step_count(
+                run.id,
+                StepStatus.PENDING_APPROVAL.value,
+            )
             items.append(
                 {
                     "id": run.id,
@@ -122,13 +126,23 @@ class SqlRunRepository:
                     "step_count": len(steps),
                     "pending_approval_count": sum(
                         1 for step in steps if step["status"] == StepStatus.PENDING_APPROVAL.value
-                    ),
+                    )
+                    + delegated_pending_approvals,
                     "failed_count": sum(
                         1 for step in steps if step["status"] == StepStatus.FAILED.value
                     ),
                 }
             )
         return items, total
+
+    def _child_step_count(self, parent_run_id: str, status: str) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(RunStep)
+            .join(Run, Run.id == RunStep.run_id)
+            .where(Run.parent_run_id == parent_run_id, RunStep.status == status)
+        )
+        return int(self.session.scalar(stmt) or 0)
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         run = self.session.get(Run, run_id)
