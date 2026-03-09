@@ -677,6 +677,129 @@ def test_delegate_step_inherits_parent_context_snapshot(tmp_path: Path) -> None:
     assert child_detail.json()["delegation"]["context"]["parent_run_id"] == run["id"]
 
 
+def test_delegate_researcher_role_blocks_workspace_mutation(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with constrained researcher",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Update workspace file",
+                            "mode": "manual",
+                            "context": {"workspace_paths": ["reports/allowed.md"]},
+                            "steps": [
+                                {
+                                    "action_type": "write_file",
+                                    "instruction": json.dumps(
+                                        {
+                                            "path": "reports/allowed.md",
+                                            "content": "updated by delegate",
+                                        }
+                                    ),
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "completed"
+    assert "failed" in run["steps"][0]["output_text"].lower()
+    assert run["steps"][1]["status"] == "completed"
+    assert run["child_runs"][0]["status"] == "failed"
+
+    child_detail = client.get(f"/runs/{run['child_runs'][0]['id']}", headers=headers)
+    assert child_detail.status_code == 200
+    assert "does not allow action `write_file`" in child_detail.json()["steps"][0]["error_text"]
+
+
+def test_delegate_workspace_reads_stay_within_handoff_scope(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    blocked = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with scoped reader",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Read delegated workspace file",
+                            "mode": "manual",
+                            "context": {"workspace_paths": ["reports/allowed.md"]},
+                            "steps": [
+                                {
+                                    "action_type": "read_file",
+                                    "instruction": json.dumps({"path": "notes/private.md"}),
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ],
+        },
+    )
+    assert blocked.status_code == 200
+    blocked_run = blocked.json()
+    assert blocked_run["child_runs"][0]["status"] == "failed"
+
+    blocked_child = client.get(
+        f"/runs/{blocked_run['child_runs'][0]['id']}",
+        headers=headers,
+    )
+    assert blocked_child.status_code == 200
+    assert "outside delegated workspace scope" in blocked_child.json()["steps"][0]["error_text"]
+
+    allowed = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with allowed reader",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Read delegated workspace file",
+                            "mode": "manual",
+                            "context": {"workspace_paths": ["reports/allowed.md"]},
+                            "steps": [
+                                {
+                                    "action_type": "read_file",
+                                    "instruction": json.dumps({"path": "reports/allowed.md"}),
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ],
+        },
+    )
+    assert allowed.status_code == 200
+    allowed_run = allowed.json()
+    assert allowed_run["child_runs"][0]["status"] == "completed"
+
+
 def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

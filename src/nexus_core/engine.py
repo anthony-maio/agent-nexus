@@ -26,7 +26,11 @@ from nexus_core.models import (
     StepStatus,
 )
 from nexus_core.planner import AdaptivePlanner, RuleAdaptivePlanner, apply_follow_up_policy
-from nexus_core.policy import is_high_risk_action
+from nexus_core.policy import (
+    delegated_role_allows_action,
+    delegated_workspace_path_allowed,
+    is_high_risk_action,
+)
 
 log = logging.getLogger(__name__)
 
@@ -348,6 +352,22 @@ class RunEngine:
                 await self._publish(run_id, "run.completed", {})
                 return
 
+            try:
+                self._assert_delegated_step_allowed(run, next_step)
+            except PermissionError as exc:
+                self.repo.mark_step_status(
+                    next_step["id"],
+                    StepStatus.FAILED.value,
+                    error_text=str(exc),
+                )
+                await self._publish(
+                    run_id,
+                    "step.failed",
+                    {"step_id": next_step["id"], "error": str(exc)},
+                )
+                await self._mark_run_failed(run_id, next_step["id"])
+                return
+
             if mode == RunMode.SUPERVISED and is_high_risk_action(
                 next_step["action_type"], next_step["instruction"]
             ):
@@ -381,17 +401,20 @@ class RunEngine:
     async def _execute_step(self, step: dict[str, Any]) -> StepExecutionResult | None:
         run_id = step["run_id"]
         step_id = step["id"]
-        self.repo.mark_step_status(step_id, StepStatus.RUNNING.value)
-        await self._publish(
-            run_id,
-            "step.running",
-            {
-                "step_id": step_id,
-                "action_type": step["action_type"],
-                "instruction": step["instruction"],
-            },
-        )
         try:
+            run = self.repo.get_run(run_id)
+            if run is not None:
+                self._assert_delegated_step_allowed(run, step)
+            self.repo.mark_step_status(step_id, StepStatus.RUNNING.value)
+            await self._publish(
+                run_id,
+                "step.running",
+                {
+                    "step_id": step_id,
+                    "action_type": step["action_type"],
+                    "instruction": step["instruction"],
+                },
+            )
             if str(step["action_type"]).strip().lower() == "delegate":
                 result = await self._execute_delegate_step(step)
             else:
@@ -633,6 +656,44 @@ class RunEngine:
             ],
         )
         return context
+
+    def _assert_delegated_step_allowed(
+        self,
+        run: dict[str, Any],
+        step: dict[str, Any],
+    ) -> None:
+        delegation = run.get("delegation")
+        if not isinstance(delegation, dict) or not delegation:
+            return
+
+        role = str(delegation.get("role", "")).strip().lower()
+        action = str(step.get("action_type", "")).strip().lower()
+        if not delegated_role_allows_action(role, action):
+            raise PermissionError(f"Delegated role `{role or 'unknown'}` does not allow action `{action}`.")
+
+        if action in {"list_files", "read_file", "write_file", "edit_file"}:
+            context = delegation.get("context")
+            workspace_paths = []
+            if isinstance(context, dict):
+                raw_paths = context.get("workspace_paths")
+                if isinstance(raw_paths, list):
+                    workspace_paths = [str(path) for path in raw_paths]
+            target_path = self._delegated_workspace_target(step.get("instruction", ""))
+            if not delegated_workspace_path_allowed(workspace_paths, target_path):
+                raise PermissionError(
+                    f"Delegated workspace path `{target_path}` is outside delegated workspace scope."
+                )
+
+    @staticmethod
+    def _delegated_workspace_target(instruction: str) -> str:
+        try:
+            payload = json.loads(instruction)
+        except json.JSONDecodeError:
+            return "."
+        if not isinstance(payload, dict):
+            return "."
+        target_path = str(payload.get("path") or payload.get("file") or ".").strip()
+        return target_path or "."
 
     @staticmethod
     def _should_plan_follow_up(

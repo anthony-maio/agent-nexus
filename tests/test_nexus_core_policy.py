@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from nexus_core.models import RiskTier
-from nexus_core.policy import is_high_risk_action, risk_tier_for_action
+from nexus_core.policy import (
+    delegated_role_allows_action,
+    delegated_workspace_path_allowed,
+    is_high_risk_action,
+    risk_tier_for_action,
+)
 
 
 def test_type_actions_are_treated_as_high_risk() -> None:
@@ -28,3 +33,41 @@ def test_workspace_read_actions_are_low_risk(action_type: str) -> None:
 def test_workspace_mutation_and_code_actions_are_high_risk(action_type: str) -> None:
     assert risk_tier_for_action(action_type) == RiskTier.HIGH
     assert is_high_risk_action(action_type)
+
+
+@pytest.mark.parametrize(
+    ("role", "action_type"),
+    [
+        ("researcher", "search_web"),
+        ("researcher", "read_file"),
+        ("operator", "write_file"),
+        ("operator", "type"),
+    ],
+)
+def test_delegate_roles_allow_expected_actions(role: str, action_type: str) -> None:
+    assert delegated_role_allows_action(role, action_type)
+
+
+@pytest.mark.parametrize(
+    ("role", "action_type"),
+    [
+        ("researcher", "write_file"),
+        ("researcher", "edit_file"),
+        ("researcher", "execute_code"),
+        ("unknown", "read_file"),
+    ],
+)
+def test_delegate_roles_reject_disallowed_actions(role: str, action_type: str) -> None:
+    assert not delegated_role_allows_action(role, action_type)
+
+
+def test_delegate_workspace_paths_allow_exact_or_nested_matches() -> None:
+    assert delegated_workspace_path_allowed(["reports"], "reports")
+    assert delegated_workspace_path_allowed(["reports"], "reports/summary.md")
+    assert delegated_workspace_path_allowed(["reports/summary.md"], "reports/summary.md")
+
+
+def test_delegate_workspace_paths_reject_out_of_scope_targets() -> None:
+    assert not delegated_workspace_path_allowed(["reports/summary.md"], "reports")
+    assert not delegated_workspace_path_allowed(["reports"], "notes/private.md")
+    assert not delegated_workspace_path_allowed([], "reports/summary.md")
