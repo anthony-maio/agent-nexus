@@ -579,6 +579,52 @@ button:disabled {
   border-bottom: 1px solid rgba(39, 51, 68, 0.08);
 }
 
+.timeline-entry {
+  padding: 0.75rem 0.8rem;
+  border-radius: 14px;
+  border: 1px solid rgba(39, 51, 68, 0.1);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.timeline-entry.info {
+  border-color: rgba(14, 109, 114, 0.22);
+}
+
+.timeline-entry.success {
+  border-color: rgba(14, 109, 114, 0.32);
+  background: rgba(217, 240, 235, 0.48);
+}
+
+.timeline-entry.pending {
+  border-color: rgba(176, 95, 57, 0.28);
+  background: rgba(251, 236, 226, 0.6);
+}
+
+.timeline-entry.danger {
+  border-color: rgba(159, 43, 29, 0.28);
+  background: rgba(251, 230, 223, 0.62);
+}
+
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.timeline-action {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.timeline-detail {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .timeline li:last-child,
 .stack-list li:last-child {
   border-bottom: 0;

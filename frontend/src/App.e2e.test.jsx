@@ -228,7 +228,22 @@ function createRunState() {
     timelines: {
       "run-failed": [],
       "run-pending": [],
-      "run-delegate": []
+      "run-delegate": [
+        {
+          type: "delegate.started",
+          timestamp: "2026-03-06T12:08:00+00:00",
+          child_run_id: "child-pending",
+          role: "operator",
+          objective: "Collect references via replanning"
+        },
+        {
+          type: "step.pending_approval",
+          timestamp: "2026-03-06T12:08:35+00:00",
+          step_id: "child-p2",
+          action_type: "write_file",
+          instruction: "{\"path\":\"reports/summary.md\",\"content\":\"delegated summary\"}"
+        }
+      ]
     },
     citations: {
       "run-failed": [],
@@ -540,6 +555,25 @@ describe("App run inbox e2e", () => {
     fireEvent.click(screen.getByRole("button", { name: "Research and summarize sources" }));
     const messageBox = screen.getByLabelText("Message");
     expect(messageBox.value).toContain("Research and summarize");
+  });
+
+  it("renders readable lifecycle labels in action timeline", async () => {
+    const state = createRunState();
+    global.fetch = createFetchMock(state);
+
+    render(<App />);
+    await login();
+
+    fireEvent.click(screen.getByText("delegated approval handoff"));
+    await waitFor(() => {
+      expect(screen.getByText("run-delegate")).toBeInTheDocument();
+    });
+
+    const timelineCard = screen.getByText("Action Timeline").closest("section");
+    expect(timelineCard).not.toBeNull();
+    const timeline = within(timelineCard);
+    expect(timeline.getByText("Delegation started")).toBeInTheDocument();
+    expect(timeline.getByText("Awaiting approval")).toBeInTheDocument();
   });
 
   it("reconnects stream after websocket close", async () => {

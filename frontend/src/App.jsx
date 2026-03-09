@@ -131,6 +131,84 @@ function buildDelegationContextDetails(context) {
   return details;
 }
 
+function summarizeTimelineEvent(event) {
+  const type = typeof event?.type === "string" ? event.type : "";
+  const instruction =
+    typeof event?.instruction === "string" ? event.instruction.trim() : "";
+  if (type === "delegate.started") {
+    const role = typeof event?.role === "string" && event.role ? event.role : "worker";
+    const objective =
+      typeof event?.objective === "string" && event.objective ? event.objective : "delegated task";
+    return {
+      label: "Delegation started",
+      tone: "info",
+      detail: `Delegated ${role} started ${objective}.`
+    };
+  }
+  if (type === "delegate.completed") {
+    const summary = typeof event?.summary === "string" ? event.summary : "";
+    return {
+      label: "Delegation completed",
+      tone: "success",
+      detail: summary || "Delegated run completed."
+    };
+  }
+  if (type === "delegate.failed") {
+    const summary = typeof event?.summary === "string" ? event.summary : "";
+    return {
+      label: "Delegation failed",
+      tone: "danger",
+      detail: summary || "Delegated run failed."
+    };
+  }
+  if (type === "approval.recorded") {
+    const decision = typeof event?.decision === "string" ? event.decision : "recorded";
+    const reason = typeof event?.reason === "string" ? event.reason : "";
+    return {
+      label: `Approval ${decision}`,
+      tone: decision === "reject" ? "danger" : "success",
+      detail: reason || "Approval decision recorded."
+    };
+  }
+  if (type === "artifact.promoted") {
+    const target = typeof event?.target_path === "string" ? event.target_path : "";
+    return {
+      label: "Artifact promoted",
+      tone: "success",
+      detail: target || "Artifact moved to a promoted destination."
+    };
+  }
+  if (type.startsWith("step.")) {
+    const status = type.slice("step.".length);
+    const labels = {
+      completed: "Step completed",
+      running: "Step running",
+      pending: "Step queued",
+      pending_approval: "Awaiting approval",
+      failed: "Step failed",
+      rejected: "Step rejected"
+    };
+    const tones = {
+      completed: "success",
+      running: "info",
+      pending: "muted",
+      pending_approval: "pending",
+      failed: "danger",
+      rejected: "danger"
+    };
+    return {
+      label: labels[status] || type,
+      tone: tones[status] || "muted",
+      detail: instruction || "Step updated."
+    };
+  }
+  return {
+    label: type || "Event",
+    tone: "muted",
+    detail: instruction || "Runtime event recorded."
+  };
+}
+
 function TranscriptStep({ step, variant = "assistant", approval = null, onDecide = null }) {
   const details = buildTranscriptDetails(step);
 
@@ -1006,13 +1084,19 @@ function App() {
             <p className="subtle">No events yet.</p>
           ) : (
             <ul className="timeline">
-              {timeline.map((item, index) => (
-                <li key={`${item.type}-${index}`}>
-                  <code>{item.timestamp || "n/a"}</code>
-                  <strong>{item.type}</strong>
-                  {item.action_type ? <span>{item.action_type}</span> : null}
-                </li>
-              ))}
+              {timeline.map((item, index) => {
+                const summary = summarizeTimelineEvent(item);
+                return (
+                  <li key={`${item.type}-${index}`} className={`timeline-entry ${summary.tone}`}>
+                    <code>{item.timestamp || "n/a"}</code>
+                    <div className="timeline-head">
+                      <strong>{summary.label}</strong>
+                      {item.action_type ? <span className="timeline-action">{item.action_type}</span> : null}
+                    </div>
+                    <p className="timeline-detail">{summary.detail}</p>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>
