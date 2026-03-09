@@ -1231,6 +1231,53 @@ def test_list_runs_counts_delegated_child_pending_approvals(tmp_path: Path) -> N
     assert child_item["pending_approval_count"] == 1
 
 
+def test_timeline_surfaces_delegate_pending_approval_state(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=DelegateReplanApprovalPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run waiting on delegated child approval",
+            "mode": "supervised",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "operator",
+                            "objective": "Collect references via replanning",
+                            "mode": "manual",
+                            "context": {"workspace_paths": ["reports"]},
+                            "steps": [
+                                {
+                                    "action_type": "navigate",
+                                    "instruction": "open delegated workspace context",
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "pending_approval"
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    events = timeline.json()["timeline"]
+    event_types = [item["type"] for item in events]
+    assert "delegate.started" in event_types
+    assert "delegate.pending_approval" in event_types
+
+    pending_event = next(item for item in events if item["type"] == "delegate.pending_approval")
+    assert "awaiting delegated approval" in pending_event["summary"]
+
+
 def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

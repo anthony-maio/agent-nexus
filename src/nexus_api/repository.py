@@ -486,10 +486,11 @@ class SqlRunRepository:
                     "objective": delegation["objective"],
                 }
             )
-            if delegation["status"] in {"completed", "failed"}:
+            status = str(delegation["status"] or "").strip().lower()
+            if status and status != "pending":
                 events.append(
                     {
-                        "type": f"delegate.{delegation['status']}",
+                        "type": f"delegate.{status}",
                         "timestamp": delegation["updated_at"],
                         "child_run_id": delegation["child_run_id"],
                         "role": delegation["role"],
