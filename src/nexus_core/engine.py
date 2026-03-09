@@ -188,6 +188,9 @@ class RunEngine:
                 "Approval rejected",
             )
             await self._publish(run_id, "run.paused", {"step_id": step_id, "reason": reason})
+            child_run = self.repo.get_run(run_id)
+            if child_run is not None:
+                await self._pause_waiting_parent_for_child(child_run, reason)
             return self.repo.get_run(run_id) or {}
 
         self.repo.mark_run_status(run_id, RunStatus.RUNNING.value)
@@ -196,9 +199,14 @@ class RunEngine:
         if result is None:
             await self._mark_run_failed(run_id, step_id)
             return self.repo.get_run(run_id) or {}
+        if self._is_deferred_delegate_result(result):
+            return self.repo.get_run(run_id) or {}
         if run is not None:
             await self._apply_follow_up_planning(run, step, result)
         await self._execute_until_gate(run_id)
+        child_run = self.repo.get_run(run_id)
+        if child_run is not None:
+            await self._resume_waiting_parent_for_child(child_run)
         return self.repo.get_run(run_id) or {}
 
     async def promote_artifact(
@@ -396,6 +404,8 @@ class RunEngine:
             if result is None:
                 await self._mark_run_failed(run_id, next_step["id"])
                 return
+            if self._is_deferred_delegate_result(result):
+                return
 
             await self._apply_follow_up_planning(run, next_step, result)
 
@@ -425,6 +435,9 @@ class RunEngine:
                     action_type=step["action_type"],
                     instruction=step["instruction"],
                 )
+            if self._is_deferred_delegate_result(result):
+                self.repo.mark_run_status(run_id, RunStatus.PENDING_APPROVAL.value)
+                return result
             self.repo.mark_step_status(
                 step_id,
                 StepStatus.COMPLETED.value,
@@ -468,14 +481,16 @@ class RunEngine:
     async def _execute_delegate_step(self, step: dict[str, Any]) -> StepExecutionResult:
         payload = self._parse_delegate_payload(step["instruction"])
         child_steps = payload.steps
+        child_mode = self._delegated_child_mode(step["run_id"], payload, child_steps)
         if not child_steps:
             child_steps = await self.adaptive_planner.plan_initial_steps(
                 objective=payload.objective,
-                mode=payload.mode,
+                mode=child_mode,
             )
+            child_mode = self._delegated_child_mode(step["run_id"], payload, child_steps)
         child_run = self.repo.create_run(
             objective=payload.objective,
-            mode=payload.mode.value,
+            mode=child_mode.value,
             steps=child_steps,
             parent_run_id=step["run_id"],
             delegation={
@@ -505,42 +520,29 @@ class RunEngine:
         await self._execute_until_gate(child_run_id)
         child_run = self.repo.get_run(child_run_id) or child_run
         child_status = str(child_run.get("status", RunStatus.FAILED.value))
-        if child_status == RunStatus.COMPLETED.value:
-            contract_violations = self._delegated_output_contract_violations(child_run)
-            if contract_violations:
-                child_status = RunStatus.FAILED.value
-                self.repo.mark_run_status(child_run_id, child_status)
-                child_run = dict(child_run)
-                child_run["status"] = child_status
-                child_run["delegation_failure_reason"] = "; ".join(contract_violations)
-        output_text = self._delegation_summary(payload, child_run)
-        self.repo.update_delegation(child_run_id, status=child_status, summary=output_text)
-        event_type = (
-            "delegate.completed"
-            if child_status == RunStatus.COMPLETED.value
-            else "delegate.failed"
-        )
-        await self._publish(
-            step["run_id"],
-            event_type,
-            {
-                "step_id": step["id"],
-                "child_run_id": child_run_id,
-                "role": payload.role,
-                "status": child_status,
-                "summary": output_text,
-            },
-        )
-        return StepExecutionResult(
-            output_text=output_text,
-            citations=self._merged_child_citations(child_run_id),
-            artifacts=self._merged_child_artifacts(child_run_id),
-            metadata={
-                "child_run_id": child_run_id,
-                "child_status": child_status,
-                "delegate_role": payload.role,
-            },
-        )
+        if child_status == RunStatus.PENDING_APPROVAL.value:
+            waiting_summary = f"{payload.role} awaiting delegated approval: {payload.objective}"
+            self.repo.update_delegation(child_run_id, status=child_status, summary=waiting_summary)
+            await self._publish(
+                step["run_id"],
+                "delegate.pending_approval",
+                {
+                    "step_id": step["id"],
+                    "child_run_id": child_run_id,
+                    "role": payload.role,
+                    "status": child_status,
+                    "summary": waiting_summary,
+                },
+            )
+            return StepExecutionResult(
+                metadata={
+                    "child_run_id": child_run_id,
+                    "child_status": child_status,
+                    "delegate_role": payload.role,
+                    "defer_completion": True,
+                }
+            )
+        return await self._finalize_delegate_step(step, payload, child_run)
 
     async def _apply_follow_up_planning(
         self,
@@ -572,6 +574,11 @@ class RunEngine:
             return
 
         self.repo.insert_steps_after(completed_step["id"], follow_up_steps)
+        gated_follow_up_step = self._delegated_high_risk_follow_up_step(
+            run,
+            completed_step,
+            follow_up_steps,
+        )
         await self._publish(
             run["id"],
             "run.replanned",
@@ -580,6 +587,25 @@ class RunEngine:
                 "inserted_steps": [s.model_dump() for s in follow_up_steps],
             },
         )
+        if gated_follow_up_step is not None:
+            self.repo.mark_step_status(gated_follow_up_step["id"], StepStatus.PENDING_APPROVAL.value)
+            self.repo.mark_run_status(run["id"], RunStatus.PENDING_APPROVAL.value)
+            summary = f"{gated_follow_up_step['action_type']}: {gated_follow_up_step['instruction'][:120]}"
+            await self.interaction.request_approval(
+                run_id=run["id"],
+                step_id=gated_follow_up_step["id"],
+                summary=summary,
+                action_type=gated_follow_up_step["action_type"],
+            )
+            await self._publish(
+                run["id"],
+                "step.pending_approval",
+                {
+                    "step_id": gated_follow_up_step["id"],
+                    "action_type": gated_follow_up_step["action_type"],
+                    "instruction": gated_follow_up_step["instruction"],
+                },
+            )
 
     async def _mark_run_failed(self, run_id: str, step_id: str) -> None:
         self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
@@ -665,6 +691,7 @@ class RunEngine:
         context = dict(explicit_context)
         context.setdefault("parent_run_id", parent_run_id)
         context.setdefault("parent_objective", str(run.get("objective", "")))
+        context.setdefault("parent_mode", str(run.get("mode", "")))
         context.setdefault(
             "citations",
             [
@@ -701,6 +728,200 @@ class RunEngine:
             citations=self.repo.list_citations(str(child_run.get("id", ""))),
             artifacts=self.repo.list_artifacts(str(child_run.get("id", ""))),
         )
+
+    async def _finalize_delegate_step(
+        self,
+        parent_step: dict[str, Any],
+        payload: DelegationStepPayload,
+        child_run: dict[str, Any],
+    ) -> StepExecutionResult:
+        child_run_id = str(child_run.get("id", ""))
+        child_status = str(child_run.get("status", RunStatus.FAILED.value))
+        if child_status == RunStatus.COMPLETED.value:
+            contract_violations = self._delegated_output_contract_violations(child_run)
+            if contract_violations:
+                child_status = RunStatus.FAILED.value
+                self.repo.mark_run_status(child_run_id, child_status)
+                child_run = dict(child_run)
+                child_run["status"] = child_status
+                child_run["delegation_failure_reason"] = "; ".join(contract_violations)
+        output_text = self._delegation_summary(payload, child_run)
+        self.repo.update_delegation(child_run_id, status=child_status, summary=output_text)
+        event_type = (
+            "delegate.completed"
+            if child_status == RunStatus.COMPLETED.value
+            else "delegate.failed"
+        )
+        await self._publish(
+            parent_step["run_id"],
+            event_type,
+            {
+                "step_id": parent_step["id"],
+                "child_run_id": child_run_id,
+                "role": payload.role,
+                "status": child_status,
+                "summary": output_text,
+            },
+        )
+        return StepExecutionResult(
+            output_text=output_text,
+            citations=self._merged_child_citations(child_run_id),
+            artifacts=self._merged_child_artifacts(child_run_id),
+            metadata={
+                "child_run_id": child_run_id,
+                "child_status": child_status,
+                "delegate_role": payload.role,
+            },
+        )
+
+    @staticmethod
+    def _is_deferred_delegate_result(result: StepExecutionResult) -> bool:
+        return bool(result.metadata.get("defer_completion"))
+
+    def _delegated_child_mode(
+        self,
+        parent_run_id: str,
+        payload: DelegationStepPayload,
+        child_steps: list[StepDefinition],
+    ) -> RunMode:
+        parent_run = self.repo.get_run(parent_run_id) or {}
+        parent_mode = str(parent_run.get("mode", "")).strip().lower()
+        if parent_mode != RunMode.SUPERVISED.value:
+            return payload.mode
+        if any(is_high_risk_action(step.action_type, step.instruction) for step in child_steps):
+            return payload.mode
+        return RunMode.SUPERVISED
+
+    def _delegated_high_risk_follow_up_step(
+        self,
+        run: dict[str, Any],
+        completed_step: dict[str, Any],
+        follow_up_steps: list[StepDefinition],
+    ) -> dict[str, Any] | None:
+        delegation = run.get("delegation")
+        if not isinstance(delegation, dict) or not delegation:
+            return None
+
+        context = delegation.get("context")
+        if not isinstance(context, dict):
+            return None
+        if str(context.get("parent_mode", "")).strip().lower() != RunMode.SUPERVISED.value:
+            return None
+
+        candidate_defs = [
+            step
+            for step in follow_up_steps
+            if is_high_risk_action(step.action_type, step.instruction)
+        ]
+        if not candidate_defs:
+            return None
+
+        completed_index = int(completed_step.get("step_index", -1))
+        pending_steps = [
+            step
+            for step in self.repo.list_steps(run["id"])
+            if int(step.get("step_index", -1)) > completed_index
+            and str(step.get("status", "")).strip().lower() == StepStatus.PENDING.value
+        ]
+        for candidate in candidate_defs:
+            for step in pending_steps:
+                if step.get("action_type") != candidate.action_type:
+                    continue
+                if step.get("instruction") != candidate.instruction:
+                    continue
+                return step
+        return None
+
+    async def _resume_waiting_parent_for_child(self, child_run: dict[str, Any]) -> None:
+        parent_run_id = str(child_run.get("parent_run_id", "")).strip()
+        if not parent_run_id:
+            return
+
+        child_status = str(child_run.get("status", "")).strip().lower()
+        if child_status in {
+            RunStatus.PENDING_APPROVAL.value,
+            RunStatus.PAUSED.value,
+            RunStatus.RUNNING.value,
+        }:
+            return
+
+        parent_run = self.repo.get_run(parent_run_id)
+        if parent_run is None:
+            return
+        waiting_step = self._waiting_parent_delegate_step(parent_run)
+        if waiting_step is None:
+            return
+
+        payload = self._parse_delegate_payload(waiting_step["instruction"])
+        result = await self._finalize_delegate_step(waiting_step, payload, child_run)
+        self.repo.mark_step_status(waiting_step["id"], StepStatus.COMPLETED.value, output_text=result.output_text)
+        self.repo.add_citations(
+            run_id=parent_run_id,
+            step_id=waiting_step["id"],
+            citations=[c.model_dump() for c in result.citations],
+        )
+        self.repo.add_artifacts(
+            run_id=parent_run_id,
+            step_id=waiting_step["id"],
+            artifacts=[a.model_dump() for a in result.artifacts],
+        )
+        await self._publish(
+            parent_run_id,
+            "step.completed",
+            {
+                "step_id": waiting_step["id"],
+                "output_text": result.output_text[:500],
+                "citations": len(result.citations),
+                "artifacts": len(result.artifacts),
+            },
+        )
+        parent_run = self.repo.get_run(parent_run_id)
+        if parent_run is None:
+            return
+        await self._apply_follow_up_planning(parent_run, waiting_step, result)
+        await self._execute_until_gate(parent_run_id)
+
+    async def _pause_waiting_parent_for_child(self, child_run: dict[str, Any], reason: str) -> None:
+        parent_run_id = str(child_run.get("parent_run_id", "")).strip()
+        if not parent_run_id:
+            return
+
+        parent_run = self.repo.get_run(parent_run_id)
+        if parent_run is None:
+            return
+        waiting_step = self._waiting_parent_delegate_step(parent_run)
+        if waiting_step is None:
+            return
+
+        message = reason or "Delegated child approval rejected."
+        self.repo.mark_step_status(waiting_step["id"], StepStatus.REJECTED.value, error_text=message)
+        self.repo.mark_run_status(parent_run_id, RunStatus.PAUSED.value)
+        await self._publish(
+            parent_run_id,
+            "delegate.failed",
+            {
+                "step_id": waiting_step["id"],
+                "child_run_id": child_run["id"],
+                "role": str(child_run.get("delegation", {}).get("role", "worker")),
+                "status": RunStatus.PAUSED.value,
+                "summary": message,
+            },
+        )
+        await self._publish(parent_run_id, "run.paused", {"step_id": waiting_step["id"], "reason": message})
+
+    @staticmethod
+    def _waiting_parent_delegate_step(parent_run: dict[str, Any]) -> dict[str, Any] | None:
+        steps = parent_run.get("steps")
+        if not isinstance(steps, list):
+            return None
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("action_type", "")).strip().lower() != "delegate":
+                continue
+            if str(step.get("status", "")).strip().lower() == StepStatus.RUNNING.value:
+                return step
+        return None
 
     def _assert_delegated_step_allowed(
         self,

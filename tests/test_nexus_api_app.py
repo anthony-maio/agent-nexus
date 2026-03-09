@@ -117,6 +117,30 @@ class ModelSuggestionPlanner:
         ]
 
 
+class DelegateReplanApprovalPlanner:
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, str],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, str]],
+    ) -> list[StepDefinition]:
+        _ = result, existing_steps
+        if (
+            objective == "Collect references via replanning"
+            and completed_step["action_type"] == "navigate"
+        ):
+            return [
+                StepDefinition(
+                    action_type="write_file",
+                    instruction=json.dumps(
+                        {"path": "reports/summary.md", "content": "delegated replan"}
+                    ),
+                )
+            ]
+        return []
+
+
 class WorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
     async def execute_step(
         self, run_id: str, step_id: str, action_type: str, instruction: str
@@ -1030,14 +1054,129 @@ def test_supervised_delegate_executes_when_child_plan_is_low_risk(tmp_path: Path
     )
     assert create.status_code == 200
     run = create.json()
-    assert run["steps"][0]["status"] == "completed"
-    assert run["child_runs"][0]["status"] == "completed"
+    assert run["status"] == "pending_approval"
+    assert run["steps"][0]["status"] == "running"
+    assert run["child_runs"][0]["status"] == "pending_approval"
     pending = client.get("/approvals/pending", headers=headers)
     assert pending.status_code == 200
     assert not any(
         item["run_id"] == run["id"] and item["action_type"] == "delegate"
         for item in pending.json()["items"]
     )
+
+
+def test_supervised_delegate_replan_gates_child_approval_and_pauses_parent(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=DelegateReplanApprovalPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run waiting on delegated child approval",
+            "mode": "supervised",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "operator",
+                            "objective": "Collect references via replanning",
+                            "mode": "manual",
+                            "context": {"workspace_paths": ["reports"]},
+                            "steps": [
+                                {
+                                    "action_type": "navigate",
+                                    "instruction": "open delegated workspace context",
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "pending_approval"
+    assert run["steps"][0]["status"] == "running"
+    assert run["steps"][1]["status"] == "pending"
+    assert run["child_runs"][0]["status"] == "pending_approval"
+
+    child_id = run["child_runs"][0]["id"]
+    child_detail = client.get(f"/runs/{child_id}", headers=headers)
+    assert child_detail.status_code == 200
+    child_run = child_detail.json()
+    assert child_run["steps"][0]["status"] == "completed"
+    assert child_run["steps"][1]["action_type"] == "write_file"
+    assert child_run["steps"][1]["status"] == "pending_approval"
+
+    pending = client.get("/approvals/pending", headers=headers)
+    assert pending.status_code == 200
+    items = pending.json()["items"]
+    assert len(items) == 1
+    assert items[0]["run_id"] == child_id
+    assert items[0]["action_type"] == "write_file"
+
+
+def test_approving_replanned_child_step_resumes_parent_delegate_run(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=DelegateReplanApprovalPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run waiting on delegated child approval",
+            "mode": "supervised",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "operator",
+                            "objective": "Collect references via replanning",
+                            "mode": "manual",
+                            "context": {"workspace_paths": ["reports"]},
+                            "steps": [
+                                {
+                                    "action_type": "navigate",
+                                    "instruction": "open delegated workspace context",
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    child_id = run["child_runs"][0]["id"]
+
+    pending = client.get("/approvals/pending", headers=headers)
+    assert pending.status_code == 200
+    pending_item = pending.json()["items"][0]
+    assert pending_item["run_id"] == child_id
+    assert pending_item["action_type"] == "write_file"
+
+    approve = client.post(
+        f"/runs/{child_id}/approvals/{pending_item['step_id']}",
+        headers=headers,
+        json={"decision": "approve", "reason": "allow delegated follow-up write"},
+    )
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "completed"
+
+    parent_detail = client.get(f"/runs/{run['id']}", headers=headers)
+    assert parent_detail.status_code == 200
+    parent_run = parent_detail.json()
+    assert parent_run["status"] == "completed"
+    assert parent_run["steps"][0]["status"] == "completed"
+    assert parent_run["steps"][1]["status"] == "completed"
+    assert parent_run["child_runs"][0]["status"] == "completed"
 
 
 def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:
