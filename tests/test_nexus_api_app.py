@@ -933,6 +933,113 @@ def test_delegate_output_contracts_enforce_required_evidence(tmp_path: Path) -> 
     assert allowed_run["child_runs"][0]["status"] == "completed"
 
 
+def test_supervised_delegate_gates_when_child_plan_is_high_risk(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with risky delegate",
+            "mode": "supervised",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "operator",
+                            "objective": "Update delegated report",
+                            "mode": "manual",
+                            "context": {"workspace_paths": ["reports"]},
+                            "steps": [
+                                {
+                                    "action_type": "write_file",
+                                    "instruction": json.dumps(
+                                        {"path": "reports/summary.md", "content": "delegated update"}
+                                    ),
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "pending_approval"
+    assert run["steps"][0]["status"] == "pending_approval"
+    assert run["steps"][1]["status"] == "pending"
+    assert run["child_runs"] == []
+
+    pending = client.get("/approvals/pending", headers=headers)
+    assert pending.status_code == 200
+    items = pending.json()["items"]
+    assert len(items) == 1
+    assert items[0]["action_type"] == "delegate"
+
+    approve = client.post(
+        f"/runs/{run['id']}/approvals/{items[0]['step_id']}",
+        headers=headers,
+        json={"decision": "approve", "reason": "bounded delegated write"},
+    )
+    assert approve.status_code == 200
+    approved_run = approve.json()
+    assert approved_run["steps"][0]["status"] == "completed"
+    assert approved_run["child_runs"][0]["status"] == "completed"
+    pending_after = client.get("/approvals/pending", headers=headers)
+    assert pending_after.status_code == 200
+    assert not any(
+        item["run_id"] == run["id"] and item["action_type"] == "delegate"
+        for item in pending_after.json()["items"]
+    )
+
+
+def test_supervised_delegate_executes_when_child_plan_is_low_risk(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with safe delegate",
+            "mode": "supervised",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Collect references",
+                            "mode": "manual",
+                            "steps": [
+                                {
+                                    "action_type": "search_web",
+                                    "instruction": "collect evidence",
+                                }
+                            ],
+                        }
+                    ),
+                },
+                {"action_type": "navigate", "instruction": "open fallback page"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+    assert run["steps"][0]["status"] == "completed"
+    assert run["child_runs"][0]["status"] == "completed"
+    pending = client.get("/approvals/pending", headers=headers)
+    assert pending.status_code == 200
+    assert not any(
+        item["run_id"] == run["id"] and item["action_type"] == "delegate"
+        for item in pending.json()["items"]
+    )
+
+
 def test_delegate_step_creates_child_run_merges_result_and_emits_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from nexus_core.models import RiskTier
@@ -34,6 +36,39 @@ def test_workspace_read_actions_are_low_risk(action_type: str) -> None:
 def test_workspace_mutation_and_code_actions_are_high_risk(action_type: str) -> None:
     assert risk_tier_for_action(action_type) == RiskTier.HIGH
     assert is_high_risk_action(action_type)
+
+
+def test_delegate_risk_depends_on_child_plan() -> None:
+    safe_delegate = json.dumps(
+        {
+            "role": "researcher",
+            "objective": "Collect references",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "search_web",
+                    "instruction": "collect evidence",
+                }
+            ],
+        }
+    )
+    risky_delegate = json.dumps(
+        {
+            "role": "operator",
+            "objective": "Update report",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "write_file",
+                    "instruction": json.dumps({"path": "reports/summary.md", "content": "updated"}),
+                }
+            ],
+        }
+    )
+
+    assert risk_tier_for_action("delegate", safe_delegate) == RiskTier.LOW
+    assert risk_tier_for_action("delegate", risky_delegate) == RiskTier.HIGH
+    assert is_high_risk_action("delegate", risky_delegate)
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from nexus_core.models import RiskTier
@@ -77,6 +78,8 @@ def risk_tier_for_action(action_type: str, instruction: str = "") -> RiskTier:
     """Classify step action type into low/high risk."""
     normalized_action = action_type.strip().lower()
     normalized_instruction = instruction.strip().lower()
+    if normalized_action == "delegate" and _delegate_instruction_is_high_risk(instruction):
+        return RiskTier.HIGH
     if normalized_action in _HIGH_RISK_ACTIONS:
         return RiskTier.HIGH
     if normalized_action == "click" and any(
@@ -188,3 +191,26 @@ def _required_artifact_kinds(raw_value: Any) -> list[str]:
 
 def _artifact_kind(artifact: dict[str, Any]) -> str:
     return str(artifact.get("kind", "") or "").strip().lower()
+
+
+def _delegate_instruction_is_high_risk(instruction: str) -> bool:
+    try:
+        payload = json.loads(instruction)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    raw_steps = payload.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        role = str(payload.get("role", "")).strip().lower()
+        return role not in {"", "researcher"}
+
+    for raw_step in raw_steps:
+        if not isinstance(raw_step, dict):
+            continue
+        action_type = str(raw_step.get("action_type", "")).strip().lower()
+        child_instruction = str(raw_step.get("instruction", ""))
+        if risk_tier_for_action(action_type, child_instruction) == RiskTier.HIGH:
+            return True
+    return False
