@@ -96,9 +96,11 @@ class OpenRouterAdaptivePlanner:
             "completed_step": {
                 "action_type": completed_step.get("action_type", ""),
                 "instruction": completed_step.get("instruction", ""),
-                "output_text": result.output_text[:1200],
+                "output_text": _truncate_text(result.output_text, 1200),
                 "citations_count": len(result.citations),
                 "artifacts_count": len(result.artifacts),
+                "citations": _serialize_citations(result.citations, limit=3),
+                "metadata": _compact_metadata(result.metadata, max_items=8),
             },
             "existing_steps": [
                 {
@@ -110,6 +112,8 @@ class OpenRouterAdaptivePlanner:
             ],
             "constraints": {
                 "allowed_actions": [
+                    "search_web",
+                    "fetch_url",
                     "list_files",
                     "read_file",
                     "write_file",
@@ -243,3 +247,55 @@ def _parse_model_json(content: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _serialize_citations(citations: list[Any], *, limit: int) -> list[dict[str, str]]:
+    serialized: list[dict[str, str]] = []
+    for citation in citations[:limit]:
+        if hasattr(citation, "model_dump"):
+            raw = citation.model_dump()
+        elif isinstance(citation, dict):
+            raw = citation
+        else:
+            continue
+        serialized.append(
+            {
+                "url": _truncate_text(str(raw.get("url", "")), 240),
+                "title": _truncate_text(str(raw.get("title", "")), 160),
+                "snippet": _truncate_text(str(raw.get("snippet", "")), 320),
+            }
+        )
+    return serialized
+
+
+def _compact_metadata(metadata: dict[str, Any], *, max_items: int) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for idx, (key, value) in enumerate(metadata.items()):
+        if idx >= max_items:
+            break
+        compact[str(key)] = _compact_value(value)
+    return compact
+
+
+def _compact_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _truncate_text(value, 320)
+    if isinstance(value, list):
+        return [_compact_value(item) for item in value[:6]]
+    if isinstance(value, dict):
+        nested: dict[str, Any] = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= 6:
+                break
+            nested[str(key)] = _compact_value(item)
+        return nested
+    return _truncate_text(str(value), 320)
