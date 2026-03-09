@@ -202,6 +202,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         search: str = Query(default=""),
         created_after: str = Query(default=""),
         created_before: str = Query(default=""),
+        include_children: bool = Query(default=False),
         user: dict[str, Any] = Depends(current_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
@@ -219,6 +220,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             search=search.strip(),
             created_after=parsed_after,
             created_before=parsed_before,
+            include_children=include_children,
         )
         return {
             "items": items,

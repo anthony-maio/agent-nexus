@@ -1217,10 +1217,17 @@ def test_list_runs_counts_delegated_child_pending_approvals(tmp_path: Path) -> N
     listed = client.get("/runs", headers=headers)
     assert listed.status_code == 200
     items = listed.json()["items"]
+    assert listed.json()["total"] == 1
 
     parent_item = next(item for item in items if item["id"] == run["id"])
-    child_item = next(item for item in items if item["id"] == run["child_runs"][0]["id"])
     assert parent_item["pending_approval_count"] == 1
+    assert all(item["id"] != run["child_runs"][0]["id"] for item in items)
+
+    with_children = client.get("/runs?include_children=true", headers=headers)
+    assert with_children.status_code == 200
+    child_items = with_children.json()["items"]
+    assert with_children.json()["total"] == 2
+    child_item = next(item for item in child_items if item["id"] == run["child_runs"][0]["id"])
     assert child_item["pending_approval_count"] == 1
 
 

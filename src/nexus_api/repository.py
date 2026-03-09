@@ -79,10 +79,13 @@ class SqlRunRepository:
         search: str = "",
         created_after: datetime | None = None,
         created_before: datetime | None = None,
+        include_children: bool = False,
     ) -> tuple[list[dict[str, Any]], int]:
         base_stmt = select(Run)
         count_stmt = select(func.count()).select_from(Run)
         filters = []
+        if not include_children:
+            filters.append(Run.parent_run_id.is_(None))
         normalized_status = status.strip()
         if normalized_status:
             filters.append(Run.status == normalized_status)
