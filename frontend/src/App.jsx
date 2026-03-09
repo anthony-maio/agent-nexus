@@ -209,6 +209,24 @@ function summarizeTimelineEvent(event) {
   };
 }
 
+function TranscriptEvent({ event }) {
+  const summary = summarizeTimelineEvent(event);
+
+  return (
+    <article className={`transcript-bubble system ${summary.tone}`}>
+      <span className="transcript-role">Runtime event</span>
+      <div className="transcript-meta">
+        <strong>{summary.label}</strong>
+        {event?.timestamp ? <code>{event.timestamp}</code> : null}
+      </div>
+      <p>{summary.detail}</p>
+      {event?.action_type ? (
+        <p className="transcript-event-action">{`Tool ${event.action_type}`}</p>
+      ) : null}
+    </article>
+  );
+}
+
 function TranscriptStep({ step, variant = "assistant", approval = null, onDecide = null }) {
   const details = buildTranscriptDetails(step);
 
@@ -903,6 +921,12 @@ function App() {
                     <span className="transcript-role">Objective</span>
                     <p>{run.objective}</p>
                   </article>
+                  {timeline.map((item, index) => (
+                    <TranscriptEvent
+                      key={`${item.type || "event"}-${item.timestamp || index}`}
+                      event={item}
+                    />
+                  ))}
                   {(run.steps || []).map((step) => (
                     <TranscriptStep
                       key={step.id}

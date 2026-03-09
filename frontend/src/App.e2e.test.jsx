@@ -526,6 +526,9 @@ describe("App run inbox e2e", () => {
     const transcript = screen.getByText("Run Transcript").closest("section");
     expect(transcript).not.toBeNull();
     const transcriptScope = within(transcript);
+    expect(transcriptScope.getByText("Delegation started")).toBeInTheDocument();
+    expect(transcriptScope.getByText("Awaiting approval")).toBeInTheDocument();
+    expect(transcriptScope.getAllByText("Runtime event").length).toBeGreaterThan(0);
     expect(transcriptScope.getByText("Approval needed")).toBeInTheDocument();
     fireEvent.click(transcriptScope.getByRole("button", { name: "Approve" }));
 
