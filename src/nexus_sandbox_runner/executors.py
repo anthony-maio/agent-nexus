@@ -1053,12 +1053,23 @@ def _container_script() -> str:
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
         def load_session():
+            defaults = {
+                "current_url": "",
+                "last_title": "",
+                "last_page_text": "",
+                "search_results": [],
+                "draft_inputs": [],
+                "submitted": False,
+            }
             if not session_path.exists():
-                return {"current_url": "", "search_results": []}
+                return dict(defaults)
             try:
-                return json.loads(session_path.read_text(encoding="utf-8"))
+                payload = json.loads(session_path.read_text(encoding="utf-8"))
             except Exception:
-                return {"current_url": "", "search_results": []}
+                return dict(defaults)
+            if isinstance(payload, dict):
+                defaults.update(payload)
+            return defaults
 
         def save_session(session):
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -1067,6 +1078,83 @@ def _container_script() -> str:
         def first_url(text):
             match = re.search(r"https?://\\S+", text or "")
             return match.group(0) if match else ""
+
+        def summarize_text(text, limit):
+            compact = re.sub(r"\\s+", " ", str(text or "")).strip()
+            if len(compact) <= limit:
+                return compact
+            return compact[: max(0, limit - 1)].rstrip() + "…"
+
+        def page_from_session():
+            current_url = str(session.get("current_url", "")).strip()
+            if not current_url:
+                return None
+            title = str(session.get("last_title", "")).strip() or current_url
+            text = str(session.get("last_page_text", ""))
+            snippet = summarize_text(text, 220) or title
+            return {
+                "url": current_url,
+                "title": title,
+                "text": text,
+                "snippet": snippet,
+            }
+
+        def fetch_page(url):
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                body = response.read(500000).decode("utf-8", errors="ignore")
+                final_url = response.geturl()
+            title_match = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+            title_raw = title_match.group(1) if title_match else final_url
+            title = re.sub(r"\\s+", " ", re.sub(r"<[^>]+>", " ", title_raw)).strip() or final_url
+            text = re.sub(r"\\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()[:8000]
+            snippet = summarize_text(text, 220) or title
+            return {
+                "url": final_url,
+                "title": title,
+                "text": text,
+                "snippet": snippet,
+            }
+
+        def resolve_target_url():
+            direct = first_url(instruction)
+            if direct:
+                return direct
+            current_url = str(session.get("current_url", "")).strip()
+            if current_url:
+                return current_url
+            search_results = session.get("search_results")
+            if isinstance(search_results, list) and search_results:
+                top = search_results[0]
+                if isinstance(top, dict):
+                    return str(top.get("url", "")).strip()
+            return ""
+
+        def resolve_or_fetch_page(refresh=False):
+            target_url = resolve_target_url()
+            cached = page_from_session()
+            if not target_url:
+                return cached
+            if not refresh and cached and cached.get("url") == target_url:
+                return cached
+            try:
+                return fetch_page(target_url)
+            except Exception:
+                if cached and cached.get("url") == target_url:
+                    return cached
+                return cached
+
+        def record_page(page):
+            session["current_url"] = page.get("url", "")
+            session["last_title"] = page.get("title", "")
+            session["last_page_text"] = page.get("text", "")
+
+        def page_citation(page):
+            return {
+                "url": page.get("url", ""),
+                "title": page.get("title", ""),
+                "snippet": page.get("snippet", ""),
+            }
 
         def parse_instruction():
             try:
@@ -1224,9 +1312,8 @@ def _container_script() -> str:
                 raise RuntimeError(f"Sandbox code execution failed (exit={proc.returncode}): {detail[:500]}")
             output = (proc.stdout or "").strip() or (proc.stderr or "").strip() or "[sandbox-code] Command completed."
         elif action in {"fetch_url", "navigate", "inspect", "scroll", "read", "extract"}:
-            target_url = first_url(instruction) or session.get("current_url", "")
-            if not target_url and session.get("search_results"):
-                target_url = session["search_results"][0]["url"]
+            page_data = None
+            target_url = resolve_target_url()
             if target_url:
                 try:
                     if browser_mode != "simulated":
@@ -1238,43 +1325,79 @@ def _container_script() -> str:
                             page.goto(target_url, wait_until="domcontentloaded", timeout=browser_timeout_ms)
                             if action == "scroll":
                                 page.mouse.wheel(0, 1600)
-                            session["current_url"] = page.url or target_url
-                            title = page.title() or session["current_url"]
+                            resolved_url = page.url or target_url
+                            title = page.title() or resolved_url
                             try:
-                                snippet = page.inner_text("body")[:220]
+                                page_text = page.inner_text("body")
                             except Exception:
-                                snippet = instruction[:220]
-                            citations = [{"url": session["current_url"], "title": title, "snippet": snippet}]
-                            metadata["current_url"] = session["current_url"]
-                            output = f"[sandbox-browser-real] {action} {session['current_url']}"
+                                page_text = ""
+                            page_data = {
+                                "url": resolved_url,
+                                "title": title,
+                                "text": page_text,
+                                "snippet": summarize_text(page_text, 220) or title,
+                            }
+                            output = f"[sandbox-browser-real] {action} {resolved_url}"
                             if capture_screenshot:
                                 screenshot_name = f"{step_id}-screenshot.png"
                                 page.screenshot(path=screenshot_name, full_page=True)
                                 artifacts.append({"kind": "image", "name": screenshot_name, "path": screenshot_name})
                             browser.close()
                     else:
-                        req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
-                        with urllib.request.urlopen(req, timeout=10) as response:
-                            session["current_url"] = response.geturl()
-                        citations = [{"url": session["current_url"], "title": session["current_url"], "snippet": instruction[:220]}]
-                        metadata["current_url"] = session["current_url"]
-                        output = f"[sandbox-browser] {action} {session['current_url']}"
+                        page_data = resolve_or_fetch_page(
+                            refresh=action in {"fetch_url", "navigate", "scroll"}
+                        )
+                        if page_data:
+                            output = f"[sandbox-browser] {action} {page_data['url']}"
                 except Exception:
                     if browser_mode == "real":
                         raise
-                    try:
-                        req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
-                        with urllib.request.urlopen(req, timeout=10) as response:
-                            session["current_url"] = response.geturl()
-                        citations = [{"url": session["current_url"], "title": session["current_url"], "snippet": instruction[:220]}]
-                        metadata["current_url"] = session["current_url"]
-                        output = f"[sandbox-browser] {action} {session['current_url']}"
-                    except Exception:
-                        output = f"[sandbox-browser] Unable to resolve grounded URL for: {instruction}"
+                    page_data = resolve_or_fetch_page(refresh=action in {"fetch_url", "navigate", "scroll"})
+                    if page_data:
+                        output = f"[sandbox-browser] {action} {page_data['url']}"
+            else:
+                page_data = page_from_session()
+            if page_data:
+                record_page(page_data)
+                citations = [page_citation(page_data)]
+                metadata["current_url"] = page_data["url"]
+                metadata["page_title"] = page_data["title"]
+                metadata["page_excerpt"] = page_data["snippet"]
+                if action == "extract":
+                    output = (
+                        f"[sandbox-browser] Evidence summary for {page_data['url']}: "
+                        f"{summarize_text(page_data.get('text', ''), 260) or page_data['snippet']}"
+                    )
+            elif not target_url:
+                output = f"[sandbox-browser] Unable to resolve grounded URL for: {instruction}"
             if action == "extract":
                 artifact_name = f"{step_id}-extract.txt"
                 Path(artifact_name).write_text(output, encoding="utf-8")
                 artifacts.append({"kind": "text", "name": artifact_name, "path": artifact_name})
+        elif action in {"type", "click", "wait", "submit"}:
+            page_data = resolve_or_fetch_page(refresh=False)
+            if page_data:
+                record_page(page_data)
+                citations = [page_citation(page_data)]
+                metadata["current_url"] = page_data["url"]
+                metadata["page_title"] = page_data["title"]
+                metadata["page_excerpt"] = page_data["snippet"]
+            target = str(session.get("current_url") or "current session")
+            if action == "type":
+                draft_inputs = session.setdefault("draft_inputs", [])
+                if not isinstance(draft_inputs, list):
+                    draft_inputs = []
+                    session["draft_inputs"] = draft_inputs
+                draft_inputs.append({"step_id": step_id, "instruction": instruction})
+                metadata["draft_input_count"] = len(draft_inputs)
+                output = f"[sandbox-browser] Typed draft input on {target}: {instruction}"
+            elif action == "click":
+                output = f"[sandbox-browser] Clicked the requested control on {target}: {instruction}"
+            elif action == "wait":
+                output = f"[sandbox-browser] Waited for the page state to settle on {target}"
+            else:
+                session["submitted"] = True
+                output = f"[sandbox-browser] Submitted the workflow on {target}: {instruction}"
         elif action in {"write", "export"}:
             artifact_name = f"{step_id}-{action}.txt"
             output = f"[sandbox-workspace] {action} prepared for: {session.get('current_url') or instruction}"

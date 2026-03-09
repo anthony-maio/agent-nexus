@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from nexus_sandbox_runner.executors import (
     DockerEphemeralExecutor,
     LocalEphemeralExecutor,
     StepRequest,
+    _container_script,
     build_executor_from_env,
 )
 
@@ -468,6 +470,96 @@ def test_docker_executor_sets_docker_host_env(
     env = run_kwargs.get("env")
     assert isinstance(env, dict)
     assert env.get("DOCKER_HOST") == "tcp://nexus-sandbox-dind:2375"
+
+
+def _run_container_script_step(
+    tmp_path: Path,
+    *,
+    action_type: str,
+    instruction: str,
+    session: dict[str, object] | None = None,
+    step_id: str = "step",
+) -> tuple[dict[str, object], dict[str, object]]:
+    run_dir = tmp_path / "run-data"
+    workspace_dir = tmp_path / "work"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    session_path = run_dir / "session.json"
+    if session is not None:
+        session_path.write_text(json.dumps(session), encoding="utf-8")
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEXUS_ACTION": action_type,
+            "NEXUS_INSTRUCTION": instruction,
+            "NEXUS_STEP_ID": step_id,
+            "NEXUS_OUTPUT_JSON": "result.json",
+            "NEXUS_SESSION_STATE": str(session_path),
+            "NEXUS_BROWSER_MODE": "simulated",
+            "NEXUS_BROWSER_TIMEOUT_MS": "5000",
+            "NEXUS_CAPTURE_SCREENSHOT": "0",
+        }
+    )
+    subprocess.run(
+        [sys.executable, "-c", _container_script()],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=workspace_dir,
+        env=env,
+        timeout=30,
+    )
+    payload = json.loads((workspace_dir / "result.json").read_text(encoding="utf-8"))
+    saved_session = json.loads(session_path.read_text(encoding="utf-8"))
+    return payload, saved_session
+
+
+@pytest.mark.parametrize(
+    ("action_type", "instruction"),
+    [
+        ("type", "enter email and password"),
+        ("click", "click continue"),
+        ("wait", "wait for navigation"),
+        ("submit", "submit form"),
+    ],
+)
+def test_container_script_interactive_actions_use_grounded_session_page(
+    tmp_path: Path,
+    action_type: str,
+    instruction: str,
+) -> None:
+    payload, saved_session = _run_container_script_step(
+        tmp_path,
+        action_type=action_type,
+        instruction=instruction,
+        step_id=f"step-{action_type}",
+        session={
+            "current_url": "https://docs.example.org/start",
+            "last_title": "Fetched page",
+            "last_page_text": "Grounded page context for interactive actions.",
+            "search_results": [
+                {
+                    "url": "https://docs.example.org/start",
+                    "title": "Grounded result",
+                    "snippet": "Grounded page context for interactive actions.",
+                }
+            ],
+            "draft_inputs": [],
+            "submitted": False,
+        },
+    )
+
+    citations = payload["citations"]
+    assert isinstance(citations, list)
+    assert citations[0]["url"] == "https://docs.example.org/start"
+    metadata = payload["metadata"]
+    assert metadata["current_url"] == "https://docs.example.org/start"
+    assert metadata["page_title"] == "Fetched page"
+    if action_type == "type":
+        assert saved_session["draft_inputs"][0]["instruction"] == instruction
+    if action_type == "submit":
+        assert saved_session["submitted"] is True
 
 
 def test_docker_executor_ignores_artifacts_outside_workspace(
