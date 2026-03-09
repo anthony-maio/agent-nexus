@@ -616,29 +616,57 @@ def _execute_local_action(
         _append_history(session, action, instruction)
         return StepResult(output, citations, artifacts, metadata), session
 
+    interactive_page: dict[str, str] | None = None
+    if action in {"type", "click", "wait", "submit"}:
+        interactive_page = _resolve_or_fetch_page(action, instruction, session, refresh=False)
+        if interactive_page:
+            _record_page(session, interactive_page)
+            citations = [_citation_from_page(interactive_page)]
+            metadata.update(_page_metadata(interactive_page))
+
     if action == "type":
         draft_inputs = session.setdefault("draft_inputs", [])
         draft_inputs.append({"step_id": request.step_id, "instruction": instruction})
         metadata["draft_input_count"] = len(draft_inputs)
+        target = (
+            interactive_page["url"]
+            if interactive_page
+            else str(session.get("current_url") or "current session")
+        )
         output = (
             "[sandbox-browser] Typed draft input on "
-            f"{session.get('current_url') or 'current session'}: {instruction}"
+            f"{target}: {instruction}"
         )
     elif action == "click":
+        target = (
+            interactive_page["url"]
+            if interactive_page
+            else str(session.get("current_url") or "current session")
+        )
         output = (
             "[sandbox-browser] Clicked the requested control on "
-            f"{session.get('current_url') or 'current session'}: {instruction}"
+            f"{target}: {instruction}"
         )
     elif action == "wait":
+        target = (
+            interactive_page["url"]
+            if interactive_page
+            else str(session.get("current_url") or "current session")
+        )
         output = (
             "[sandbox-browser] Waited for the page state to settle on "
-            f"{session.get('current_url') or 'current session'}"
+            f"{target}"
         )
     elif action == "submit":
         session["submitted"] = True
+        target = (
+            interactive_page["url"]
+            if interactive_page
+            else str(session.get("current_url") or "current session")
+        )
         output = (
             "[sandbox-browser] Submitted the workflow on "
-            f"{session.get('current_url') or 'current session'}: {instruction}"
+            f"{target}: {instruction}"
         )
     elif action in {"write", "export"}:
         target = session.get("current_url") or instruction

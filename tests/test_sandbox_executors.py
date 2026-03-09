@@ -170,6 +170,15 @@ def test_local_executor_persists_session_state_across_steps(
         ),
         sandbox_root,
     )
+    type_result = executor.execute(
+        StepRequest(
+            run_id="run-persist",
+            step_id="step-type",
+            action_type="type",
+            instruction="enter email and password",
+        ),
+        sandbox_root,
+    )
 
     session_path = Path(search_result.metadata["session_path"])
     session_payload = json.loads(session_path.read_text(encoding="utf-8"))
@@ -177,6 +186,9 @@ def test_local_executor_persists_session_state_across_steps(
     assert search_result.citations[0]["url"] == "https://docs.example.org/start"
     assert fetch_result.citations[0]["url"] == "https://docs.example.org/start"
     assert fetch_result.metadata["current_url"] == "https://docs.example.org/start"
+    assert type_result.citations[0]["url"] == "https://docs.example.org/start"
+    assert type_result.metadata["current_url"] == "https://docs.example.org/start"
+    assert type_result.metadata["page_title"] == "Fetched page"
     assert session_payload["current_url"] == "https://docs.example.org/start"
     assert session_payload["search_results"][0]["url"] == "https://docs.example.org/start"
 
