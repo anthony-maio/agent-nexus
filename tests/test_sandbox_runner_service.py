@@ -122,7 +122,7 @@ def test_execute_step_supports_inspect_action(tmp_path: Path, monkeypatch) -> No
     assert data["metadata"]["current_url"] == "https://docs.example.org"
 
 
-def test_execute_step_supports_type_action(tmp_path: Path, monkeypatch) -> None:
+def test_execute_step_requires_grounded_page_for_type_action(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     client = TestClient(create_app())
 
@@ -135,11 +135,8 @@ def test_execute_step_supports_type_action(tmp_path: Path, monkeypatch) -> None:
             "instruction": "enter a draft response into the first field",
         },
     )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["artifacts"] == []
-    assert data["citations"] == []
-    assert "type" in data["output_text"].lower()
+    assert resp.status_code == 503
+    assert "No grounded page available" in resp.json()["detail"]
 
 
 def test_execute_step_supports_grounded_search_and_fetch_actions(

@@ -195,6 +195,26 @@ def test_local_executor_persists_session_state_across_steps(
     assert session_payload["search_results"][0]["url"] == "https://docs.example.org/start"
 
 
+@pytest.mark.parametrize("action_type", ["type", "click", "wait", "submit"])
+def test_local_executor_requires_grounded_page_for_interactive_actions(
+    tmp_path: Path,
+    action_type: str,
+) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+
+    with pytest.raises(RuntimeError, match="No grounded page available"):
+        executor.execute(
+            StepRequest(
+                run_id="run-grounding",
+                step_id=f"step-{action_type}",
+                action_type=action_type,
+                instruction=f"attempt {action_type} without a grounded page",
+            ),
+            sandbox_root,
+        )
+
+
 def test_local_executor_supports_workspace_file_tools(tmp_path: Path) -> None:
     executor = LocalEphemeralExecutor()
     sandbox_root = tmp_path / "sandbox"

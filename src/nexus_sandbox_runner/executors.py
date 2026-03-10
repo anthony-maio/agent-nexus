@@ -619,10 +619,13 @@ def _execute_local_action(
     interactive_page: dict[str, str] | None = None
     if action in {"type", "click", "wait", "submit"}:
         interactive_page = _resolve_or_fetch_page(action, instruction, session, refresh=False)
-        if interactive_page:
-            _record_page(session, interactive_page)
-            citations = [_citation_from_page(interactive_page)]
-            metadata.update(_page_metadata(interactive_page))
+        if not interactive_page:
+            raise RuntimeError(
+                f"No grounded page available for `{action}` action. Navigate/search/fetch first."
+            )
+        _record_page(session, interactive_page)
+        citations = [_citation_from_page(interactive_page)]
+        metadata.update(_page_metadata(interactive_page))
 
     if action == "type":
         draft_inputs = session.setdefault("draft_inputs", [])
@@ -1376,12 +1379,15 @@ def _container_script() -> str:
                 artifacts.append({"kind": "text", "name": artifact_name, "path": artifact_name})
         elif action in {"type", "click", "wait", "submit"}:
             page_data = resolve_or_fetch_page(refresh=False)
-            if page_data:
-                record_page(page_data)
-                citations = [page_citation(page_data)]
-                metadata["current_url"] = page_data["url"]
-                metadata["page_title"] = page_data["title"]
-                metadata["page_excerpt"] = page_data["snippet"]
+            if not page_data:
+                raise RuntimeError(
+                    f"No grounded page available for `{action}` action. Navigate/search/fetch first."
+                )
+            record_page(page_data)
+            citations = [page_citation(page_data)]
+            metadata["current_url"] = page_data["url"]
+            metadata["page_title"] = page_data["title"]
+            metadata["page_excerpt"] = page_data["snippet"]
             target = str(session.get("current_url") or "current session")
             if action == "type":
                 draft_inputs = session.setdefault("draft_inputs", [])
