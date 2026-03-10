@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from nexus_api.adaptive_planner import OpenRouterAdaptivePlanner
-from nexus_core.models import CitationRecord, StepExecutionResult
+from nexus_core.models import CitationRecord, RunMode, StepExecutionResult
 
 
 class _FakeResponse:
@@ -111,3 +111,119 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     completed_payload = payload["completed_step"]
     assert completed_payload["citations"][0]["url"] == "https://docs.example.org/start"
     assert completed_payload["metadata"]["current_url"] == "https://docs.example.org/start"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_plan_initial_steps_uses_single_step_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, Any],
+        ) -> _FakeResponse:
+            captured["request_body"] = json
+            return _FakeResponse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": jsonlib.dumps(
+                                    {
+                                        "next_steps": [
+                                            {"action_type": "search_web", "instruction": "Find sources."},
+                                            {"action_type": "fetch_url", "instruction": "Open source."},
+                                        ]
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("nexus_api.adaptive_planner.httpx.AsyncClient", _FakeAsyncClient)
+
+    planner = OpenRouterAdaptivePlanner(api_key="test-key", model="test-model", max_steps=4)
+    steps = await planner.plan_initial_steps(
+        objective="Research grounded sources",
+        mode=RunMode.SUPERVISED,
+    )
+
+    assert len(steps) == 1
+    assert steps[0].action_type == "search_web"
+    payload = jsonlib.loads(captured["request_body"]["messages"][1]["content"])
+    assert payload["constraints"]["max_steps"] == 1
+
+
+@pytest.mark.asyncio
+async def test_openrouter_follow_up_uses_single_step_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, Any],
+        ) -> _FakeResponse:
+            captured["request_body"] = json
+            return _FakeResponse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": jsonlib.dumps(
+                                    {
+                                        "next_steps": [
+                                            {"action_type": "fetch_url", "instruction": "Open source."},
+                                            {"action_type": "extract", "instruction": "Summarize source."},
+                                        ]
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("nexus_api.adaptive_planner.httpx.AsyncClient", _FakeAsyncClient)
+
+    planner = OpenRouterAdaptivePlanner(api_key="test-key", model="test-model", max_steps=4)
+    steps = await planner.propose_follow_up(
+        objective="Research grounded billing docs",
+        completed_step={"action_type": "search_web", "instruction": "find docs"},
+        result=StepExecutionResult(output_text="search complete"),
+        existing_steps=[{"action_type": "search_web", "status": "completed"}],
+    )
+
+    assert len(steps) == 1
+    assert steps[0].action_type == "fetch_url"
+    payload = jsonlib.loads(captured["request_body"]["messages"][1]["content"])
+    assert payload["constraints"]["max_steps"] == 1

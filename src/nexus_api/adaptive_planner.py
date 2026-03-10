@@ -42,6 +42,7 @@ class OpenRouterAdaptivePlanner:
         if not self.api_key or not self.model:
             return []
 
+        step_budget = 1
         payload = {
             "objective": objective,
             "mode": mode.value,
@@ -67,19 +68,19 @@ class OpenRouterAdaptivePlanner:
                     "submit",
                     "export",
                 ],
-                "max_steps": min(self.max_steps, 2),
+                "max_steps": step_budget,
             },
         }
         parsed = await self._request_plan(
             prompt=(
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
-                "Plan only the first one or two grounded tool calls. "
+                "Plan exactly one grounded next tool call. "
                 "Prefer workspace or code tools when the objective references local files. No prose."
             ),
             payload=payload,
         )
-        return self._step_definitions_from_payload(parsed, limit=min(self.max_steps, 2))
+        return self._step_definitions_from_payload(parsed, limit=step_budget)
 
     async def propose_follow_up(
         self,
@@ -91,6 +92,7 @@ class OpenRouterAdaptivePlanner:
         if not self.api_key or not self.model:
             return []
 
+        step_budget = 1
         payload = {
             "objective": objective,
             "completed_step": {
@@ -132,18 +134,18 @@ class OpenRouterAdaptivePlanner:
                     "submit",
                     "export",
                 ],
-                "max_steps": self.max_steps,
+                "max_steps": step_budget,
             },
         }
         parsed = await self._request_plan(
             prompt=(
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
-                "No prose. Use at most max_steps items. Prefer workspace and code tools when result metadata references files."
+                "No prose. Return exactly one next step. Prefer workspace and code tools when result metadata references files."
             ),
             payload=payload,
         )
-        return self._step_definitions_from_payload(parsed, limit=self.max_steps)
+        return self._step_definitions_from_payload(parsed, limit=step_budget)
 
     async def _request_plan(
         self,
