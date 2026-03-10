@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, Protocol
@@ -36,6 +37,134 @@ _DDG_RESULT_RE = re.compile(
 _TAG_RE = re.compile(r"<[^>]+>")
 _SCRIPT_RE = re.compile(r"<(script|style).*?</\1>", re.IGNORECASE | re.DOTALL)
 _WHITESPACE_RE = re.compile(r"\s+")
+
+
+class _PageAffordanceParser(HTMLParser):
+    def __init__(self, *, base_url: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.forms_count = 0
+        self.input_fields: list[dict[str, str]] = []
+        self.buttons: list[dict[str, str]] = []
+        self.links: list[dict[str, str]] = []
+        self._current_button: dict[str, str] | None = None
+        self._current_button_text: list[str] = []
+        self._current_link: dict[str, str] | None = None
+        self._current_link_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        lowered_tag = tag.lower()
+        attr_map = {
+            str(key).lower(): str(value or "").strip()
+            for key, value in attrs
+            if key is not None
+        }
+        if lowered_tag == "form":
+            self.forms_count += 1
+        if lowered_tag in {"input", "textarea", "select"}:
+            self._capture_input(lowered_tag, attr_map)
+        if lowered_tag == "button":
+            self._current_button = {
+                key: value
+                for key, value in {
+                    "tag": "button",
+                    "type": attr_map.get("type", "button"),
+                }.items()
+                if value
+            }
+            self._current_button_text = []
+        if lowered_tag == "input" and attr_map.get("type", "").lower() in {"submit", "button"}:
+            button = {
+                key: value
+                for key, value in {
+                    "tag": "input",
+                    "type": attr_map.get("type", ""),
+                    "text": attr_map.get("value")
+                    or attr_map.get("aria-label")
+                    or attr_map.get("title")
+                    or attr_map.get("name"),
+                }.items()
+                if value
+            }
+            if button and len(self.buttons) < 5:
+                self.buttons.append(button)
+        if lowered_tag == "a" and attr_map.get("href"):
+            href = urllib.parse.urljoin(self.base_url, attr_map["href"])
+            self._current_link = {"href": href}
+            self._current_link_text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered_tag = tag.lower()
+        if lowered_tag == "button" and self._current_button is not None:
+            text = _clean_html(" ".join(self._current_button_text))
+            if text:
+                self._current_button["text"] = text
+            if self._current_button and len(self.buttons) < 5:
+                self.buttons.append(self._current_button)
+            self._current_button = None
+            self._current_button_text = []
+        if lowered_tag == "a" and self._current_link is not None:
+            text = _clean_html(" ".join(self._current_link_text))
+            if text:
+                self._current_link["text"] = text
+            if self._current_link and len(self.links) < 5:
+                self.links.append(self._current_link)
+            self._current_link = None
+            self._current_link_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current_button is not None:
+            self._current_button_text.append(data)
+        if self._current_link is not None:
+            self._current_link_text.append(data)
+
+    def _capture_input(self, tag: str, attrs: dict[str, str]) -> None:
+        if len(self.input_fields) >= 5:
+            return
+        input_type = attrs.get("type", "text" if tag == "input" else tag).lower()
+        if tag == "input" and input_type in {
+            "hidden",
+            "submit",
+            "button",
+            "checkbox",
+            "radio",
+            "image",
+            "reset",
+        }:
+            return
+        field = {
+            key: value
+            for key, value in {
+                "tag": tag,
+                "type": input_type,
+                "name": attrs.get("name", ""),
+                "placeholder": attrs.get("placeholder", ""),
+                "label": attrs.get("aria-label", "") or attrs.get("title", ""),
+            }.items()
+            if value
+        }
+        if field:
+            self.input_fields.append(field)
+
+
+def _extract_page_affordances(body: str, *, base_url: str) -> dict[str, Any]:
+    parser = _PageAffordanceParser(base_url=base_url)
+    try:
+        parser.feed(body)
+        parser.close()
+    except Exception:
+        return {
+            "forms_count": 0,
+            "input_fields": [],
+            "buttons": [],
+            "links": [],
+        }
+    return {
+        "forms_count": parser.forms_count,
+        "input_fields": parser.input_fields,
+        "buttons": parser.buttons,
+        "links": parser.links,
+    }
 
 
 @dataclass(frozen=True)
@@ -854,6 +983,7 @@ def _fetch_url_content(url: str, timeout_sec: float = 10.0) -> dict[str, str]:
         "title": title or final_url,
         "text": text,
         "snippet": _text_summary(text, 240) or title or final_url,
+        "affordances": _extract_page_affordances(body, base_url=final_url),
     }
 
 
@@ -874,6 +1004,7 @@ def _resolve_or_fetch_page(
                 "title": str(session.get("last_title", current_url)),
                 "text": text,
                 "snippet": _text_summary(text, 240),
+                "affordances": session.get("last_page_affordances", {}) or {},
             }
         return None
     current_url = str(session.get("current_url", ""))
@@ -884,6 +1015,7 @@ def _resolve_or_fetch_page(
             "title": str(session.get("last_title", url)),
             "text": current_text,
             "snippet": _text_summary(current_text, 240),
+            "affordances": session.get("last_page_affordances", {}) or {},
         }
     try:
         return _fetch_url_content(url)
@@ -894,6 +1026,7 @@ def _resolve_or_fetch_page(
                 "title": str(session.get("last_title", url)),
                 "text": current_text,
                 "snippet": _text_summary(current_text, 240),
+                "affordances": session.get("last_page_affordances", {}) or {},
             }
         return None
 
@@ -912,19 +1045,24 @@ def _resolve_target_url(action: str, instruction: str, session: dict[str, Any]) 
     return ""
 
 
-def _record_page(session: dict[str, Any], page: dict[str, str]) -> None:
+def _record_page(session: dict[str, Any], page: dict[str, Any]) -> None:
     session["current_url"] = page.get("url", "")
     session["last_title"] = page.get("title", "")
     session["last_page_text"] = page.get("text", "")
+    session["last_page_affordances"] = page.get("affordances", {}) or {}
     _append_history(session, "page", page.get("url", ""))
 
 
-def _page_metadata(page: dict[str, str]) -> dict[str, Any]:
-    return {
+def _page_metadata(page: dict[str, Any]) -> dict[str, Any]:
+    metadata = {
         "current_url": page.get("url", ""),
         "page_title": page.get("title", ""),
         "page_excerpt": page.get("snippet", ""),
     }
+    affordances = page.get("affordances", {})
+    if isinstance(affordances, dict):
+        metadata["page_affordances"] = affordances
+    return metadata
 
 
 def _citation_from_page(page: dict[str, str]) -> dict[str, str]:
@@ -962,6 +1100,7 @@ def _default_session_state() -> dict[str, Any]:
         "current_url": "",
         "last_title": "",
         "last_page_text": "",
+        "last_page_affordances": {},
         "search_results": [],
         "history": [],
         "draft_inputs": [],
@@ -1040,6 +1179,7 @@ def _container_script() -> str:
         import subprocess
         import urllib.parse
         import urllib.request
+        from html.parser import HTMLParser
         from pathlib import Path
 
         action = os.environ.get("NEXUS_ACTION", "").strip().lower()
@@ -1062,11 +1202,118 @@ def _container_script() -> str:
             re.IGNORECASE | re.DOTALL,
         )
 
+        class PageAffordanceParser(HTMLParser):
+            def __init__(self, base_url):
+                super().__init__()
+                self.base_url = base_url
+                self.forms_count = 0
+                self.input_fields = []
+                self.buttons = []
+                self.links = []
+                self.current_button = None
+                self.current_button_text = []
+                self.current_link = None
+                self.current_link_text = []
+
+            def handle_starttag(self, tag, attrs):
+                lowered_tag = str(tag).lower()
+                attr_map = {
+                    str(key).lower(): str(value or "").strip()
+                    for key, value in attrs
+                    if key is not None
+                }
+                if lowered_tag == "form":
+                    self.forms_count += 1
+                if lowered_tag in {"input", "textarea", "select"}:
+                    self.capture_input(lowered_tag, attr_map)
+                if lowered_tag == "button":
+                    self.current_button = {
+                        key: value
+                        for key, value in {
+                            "tag": "button",
+                            "type": attr_map.get("type", "button"),
+                        }.items()
+                        if value
+                    }
+                    self.current_button_text = []
+                if lowered_tag == "input" and attr_map.get("type", "").lower() in {"submit", "button"}:
+                    button = {
+                        key: value
+                        for key, value in {
+                            "tag": "input",
+                            "type": attr_map.get("type", ""),
+                            "text": attr_map.get("value")
+                            or attr_map.get("aria-label")
+                            or attr_map.get("title")
+                            or attr_map.get("name"),
+                        }.items()
+                        if value
+                    }
+                    if button and len(self.buttons) < 5:
+                        self.buttons.append(button)
+                if lowered_tag == "a" and attr_map.get("href"):
+                    self.current_link = {"href": urllib.parse.urljoin(self.base_url, attr_map["href"])}
+                    self.current_link_text = []
+
+            def handle_endtag(self, tag):
+                lowered_tag = str(tag).lower()
+                if lowered_tag == "button" and self.current_button is not None:
+                    text = clean_html(" ".join(self.current_button_text))
+                    if text:
+                        self.current_button["text"] = text
+                    if self.current_button and len(self.buttons) < 5:
+                        self.buttons.append(self.current_button)
+                    self.current_button = None
+                    self.current_button_text = []
+                if lowered_tag == "a" and self.current_link is not None:
+                    text = clean_html(" ".join(self.current_link_text))
+                    if text:
+                        self.current_link["text"] = text
+                    if self.current_link and len(self.links) < 5:
+                        self.links.append(self.current_link)
+                    self.current_link = None
+                    self.current_link_text = []
+
+            def handle_data(self, data):
+                if self.current_button is not None:
+                    self.current_button_text.append(data)
+                if self.current_link is not None:
+                    self.current_link_text.append(data)
+
+            def capture_input(self, tag, attrs):
+                if len(self.input_fields) >= 5:
+                    return
+                input_type = attrs.get("type", "text" if tag == "input" else tag).lower()
+                if tag == "input" and input_type in {
+                    "hidden",
+                    "submit",
+                    "button",
+                    "checkbox",
+                    "radio",
+                    "image",
+                    "reset",
+                }:
+                    return
+                field = {
+                    key: value
+                    for key, value in {
+                        "tag": tag,
+                        "type": input_type,
+                        "name": attrs.get("name", ""),
+                        "placeholder": attrs.get("placeholder", ""),
+                        "label": attrs.get("aria-label", "") or attrs.get("title", ""),
+                    }.items()
+                    if value
+                }
+                if field:
+                    self.input_fields.append(field)
+
         def load_session():
             defaults = {
                 "current_url": "",
                 "last_title": "",
                 "last_page_text": "",
+                "last_page_affordances": {},
                 "search_results": [],
                 "draft_inputs": [],
                 "submitted": False,
@@ -1104,6 +1351,25 @@ def _container_script() -> str:
 
         def clean_html(value):
             return re.sub(r"\\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", value or ""))).strip()
+
+        def extract_affordances(body, base_url):
+            parser = PageAffordanceParser(base_url)
+            try:
+                parser.feed(body or "")
+                parser.close()
+            except Exception:
+                return {
+                    "forms_count": 0,
+                    "input_fields": [],
+                    "buttons": [],
+                    "links": [],
+                }
+            return {
+                "forms_count": parser.forms_count,
+                "input_fields": parser.input_fields,
+                "buttons": parser.buttons,
+                "links": parser.links,
+            }
 
         def normalize_search_url(raw_href):
             href = str(raw_href or "").strip()
@@ -1156,6 +1422,7 @@ def _container_script() -> str:
                 "title": title,
                 "text": text,
                 "snippet": snippet,
+                "affordances": session.get("last_page_affordances", {}) or {},
             }
 
         def fetch_page(url):
@@ -1173,6 +1440,7 @@ def _container_script() -> str:
                 "title": title,
                 "text": text,
                 "snippet": snippet,
+                "affordances": extract_affordances(body, final_url),
             }
 
         def resolve_target_url():
@@ -1207,6 +1475,7 @@ def _container_script() -> str:
             session["current_url"] = page.get("url", "")
             session["last_title"] = page.get("title", "")
             session["last_page_text"] = page.get("text", "")
+            session["last_page_affordances"] = page.get("affordances", {}) or {}
 
         def page_citation(page):
             return {
@@ -1395,11 +1664,16 @@ def _container_script() -> str:
                                 page_text = page.inner_text("body")
                             except Exception:
                                 page_text = ""
+                            try:
+                                page_html = page.inner_html("body")
+                            except Exception:
+                                page_html = ""
                             page_data = {
                                 "url": resolved_url,
                                 "title": title,
                                 "text": page_text,
                                 "snippet": summarize_text(page_text, 220) or title,
+                                "affordances": extract_affordances(page_html, resolved_url),
                             }
                             output = f"[sandbox-browser-real] {action} {resolved_url}"
                             if capture_screenshot:
@@ -1431,6 +1705,8 @@ def _container_script() -> str:
                 metadata["current_url"] = page_data["url"]
                 metadata["page_title"] = page_data["title"]
                 metadata["page_excerpt"] = page_data["snippet"]
+                if isinstance(page_data.get("affordances"), dict):
+                    metadata["page_affordances"] = page_data["affordances"]
                 if action == "extract":
                     output = (
                         f"[sandbox-browser] Evidence summary for {page_data['url']}: "
@@ -1479,11 +1755,16 @@ def _container_script() -> str:
                         page_text = page.inner_text("body")
                     except Exception:
                         page_text = ""
+                    try:
+                        page_html = page.inner_html("body")
+                    except Exception:
+                        page_html = ""
                     page_data = {
                         "url": resolved_url,
                         "title": title,
                         "text": page_text,
                         "snippet": summarize_text(page_text, 220) or title,
+                        "affordances": extract_affordances(page_html, resolved_url),
                     }
                     context.storage_state(path=str(state_path))
                     session["browser_storage_state_path"] = str(state_path)
@@ -1495,6 +1776,8 @@ def _container_script() -> str:
             metadata["current_url"] = page_data["url"]
             metadata["page_title"] = page_data["title"]
             metadata["page_excerpt"] = page_data["snippet"]
+            if isinstance(page_data.get("affordances"), dict):
+                metadata["page_affordances"] = page_data["affordances"]
             target = str(session.get("current_url") or "current session")
             if action == "type":
                 draft_inputs = session.setdefault("draft_inputs", [])

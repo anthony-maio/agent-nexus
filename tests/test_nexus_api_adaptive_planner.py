@@ -89,6 +89,13 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
             ],
             metadata={
                 "current_url": "https://docs.example.org/start",
+                "page_affordances": {
+                    "forms_count": 1,
+                    "input_fields": [
+                        {"tag": "input", "type": "email", "name": "email"}
+                    ],
+                    "buttons": [{"text": "Continue", "type": "submit"}],
+                },
                 "search_results": [
                     {
                         "url": "https://docs.example.org/start",
@@ -111,6 +118,8 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     completed_payload = payload["completed_step"]
     assert completed_payload["citations"][0]["url"] == "https://docs.example.org/start"
     assert completed_payload["metadata"]["current_url"] == "https://docs.example.org/start"
+    assert completed_payload["metadata"]["page_affordances"]["forms_count"] == 1
+    assert completed_payload["metadata"]["page_affordances"]["buttons"][0]["text"] == "Continue"
 
 
 @pytest.mark.asyncio

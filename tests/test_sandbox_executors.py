@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from nexus_sandbox_runner.executors import (
     LocalEphemeralExecutor,
     StepRequest,
     _container_script,
+    _fetch_url_content,
     build_executor_from_env,
 )
 
@@ -317,6 +319,59 @@ def test_local_executor_execute_code_creates_workspace_artifacts(tmp_path: Path)
     assert len(result.artifacts) == 1
     assert Path(result.artifacts[0]["sandbox_path"]).read_text(encoding="utf-8") == "artifact"
     assert "generated.txt" in list_result.metadata["files"]
+
+
+def test_fetch_url_content_extracts_page_affordances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = """
+    <html>
+      <head><title>Contact us</title></head>
+      <body>
+        <form action="/contact">
+          <input type="email" name="email" placeholder="Work email" />
+          <textarea name="message" placeholder="How can we help?"></textarea>
+          <button type="submit">Send message</button>
+        </form>
+        <a href="/pricing">Pricing</a>
+      </body>
+    </html>
+    """
+
+    class _FakeResponse:
+        def __init__(self, html_text: str, url: str) -> None:
+            self._body = html_text.encode("utf-8")
+            self._url = url
+            self.headers = Message()
+            self.headers["Content-Type"] = "text/html; charset=utf-8"
+
+        def read(self, amount: int = -1) -> bytes:
+            if amount is None or amount < 0:
+                return self._body
+            return self._body[:amount]
+
+        def geturl(self) -> str:
+            return self._url
+
+        def __enter__(self) -> _FakeResponse:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors.urllib.request.urlopen",
+        lambda request, timeout=10: _FakeResponse(body, "https://example.com/contact"),
+    )
+
+    page = _fetch_url_content("https://example.com/contact")
+
+    affordances = page["affordances"]
+    assert affordances["forms_count"] == 1
+    assert affordances["input_fields"][0]["name"] == "email"
+    assert affordances["input_fields"][1]["tag"] == "textarea"
+    assert affordances["buttons"][0]["text"] == "Send message"
+    assert affordances["links"][0]["href"] == "https://example.com/pricing"
 
 
 def test_docker_executor_preflight_fails_real_mode_when_browser_missing(
@@ -957,6 +1012,82 @@ urllib.request.urlopen = _fake_urlopen
     ]
     assert session["search_results"][0]["title"] == "Alpha docs"
     assert session["search_results"][1]["snippet"] == "Beta grounded snippet"
+
+
+def test_container_script_inspect_returns_page_affordances(tmp_path: Path) -> None:
+    fake_site = tmp_path / "fake_affordances"
+    fake_site.mkdir(parents=True, exist_ok=True)
+    (fake_site / "sitecustomize.py").write_text(
+        """
+import urllib.request
+from email.message import Message
+
+
+class _FakeResponse:
+    def __init__(self, body, url):
+        self._body = body.encode("utf-8")
+        self._url = url
+        self.headers = Message()
+        self.headers["Content-Type"] = "text/html; charset=utf-8"
+
+    def read(self, amount=-1):
+        if amount is None or amount < 0:
+            return self._body
+        return self._body[:amount]
+
+    def geturl(self):
+        return self._url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+_REAL_URLOPEN = urllib.request.urlopen
+
+
+def _fake_urlopen(request, timeout=10):
+    url = request.full_url if hasattr(request, "full_url") else str(request)
+    if url == "https://example.com/contact":
+        body = '''
+        <html><head><title>Contact us</title></head><body>
+            <form action="/contact">
+                <input type="email" name="email" placeholder="Work email" />
+                <button type="submit">Send message</button>
+            </form>
+            <a href="/pricing">Pricing</a>
+        </body></html>
+        '''
+        return _FakeResponse(body, url)
+    return _REAL_URLOPEN(request, timeout=timeout)
+
+
+urllib.request.urlopen = _fake_urlopen
+""".strip(),
+        encoding="utf-8",
+    )
+
+    pythonpath_parts = [str(fake_site)]
+    existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+
+    payload, session = _run_container_script_step(
+        tmp_path,
+        action_type="inspect",
+        instruction="inspect https://example.com/contact",
+        step_id="step-inspect",
+        extra_env={"PYTHONPATH": os.pathsep.join(pythonpath_parts)},
+    )
+
+    affordances = payload["metadata"]["page_affordances"]
+    assert affordances["forms_count"] == 1
+    assert affordances["input_fields"][0]["placeholder"] == "Work email"
+    assert affordances["buttons"][0]["text"] == "Send message"
+    assert affordances["links"][0]["href"] == "https://example.com/pricing"
+    assert session["last_page_affordances"]["buttons"][0]["text"] == "Send message"
 
 
 def test_docker_executor_ignores_artifacts_outside_workspace(
