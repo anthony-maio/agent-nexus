@@ -1060,6 +1060,7 @@ def _container_script() -> str:
                 "search_results": [],
                 "draft_inputs": [],
                 "submitted": False,
+                "browser_storage_state_path": "",
             }
             if not session_path.exists():
                 return dict(defaults)
@@ -1078,6 +1079,12 @@ def _container_script() -> str:
         def first_url(text):
             match = re.search(r"https?://\\S+", text or "")
             return match.group(0) if match else ""
+
+        def storage_state_path():
+            raw = str(session.get("browser_storage_state_path", "")).strip()
+            if raw:
+                return Path(raw)
+            return run_dir / "browser-storage.json"
 
         def summarize_text(text, limit):
             compact = re.sub(r"\\s+", " ", str(text or "")).strip()
@@ -1321,7 +1328,12 @@ def _container_script() -> str:
 
                         with sync_playwright() as playwright:
                             browser = playwright.chromium.launch(headless=True)
-                            page = browser.new_page()
+                            state_path = storage_state_path()
+                            context_kwargs = {}
+                            if state_path.exists():
+                                context_kwargs["storage_state"] = str(state_path)
+                            context = browser.new_context(**context_kwargs)
+                            page = context.new_page()
                             page.goto(target_url, wait_until="domcontentloaded", timeout=browser_timeout_ms)
                             if action == "scroll":
                                 page.mouse.wheel(0, 1600)
@@ -1342,6 +1354,10 @@ def _container_script() -> str:
                                 screenshot_name = f"{step_id}-screenshot.png"
                                 page.screenshot(path=screenshot_name, full_page=True)
                                 artifacts.append({"kind": "image", "name": screenshot_name, "path": screenshot_name})
+                            context.storage_state(path=str(state_path))
+                            session["browser_storage_state_path"] = str(state_path)
+                            metadata["browser_storage_state_path"] = str(state_path)
+                            context.close()
                             browser.close()
                     else:
                         page_data = resolve_or_fetch_page(

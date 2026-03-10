@@ -499,6 +499,8 @@ def _run_container_script_step(
     instruction: str,
     session: dict[str, object] | None = None,
     step_id: str = "step",
+    browser_mode: str = "simulated",
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     run_dir = tmp_path / "run-data"
     workspace_dir = tmp_path / "work"
@@ -516,11 +518,13 @@ def _run_container_script_step(
             "NEXUS_STEP_ID": step_id,
             "NEXUS_OUTPUT_JSON": "result.json",
             "NEXUS_SESSION_STATE": str(session_path),
-            "NEXUS_BROWSER_MODE": "simulated",
+            "NEXUS_BROWSER_MODE": browser_mode,
             "NEXUS_BROWSER_TIMEOUT_MS": "5000",
             "NEXUS_CAPTURE_SCREENSHOT": "0",
         }
     )
+    if extra_env:
+        env.update(extra_env)
     subprocess.run(
         [sys.executable, "-c", _container_script()],
         check=True,
@@ -580,6 +584,140 @@ def test_container_script_interactive_actions_use_grounded_session_page(
         assert saved_session["draft_inputs"][0]["instruction"] == instruction
     if action_type == "submit":
         assert saved_session["submitted"] is True
+
+
+def test_container_script_real_browser_persists_and_reuses_storage_state(
+    tmp_path: Path,
+) -> None:
+    fake_pkg = tmp_path / "fake_playwright"
+    playwright_dir = fake_pkg / "playwright"
+    playwright_dir.mkdir(parents=True, exist_ok=True)
+    (playwright_dir / "__init__.py").write_text("", encoding="utf-8")
+    (playwright_dir / "sync_api.py").write_text(
+        """
+import json
+import os
+from pathlib import Path
+
+
+class _FakePage:
+    def __init__(self, context):
+        self._context = context
+        self.url = "https://example.test/"
+        self.mouse = self
+
+    def goto(self, url, wait_until=None, timeout=None):
+        self.url = url
+
+    def wheel(self, x, y):
+        return None
+
+    def title(self):
+        return "Fake title"
+
+    def inner_text(self, selector):
+        return "Fake body text for storage-state coverage."
+
+    def screenshot(self, path, full_page=True):
+        Path(path).write_bytes(b"fake-image")
+
+
+class _FakeContext:
+    def __init__(self, storage_state_path):
+        self._storage_state_path = storage_state_path
+        self._page = _FakePage(self)
+        log_path = os.environ.get("FAKE_PLAYWRIGHT_LOG", "")
+        if log_path:
+            entry = {
+                "storage_state_path": storage_state_path or "",
+                "storage_state_exists": bool(storage_state_path and Path(storage_state_path).exists()),
+            }
+            with Path(log_path).open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\\n")
+
+    def new_page(self):
+        return self._page
+
+    def storage_state(self, path):
+        Path(path).write_text(
+            json.dumps({"cookies": [{"name": "session", "value": "abc"}], "origins": []}),
+            encoding="utf-8",
+        )
+
+    def close(self):
+        return None
+
+
+class _FakeBrowser:
+    def new_context(self, storage_state=None):
+        return _FakeContext(storage_state)
+
+    def close(self):
+        return None
+
+
+class _FakeChromium:
+    def launch(self, headless=True):
+        return _FakeBrowser()
+
+
+class _FakePlaywright:
+    def __init__(self):
+        self.chromium = _FakeChromium()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def sync_playwright():
+    return _FakePlaywright()
+""".strip(),
+        encoding="utf-8",
+    )
+
+    log_path = tmp_path / "playwright.log"
+    pythonpath_parts = [str(fake_pkg)]
+    existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+    step_one, session_one = _run_container_script_step(
+        tmp_path,
+        action_type="navigate",
+        instruction="open https://docs.example.org/storage",
+        step_id="step-one",
+        browser_mode="real",
+        extra_env={
+            "PYTHONPATH": os.pathsep.join(pythonpath_parts),
+            "FAKE_PLAYWRIGHT_LOG": str(log_path),
+        },
+    )
+    step_two, session_two = _run_container_script_step(
+        tmp_path,
+        action_type="inspect",
+        instruction="inspect current page",
+        step_id="step-two",
+        browser_mode="real",
+        extra_env={
+            "PYTHONPATH": os.pathsep.join(pythonpath_parts),
+            "FAKE_PLAYWRIGHT_LOG": str(log_path),
+        },
+    )
+
+    assert step_one["metadata"]["current_url"] == "https://docs.example.org/storage"
+    assert step_two["metadata"]["current_url"] == "https://docs.example.org/storage"
+    storage_state_path = Path(str(session_two.get("browser_storage_state_path", "")))
+    assert storage_state_path.exists()
+    assert storage_state_path.name == "browser-storage.json"
+    assert session_one.get("browser_storage_state_path") == session_two.get("browser_storage_state_path")
+
+    logs = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    assert len(logs) >= 2
+    assert logs[0]["storage_state_path"] == ""
+    assert logs[1]["storage_state_path"].endswith("browser-storage.json")
+    assert logs[1]["storage_state_exists"] is True
 
 
 def test_docker_executor_ignores_artifacts_outside_workspace(
