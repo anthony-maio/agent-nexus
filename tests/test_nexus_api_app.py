@@ -478,14 +478,8 @@ def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: P
     assert create.status_code == 200
     run = create.json()
 
-    assert [step["action_type"] for step in run["steps"]] == [
-        "navigate",
-        "inspect",
-        "extract",
-        "type",
-    ]
+    assert [step["action_type"] for step in run["steps"]] == ["navigate", "inspect", "type"]
     assert [step["status"] for step in run["steps"]] == [
-        "completed",
         "completed",
         "completed",
         "pending_approval",

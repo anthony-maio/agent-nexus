@@ -179,19 +179,8 @@ def plan_follow_up_steps(
 
     if action == "inspect":
         if _looks_like_workflow(objective):
-            steps: list[StepDefinition] = []
-            if not _has_action_after(existing_steps, step_index, "extract"):
-                steps.append(
-                    StepDefinition(
-                        action_type="extract",
-                        instruction=(
-                            "Summarize the workflow state, required inputs, and next "
-                            f"approval point for: {objective}"
-                        ),
-                    )
-                )
             if not _has_action_after(existing_steps, step_index, "type"):
-                steps.append(
+                return [
                     StepDefinition(
                         action_type="type",
                         instruction=(
@@ -199,8 +188,18 @@ def plan_follow_up_steps(
                             f"the workflow for: {objective}"
                         ),
                     )
-                )
-            return steps
+                ]
+            if not _has_action_after(existing_steps, step_index, "extract"):
+                return [
+                    StepDefinition(
+                        action_type="extract",
+                        instruction=(
+                            "Summarize the workflow state, required inputs, and next "
+                            f"approval point for: {objective}"
+                        ),
+                    )
+                ]
+            return []
         if _has_action_after(existing_steps, step_index, "extract"):
             return []
         return [
@@ -218,17 +217,29 @@ def plan_follow_up_steps(
                 action_type="click",
                 instruction=f"Click the next non-destructive control for: {objective}",
             ),
+        ]
+
+    if action == "click":
+        if _has_action_after(existing_steps, step_index, "wait"):
+            return []
+        return [
             StepDefinition(
                 action_type="wait",
                 instruction=f"Wait for the page state to settle for: {objective}",
-            ),
+            )
+        ]
+
+    if action == "wait":
+        if _has_action_after(existing_steps, step_index, "extract"):
+            return []
+        return [
             StepDefinition(
                 action_type="extract",
                 instruction=(
                     "Summarize the updated workflow state and the next approval "
                     f"point for: {objective}"
                 ),
-            ),
+            )
         ]
 
     if action == "extract":
@@ -244,14 +255,7 @@ def plan_follow_up_steps(
                         "Adaptive follow-up: gather additional page context because "
                         f"the last extraction returned no citations. Objective: {objective}"
                     ),
-                ),
-                StepDefinition(
-                    action_type="extract",
-                    instruction=(
-                        "Adaptive follow-up: re-run extraction after scrolling and "
-                        f"include citations for: {objective}"
-                    ),
-                ),
+                )
             ]
         if _looks_like_workflow(objective) and _has_action_before(existing_steps, step_index, "type"):
             if _has_action_after(existing_steps, step_index, "submit"):
@@ -268,6 +272,19 @@ def plan_follow_up_steps(
             StepDefinition(
                 action_type="export",
                 instruction=f"Prepare an exportable report artifact for: {objective}",
+            )
+        ]
+
+    if action == "scroll":
+        if _has_action_after(existing_steps, step_index, "extract"):
+            return []
+        return [
+            StepDefinition(
+                action_type="extract",
+                instruction=(
+                    "Adaptive follow-up: re-run extraction after scrolling and "
+                    f"include citations for: {objective}"
+                ),
             )
         ]
 

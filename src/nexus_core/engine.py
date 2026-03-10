@@ -976,7 +976,7 @@ class RunEngine:
             if completed_action == "extract" and not result.citations:
                 return True
             return (
-                completed_action == "extract"
+                completed_action in {"extract", "scroll"}
                 and RunEngine._next_pending_action_after(completed_step, existing_steps) == "export"
             )
         return completed_action not in {"export", "write"}
