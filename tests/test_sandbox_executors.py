@@ -623,3 +623,43 @@ def test_docker_executor_ignores_artifacts_outside_workspace(
     result = executor.execute(request, tmp_path / "sandbox")
 
     assert result.artifacts == []
+
+
+def test_docker_executor_reuses_run_workspace_across_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executor = DockerEphemeralExecutor(image=DEFAULT_DOCKER_IMAGE)
+    request_one = StepRequest(
+        run_id="run123",
+        step_id="step-one",
+        action_type="export",
+        instruction="export one",
+    )
+    request_two = StepRequest(
+        run_id="run123",
+        step_id="step-two",
+        action_type="export",
+        instruction="export two",
+    )
+    seen_workspaces: list[str] = []
+
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        mount = cmd[cmd.index("-v") + 1]
+        host_workspace = Path(mount.rsplit(":", 1)[0])
+        seen_workspaces.append(str(host_workspace))
+        host_workspace.mkdir(parents=True, exist_ok=True)
+        (host_workspace / "result.json").write_text(
+            json.dumps({"output_text": "done:export", "citations": [], "artifacts": []}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nexus_sandbox_runner.executors.shutil.which", lambda _: "docker")
+
+    executor.execute(request_one, tmp_path / "sandbox")
+    executor.execute(request_two, tmp_path / "sandbox")
+
+    assert len(seen_workspaces) == 2
+    assert seen_workspaces[0] == seen_workspaces[1]
+    assert Path(seen_workspaces[0]).name == "workspace"

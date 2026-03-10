@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -204,49 +203,47 @@ class DockerEphemeralExecutor:
     def execute(self, request: StepRequest, sandbox_root: Path) -> StepResult:
         run_dir = sandbox_root / request.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        workspace_dir = run_dir / "workspace"
+        workspace_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).isoformat()
         if shutil.which(self.docker_bin) is None:
             raise RuntimeError(
                 f"Docker binary `{self.docker_bin}` is not available for sandbox backend."
             )
-
-        with tempfile.TemporaryDirectory(
-            prefix=f"step-{request.run_id}-{request.step_id}-",
-            dir=sandbox_root,
-        ) as temp_dir:
-            step_workspace = Path(temp_dir)
-            result_file = step_workspace / "result.json"
-            command = self.build_command(request, run_dir, step_workspace, result_file)
-            try:
-                proc = subprocess.run(
-                    command,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_sec,
-                    env=self._docker_env(),
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    f"Docker step execution timed out after {self.timeout_sec}s"
-                ) from exc
-            if proc.returncode != 0:
-                stderr = (proc.stderr or "").strip()[:500]
-                raise RuntimeError(
-                    f"Docker step execution failed (exit={proc.returncode}): {stderr}"
-                )
-            if not result_file.exists():
-                raise RuntimeError("Docker step execution did not produce result.json")
-
-            payload = json.loads(result_file.read_text(encoding="utf-8"))
-            output = str(payload.get("output_text", ""))
-            citations = _normalize_citations(payload.get("citations", []))
-            artifacts = self._collect_artifacts(
-                run_dir=run_dir,
-                run_id=request.run_id,
-                step_workspace=step_workspace,
-                artifact_specs=payload.get("artifacts", []),
+        result_file = workspace_dir / "result.json"
+        if result_file.exists():
+            result_file.unlink()
+        command = self.build_command(request, run_dir, workspace_dir, result_file)
+        try:
+            proc = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_sec,
+                env=self._docker_env(),
             )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Docker step execution timed out after {self.timeout_sec}s"
+            ) from exc
+        if proc.returncode != 0:
+            stderr = (proc.stderr or "").strip()[:500]
+            raise RuntimeError(
+                f"Docker step execution failed (exit={proc.returncode}): {stderr}"
+            )
+        if not result_file.exists():
+            raise RuntimeError("Docker step execution did not produce result.json")
+
+        payload = json.loads(result_file.read_text(encoding="utf-8"))
+        output = str(payload.get("output_text", ""))
+        citations = _normalize_citations(payload.get("citations", []))
+        artifacts = self._collect_artifacts(
+            run_dir=run_dir,
+            run_id=request.run_id,
+            step_workspace=workspace_dir,
+            artifact_specs=payload.get("artifacts", []),
+        )
 
         metadata = payload.get("metadata", {})
         if not isinstance(metadata, dict):
