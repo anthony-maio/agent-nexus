@@ -1033,10 +1033,12 @@ def _text_summary(text: str, limit: int) -> str:
 def _container_script() -> str:
     return dedent(
         """
+        import html
         import json
         import os
         import re
         import subprocess
+        import urllib.parse
         import urllib.request
         from pathlib import Path
 
@@ -1051,6 +1053,14 @@ def _container_script() -> str:
         run_dir = session_path.parent
         workspace_dir = run_dir / "workspace"
         workspace_dir.mkdir(parents=True, exist_ok=True)
+        ddg_result_re = re.compile(
+            r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="(?P<href>[^"]+)"[^>]*>'
+            r"(?P<title>.*?)</a>.*?"
+            r'(?:<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>|'
+            r'<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>)'
+            r"(?P<snippet>.*?)</(?:a|div)>",
+            re.IGNORECASE | re.DOTALL,
+        )
 
         def load_session():
             defaults = {
@@ -1091,6 +1101,48 @@ def _container_script() -> str:
             if len(compact) <= limit:
                 return compact
             return compact[: max(0, limit - 1)].rstrip() + "…"
+
+        def clean_html(value):
+            return re.sub(r"\\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", value or ""))).strip()
+
+        def normalize_search_url(raw_href):
+            href = str(raw_href or "").strip()
+            if href.startswith("//"):
+                return f"https:{href}"
+            if href.startswith("/"):
+                parsed = urllib.parse.urlparse(href)
+                params = urllib.parse.parse_qs(parsed.query)
+                if params.get("uddg"):
+                    return urllib.parse.unquote(params["uddg"][0])
+                return ""
+            if href.startswith("http://") or href.startswith("https://"):
+                return href
+            return ""
+
+        def search_web(query, max_results=5):
+            compact_query = " ".join(str(query or "").split())
+            if not compact_query:
+                return []
+            req = urllib.request.Request(
+                f"https://duckduckgo.com/html/?q={urllib.parse.quote_plus(compact_query)}",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    body = response.read().decode("utf-8", errors="ignore")
+            except Exception:
+                return []
+            results = []
+            for match in ddg_result_re.finditer(body):
+                url = normalize_search_url(html.unescape(match.group("href")))
+                if not url:
+                    continue
+                title = clean_html(match.group("title")) or url
+                snippet = clean_html(match.group("snippet")) or title
+                results.append({"url": url, "title": title, "snippet": snippet})
+                if len(results) >= max(1, int(max_results)):
+                    break
+            return results
 
         def page_from_session():
             current_url = str(session.get("current_url", "")).strip()
@@ -1245,11 +1297,11 @@ def _container_script() -> str:
         output = f"[sandbox] Executed action `{action}`: {instruction}"
 
         if action == "search_web":
-            top_url = first_url(instruction) or "https://duckduckgo.com/"
-            citations = [{"url": top_url, "title": "Search result", "snippet": instruction[:220]}]
+            citations = search_web(instruction, max_results=5)
             session["search_results"] = citations
-            metadata["top_url"] = top_url
-            output = f"[sandbox-search] Collected grounded search results for: {instruction}"
+            metadata["search_results"] = citations
+            metadata["top_url"] = citations[0]["url"] if citations else ""
+            output = f"[sandbox-search] Found {len(citations)} result(s) for: {instruction}"
         elif action == "list_files":
             target = resolve_workspace_path(payload, default_path=".", allow_directory=True)
             target.mkdir(parents=True, exist_ok=True)
@@ -1396,6 +1448,48 @@ def _container_script() -> str:
                 raise RuntimeError(
                     f"No grounded page available for `{action}` action. Navigate/search/fetch first."
                 )
+            if browser_mode != "simulated":
+                from playwright.sync_api import sync_playwright
+
+                target_url = page_data.get("url") or resolve_target_url()
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=True)
+                    state_path = storage_state_path()
+                    context_kwargs = {}
+                    if state_path.exists():
+                        context_kwargs["storage_state"] = str(state_path)
+                    context = browser.new_context(**context_kwargs)
+                    page = context.new_page()
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=browser_timeout_ms)
+                    if action == "type":
+                        page.locator(
+                            "textarea, input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]), [contenteditable='true']"
+                        ).first.fill(instruction, timeout=browser_timeout_ms)
+                    elif action == "click":
+                        page.locator(
+                            "button, [role='button'], input[type=submit], input[type=button], a"
+                        ).first.click(timeout=browser_timeout_ms)
+                    elif action == "wait":
+                        page.wait_for_load_state("networkidle", timeout=browser_timeout_ms)
+                    else:
+                        page.locator("form").first.evaluate("(form) => form.requestSubmit()")
+                    resolved_url = page.url or target_url
+                    title = page.title() or resolved_url
+                    try:
+                        page_text = page.inner_text("body")
+                    except Exception:
+                        page_text = ""
+                    page_data = {
+                        "url": resolved_url,
+                        "title": title,
+                        "text": page_text,
+                        "snippet": summarize_text(page_text, 220) or title,
+                    }
+                    context.storage_state(path=str(state_path))
+                    session["browser_storage_state_path"] = str(state_path)
+                    metadata["browser_storage_state_path"] = str(state_path)
+                    context.close()
+                    browser.close()
             record_page(page_data)
             citations = [page_citation(page_data)]
             metadata["current_url"] = page_data["url"]
@@ -1409,14 +1503,18 @@ def _container_script() -> str:
                     session["draft_inputs"] = draft_inputs
                 draft_inputs.append({"step_id": step_id, "instruction": instruction})
                 metadata["draft_input_count"] = len(draft_inputs)
-                output = f"[sandbox-browser] Typed draft input on {target}: {instruction}"
+                prefix = "[sandbox-browser-real]" if browser_mode != "simulated" else "[sandbox-browser]"
+                output = f"{prefix} Typed draft input on {target}: {instruction}"
             elif action == "click":
-                output = f"[sandbox-browser] Clicked the requested control on {target}: {instruction}"
+                prefix = "[sandbox-browser-real]" if browser_mode != "simulated" else "[sandbox-browser]"
+                output = f"{prefix} Clicked the requested control on {target}: {instruction}"
             elif action == "wait":
-                output = f"[sandbox-browser] Waited for the page state to settle on {target}"
+                prefix = "[sandbox-browser-real]" if browser_mode != "simulated" else "[sandbox-browser]"
+                output = f"{prefix} Waited for the page state to settle on {target}"
             else:
                 session["submitted"] = True
-                output = f"[sandbox-browser] Submitted the workflow on {target}: {instruction}"
+                prefix = "[sandbox-browser-real]" if browser_mode != "simulated" else "[sandbox-browser]"
+                output = f"{prefix} Submitted the workflow on {target}: {instruction}"
         elif action in {"write", "export"}:
             artifact_name = f"{step_id}-{action}.txt"
             output = f"[sandbox-workspace] {action} prepared for: {session.get('current_url') or instruction}"

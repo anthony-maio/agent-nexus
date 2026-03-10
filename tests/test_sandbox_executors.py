@@ -720,6 +720,245 @@ def sync_playwright():
     assert logs[1]["storage_state_exists"] is True
 
 
+@pytest.mark.parametrize(
+    ("action_type", "instruction", "expected_event"),
+    [
+        ("type", "enter email into the first field", "fill"),
+        ("click", "click continue", "click"),
+        ("wait", "wait for navigation", "wait_for_load_state"),
+        ("submit", "submit the form", "submit"),
+    ],
+)
+def test_container_script_real_browser_executes_interactive_actions(
+    tmp_path: Path,
+    action_type: str,
+    instruction: str,
+    expected_event: str,
+) -> None:
+    fake_pkg = tmp_path / "fake_playwright_interactions"
+    playwright_dir = fake_pkg / "playwright"
+    playwright_dir.mkdir(parents=True, exist_ok=True)
+    (playwright_dir / "__init__.py").write_text("", encoding="utf-8")
+    (playwright_dir / "sync_api.py").write_text(
+        """
+import json
+import os
+from pathlib import Path
+
+
+def _append_log(payload):
+    log_path = os.environ.get("FAKE_PLAYWRIGHT_LOG", "")
+    if not log_path:
+        return
+    with Path(log_path).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + "\\n")
+
+
+class _FakeLocator:
+    def __init__(self, selector):
+        self._selector = selector
+        self.first = self
+
+    def click(self, timeout=None):
+        _append_log({"event": "click", "selector": self._selector, "timeout": timeout})
+
+    def fill(self, value, timeout=None):
+        _append_log(
+            {"event": "fill", "selector": self._selector, "value": value, "timeout": timeout}
+        )
+
+    def evaluate(self, expression):
+        _append_log({"event": "submit", "selector": self._selector, "expression": expression})
+        return None
+
+
+class _FakePage:
+    def __init__(self):
+        self.url = "https://docs.example.org/start"
+        self.mouse = self
+
+    def goto(self, url, wait_until=None, timeout=None):
+        self.url = url
+        _append_log({"event": "goto", "url": url, "wait_until": wait_until, "timeout": timeout})
+
+    def wheel(self, x, y):
+        _append_log({"event": "wheel", "x": x, "y": y})
+
+    def title(self):
+        return "Fake interactive page"
+
+    def inner_text(self, selector):
+        return "Interactive body text"
+
+    def screenshot(self, path, full_page=True):
+        Path(path).write_bytes(b"fake-image")
+
+    def wait_for_load_state(self, state="load", timeout=None):
+        _append_log({"event": "wait_for_load_state", "state": state, "timeout": timeout})
+
+    def locator(self, selector):
+        return _FakeLocator(selector)
+
+
+class _FakeContext:
+    def __init__(self, storage_state_path):
+        self._storage_state_path = storage_state_path
+        self._page = _FakePage()
+
+    def new_page(self):
+        return self._page
+
+    def storage_state(self, path):
+        Path(path).write_text(json.dumps({"cookies": [], "origins": []}), encoding="utf-8")
+
+    def close(self):
+        return None
+
+
+class _FakeBrowser:
+    def new_context(self, storage_state=None):
+        _append_log({"event": "new_context", "storage_state": storage_state or ""})
+        return _FakeContext(storage_state)
+
+    def close(self):
+        return None
+
+
+class _FakeChromium:
+    def launch(self, headless=True):
+        _append_log({"event": "launch", "headless": headless})
+        return _FakeBrowser()
+
+
+class _FakePlaywright:
+    def __init__(self):
+        self.chromium = _FakeChromium()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def sync_playwright():
+    return _FakePlaywright()
+""".strip(),
+        encoding="utf-8",
+    )
+
+    log_path = tmp_path / f"{action_type}-playwright.log"
+    pythonpath_parts = [str(fake_pkg)]
+    existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+    payload, session = _run_container_script_step(
+        tmp_path,
+        action_type=action_type,
+        instruction=instruction,
+        step_id=f"step-{action_type}",
+        browser_mode="real",
+        session={
+            "current_url": "https://docs.example.org/start",
+            "last_title": "Grounded page",
+            "last_page_text": "Grounded page text",
+            "search_results": [],
+            "draft_inputs": [],
+            "submitted": False,
+        },
+        extra_env={
+            "PYTHONPATH": os.pathsep.join(pythonpath_parts),
+            "FAKE_PLAYWRIGHT_LOG": str(log_path),
+        },
+    )
+
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    assert any(event["event"] == "new_context" for event in events)
+    assert any(event["event"] == expected_event for event in events)
+    assert payload["metadata"]["current_url"] == "https://docs.example.org/start"
+    if action_type == "type":
+        assert any(event.get("value") == instruction for event in events if event["event"] == "fill")
+        assert session["draft_inputs"][0]["instruction"] == instruction
+    if action_type == "submit":
+        assert session["submitted"] is True
+
+
+def test_container_script_search_web_returns_grounded_results(tmp_path: Path) -> None:
+    fake_site = tmp_path / "fake_search"
+    fake_site.mkdir(parents=True, exist_ok=True)
+    (fake_site / "sitecustomize.py").write_text(
+        """
+import urllib.request
+from email.message import Message
+
+
+class _FakeResponse:
+    def __init__(self, body, url):
+        self._body = body.encode("utf-8")
+        self._url = url
+        self.headers = Message()
+        self.headers["Content-Type"] = "text/html; charset=utf-8"
+
+    def read(self, amount=-1):
+        if amount is None or amount < 0:
+            return self._body
+        return self._body[:amount]
+
+    def geturl(self):
+        return self._url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+_REAL_URLOPEN = urllib.request.urlopen
+
+
+def _fake_urlopen(request, timeout=10):
+    url = request.full_url if hasattr(request, "full_url") else str(request)
+    if url.startswith("https://duckduckgo.com/html/?q="):
+        body = '''
+        <html><body>
+            <a class="result__a" href="/l/?uddg=https%3A%2F%2Fdocs.example.org%2Falpha">Alpha docs</a>
+            <div class="result__snippet">Alpha grounded snippet</div>
+            <a class="result__a" href="https://docs.example.org/beta">Beta docs</a>
+            <div class="result__snippet">Beta grounded snippet</div>
+        </body></html>
+        '''
+        return _FakeResponse(body, url)
+    return _REAL_URLOPEN(request, timeout=timeout)
+
+
+urllib.request.urlopen = _fake_urlopen
+""".strip(),
+        encoding="utf-8",
+    )
+
+    pythonpath_parts = [str(fake_site)]
+    existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+
+    payload, session = _run_container_script_step(
+        tmp_path,
+        action_type="search_web",
+        instruction="grounded browser runtime docs",
+        step_id="step-search",
+        extra_env={"PYTHONPATH": os.pathsep.join(pythonpath_parts)},
+    )
+
+    assert payload["metadata"]["top_url"] == "https://docs.example.org/alpha"
+    assert [citation["url"] for citation in payload["citations"]] == [
+        "https://docs.example.org/alpha",
+        "https://docs.example.org/beta",
+    ]
+    assert session["search_results"][0]["title"] == "Alpha docs"
+    assert session["search_results"][1]["snippet"] == "Beta grounded snippet"
+
+
 def test_docker_executor_ignores_artifacts_outside_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
