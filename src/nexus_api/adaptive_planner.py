@@ -141,7 +141,8 @@ class OpenRouterAdaptivePlanner:
             prompt=(
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
-                "No prose. Return exactly one next step. Prefer workspace and code tools when result metadata references files."
+                "No prose. Return exactly one next step. Prefer workspace and code tools when result metadata references files. "
+                "When metadata includes page_affordances, use those grounded inputs, buttons, and links instead of generic UI guesses."
             ),
             payload=payload,
         )

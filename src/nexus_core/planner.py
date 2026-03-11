@@ -179,13 +179,15 @@ def plan_follow_up_steps(
 
     if action == "inspect":
         if _looks_like_workflow(objective):
-            if not _has_action_after(existing_steps, step_index, "type"):
+            input_hints = _input_field_hints(result, max_items=3)
+            if input_hints and not _has_action_after(existing_steps, step_index, "type"):
+                field_text = ", ".join(input_hints)
                 return [
                     StepDefinition(
                         action_type="type",
                         instruction=(
-                            "Enter only the minimum draft input required to continue "
-                            f"the workflow for: {objective}"
+                            "Enter only the minimum draft input required in the grounded "
+                            f"fields ({field_text}) to continue the workflow for: {objective}"
                         ),
                     )
                 ]
@@ -212,10 +214,16 @@ def plan_follow_up_steps(
     if action == "type":
         if _has_action_after(existing_steps, step_index, "click"):
             return []
+        button_hints = _button_hints(result, max_items=1)
+        button_instruction = (
+            f"Click the grounded `{button_hints[0]}` control to continue for: {objective}"
+            if button_hints
+            else f"Click the next non-destructive control for: {objective}"
+        )
         return [
             StepDefinition(
                 action_type="click",
-                instruction=f"Click the next non-destructive control for: {objective}",
+                instruction=button_instruction,
             ),
         ]
 
@@ -484,6 +492,58 @@ def _metadata_follow_up_steps(result: StepExecutionResult) -> list[StepDefinitio
         except ValidationError:
             continue
     return planned
+
+
+def _page_affordances(result: StepExecutionResult) -> dict[str, Any]:
+    raw = result.metadata.get("page_affordances")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _input_field_hints(result: StepExecutionResult, *, max_items: int) -> list[str]:
+    raw_fields = _page_affordances(result).get("input_fields")
+    if not isinstance(raw_fields, list):
+        return []
+    hints: list[str] = []
+    for item in raw_fields:
+        if not isinstance(item, dict):
+            continue
+        label = _normalize_affordance_hint(
+            item.get("label")
+            or item.get("name")
+            or item.get("placeholder")
+            or item.get("type")
+            or item.get("tag")
+        )
+        if not label or label in hints:
+            continue
+        hints.append(label)
+        if len(hints) >= max(1, max_items):
+            break
+    return hints
+
+
+def _button_hints(result: StepExecutionResult, *, max_items: int) -> list[str]:
+    raw_buttons = _page_affordances(result).get("buttons")
+    if not isinstance(raw_buttons, list):
+        return []
+    hints: list[str] = []
+    for item in raw_buttons:
+        if not isinstance(item, dict):
+            continue
+        label = _normalize_affordance_hint(
+            item.get("text") or item.get("label") or item.get("name") or item.get("type")
+        )
+        if not label or label in hints:
+            continue
+        hints.append(label)
+        if len(hints) >= max(1, max_items):
+            break
+    return hints
+
+
+def _normalize_affordance_hint(value: Any) -> str:
+    text = str(value or "").strip().replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", text)
 
 
 def _count_adaptive_extracts(existing_steps: list[dict[str, Any]]) -> int:

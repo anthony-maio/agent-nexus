@@ -19,11 +19,45 @@ def test_plan_follow_up_steps_workflow_inspect_returns_only_type_step() -> None:
     steps = plan_follow_up_steps(
         objective=objective,
         completed_step=_step(1, "inspect"),
-        result=StepExecutionResult(output_text="found the form fields"),
+        result=StepExecutionResult(
+            output_text="found the form fields",
+            metadata={
+                "page_affordances": {
+                    "input_fields": [
+                        {"tag": "input", "type": "email", "name": "email"},
+                        {"tag": "textarea", "name": "message"},
+                    ],
+                    "buttons": [{"text": "Send message", "type": "submit"}],
+                }
+            },
+        ),
         existing_steps=[_step(0, "navigate"), _step(1, "inspect")],
     )
 
     assert [step.action_type for step in steps] == ["type"]
+    assert "email" in steps[0].instruction
+    assert "message" in steps[0].instruction
+
+
+def test_plan_follow_up_steps_workflow_inspect_without_inputs_falls_back_to_extract() -> None:
+    objective = "Fill out the signup form at https://example.com/register"
+
+    steps = plan_follow_up_steps(
+        objective=objective,
+        completed_step=_step(1, "inspect"),
+        result=StepExecutionResult(
+            output_text="found only static content",
+            metadata={
+                "page_affordances": {
+                    "input_fields": [],
+                    "buttons": [{"text": "Learn more", "type": "button"}],
+                }
+            },
+        ),
+        existing_steps=[_step(0, "navigate"), _step(1, "inspect")],
+    )
+
+    assert [step.action_type for step in steps] == ["extract"]
 
 
 def test_plan_follow_up_steps_workflow_advances_one_action_at_a_time() -> None:
@@ -33,7 +67,14 @@ def test_plan_follow_up_steps_workflow_advances_one_action_at_a_time() -> None:
     click_steps = plan_follow_up_steps(
         objective=objective,
         completed_step=_step(2, "type"),
-        result=StepExecutionResult(output_text="typed required values"),
+        result=StepExecutionResult(
+            output_text="typed required values",
+            metadata={
+                "page_affordances": {
+                    "buttons": [{"text": "Continue", "type": "submit"}]
+                }
+            },
+        ),
         existing_steps=existing_steps,
     )
     wait_steps = plan_follow_up_steps(
@@ -52,6 +93,7 @@ def test_plan_follow_up_steps_workflow_advances_one_action_at_a_time() -> None:
     assert [step.action_type for step in click_steps] == ["click"]
     assert [step.action_type for step in wait_steps] == ["wait"]
     assert [step.action_type for step in extract_steps] == ["extract"]
+    assert "Continue" in click_steps[0].instruction
 
 
 def test_plan_follow_up_steps_extract_without_citations_scrolls_before_retrying() -> None:

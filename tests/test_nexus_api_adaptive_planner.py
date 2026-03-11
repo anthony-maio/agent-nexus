@@ -115,6 +115,7 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     allowed_actions = payload["constraints"]["allowed_actions"]
     assert "search_web" in allowed_actions
     assert "fetch_url" in allowed_actions
+    assert "page_affordances" in request_body["messages"][0]["content"]
     completed_payload = payload["completed_step"]
     assert completed_payload["citations"][0]["url"] == "https://docs.example.org/start"
     assert completed_payload["metadata"]["current_url"] == "https://docs.example.org/start"

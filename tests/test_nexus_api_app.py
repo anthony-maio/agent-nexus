@@ -46,10 +46,21 @@ class FakeExecutionAdapter:
                     sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                 )
             )
+        metadata: dict[str, object] = {}
+        if action_type in {"inspect", "type"}:
+            metadata["page_affordances"] = {
+                "forms_count": 1,
+                "input_fields": [
+                    {"tag": "input", "type": "email", "name": "email"},
+                    {"tag": "textarea", "name": "message"},
+                ],
+                "buttons": [{"text": "Send message", "type": "submit"}],
+            }
         return StepExecutionResult(
             output_text=f"done:{action_type}",
             citations=citations,
             artifacts=artifacts,
+            metadata=metadata,
         )
 
 
