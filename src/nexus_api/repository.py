@@ -476,6 +476,18 @@ class SqlRunRepository:
             )
             events.append(
                 {
+                    "type": "planner.decision",
+                    "timestamp": step["created_at"],
+                    "step_id": step["id"],
+                    "action_type": step["action_type"],
+                    "instruction": step["instruction"],
+                    "planner_source": planner_source,
+                    "planner_phase": planner_phase,
+                    "planner_fallback_reason": planner_fallback_reason,
+                }
+            )
+            events.append(
+                {
                     "type": f"step.{step['status']}",
                     "timestamp": step["ended_at"] or step["started_at"] or step["created_at"],
                     "step_id": step["id"],

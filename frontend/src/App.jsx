@@ -78,6 +78,13 @@ function formatPlannerSentence(source, phase) {
     : `Planned by ${source}.`;
 }
 
+function formatPlannerFallbackSentence(reason) {
+  if (typeof reason !== "string" || !reason) {
+    return "";
+  }
+  return `Fallback: ${reason.replaceAll("_", "-")}.`;
+}
+
 function buildTranscriptDetails(step) {
   const metadata = step?.metadata && typeof step.metadata === "object" ? step.metadata : {};
   const payload = parseInstructionPayload(step?.instruction);
@@ -171,7 +178,20 @@ function summarizeTimelineEvent(event) {
   const type = typeof event?.type === "string" ? event.type : "";
   const instruction =
     typeof event?.instruction === "string" ? event.instruction.trim() : "";
-  const plannerDetail = formatPlannerSentence(event?.planner_source, event?.planner_phase);
+  const plannerDetail = [
+    formatPlannerSentence(event?.planner_source, event?.planner_phase),
+    formatPlannerFallbackSentence(event?.planner_fallback_reason)
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (type === "planner.decision") {
+    return {
+      label: "Planner decision",
+      tone: "info",
+      detail: instruction || "Planner selected the next step.",
+      plannerDetail
+    };
+  }
   if (type === "delegate.started") {
     const role = typeof event?.role === "string" && event.role ? event.role : "worker";
     const objective =

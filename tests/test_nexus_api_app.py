@@ -617,6 +617,38 @@ def test_default_research_run_bootstraps_autonomous_tool_loop(tmp_path: Path) ->
     assert first_step_event["planner_phase"] == "initial"
 
 
+def test_default_research_run_timeline_includes_planner_decision_events(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research payroll automation competitors and capture citations",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    planner_events = [
+        item for item in timeline.json()["timeline"] if item["type"] == "planner.decision"
+    ]
+
+    assert [item["action_type"] for item in planner_events] == [
+        "search_web",
+        "fetch_url",
+        "extract",
+        "export",
+    ]
+    assert planner_events[0]["planner_source"] == "rule"
+    assert planner_events[0]["planner_phase"] == "initial"
+    assert all(item["planner_phase"] == "follow_up" for item in planner_events[1:])
+
+
 def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

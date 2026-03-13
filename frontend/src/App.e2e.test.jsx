@@ -246,6 +246,15 @@ function createRunState() {
       "run-pending": [],
       "run-delegate": [
         {
+          type: "planner.decision",
+          timestamp: "2026-03-06T12:08:30+00:00",
+          step_id: "child-p2",
+          action_type: "write_file",
+          instruction: "{\"path\":\"reports/summary.md\",\"content\":\"delegated summary\"}",
+          planner_source: "model",
+          planner_phase: "follow_up"
+        },
+        {
           type: "delegate.started",
           timestamp: "2026-03-06T12:08:00+00:00",
           child_run_id: "child-pending",
@@ -546,11 +555,12 @@ describe("App run inbox e2e", () => {
     const transcript = screen.getByText("Run Transcript").closest("section");
     expect(transcript).not.toBeNull();
     const transcriptScope = within(transcript);
+    expect(transcriptScope.getByText("Planner decision")).toBeInTheDocument();
     expect(transcriptScope.getByText("Delegation started")).toBeInTheDocument();
     expect(transcriptScope.getByText("Awaiting approval")).toBeInTheDocument();
     expect(transcriptScope.getAllByText("Runtime event").length).toBeGreaterThan(0);
     expect(transcriptScope.getByText("Approval needed")).toBeInTheDocument();
-    expect(transcriptScope.getByText("Planned by model (follow-up).")).toBeInTheDocument();
+    expect(transcriptScope.getAllByText("Planned by model (follow-up).").length).toBeGreaterThan(0);
     fireEvent.click(transcriptScope.getByRole("button", { name: "Approve" }));
 
     await waitFor(() => {
@@ -596,9 +606,10 @@ describe("App run inbox e2e", () => {
     const timelineCard = screen.getByText("Action Timeline").closest("section");
     expect(timelineCard).not.toBeNull();
     const timeline = within(timelineCard);
+    expect(timeline.getByText("Planner decision")).toBeInTheDocument();
     expect(timeline.getByText("Delegation started")).toBeInTheDocument();
     expect(timeline.getByText("Awaiting approval")).toBeInTheDocument();
-    expect(timeline.getByText("Planned by model (follow-up).")).toBeInTheDocument();
+    expect(timeline.getAllByText("Planned by model (follow-up).").length).toBeGreaterThan(0);
   });
 
   it("reconnects stream after websocket close", async () => {
