@@ -97,6 +97,17 @@ function createRunState() {
           metadata: { file_path: "reports/draft.txt", changed: true, bytes_written: 12 }
         },
         {
+          id: "s2b",
+          action_type: "click",
+          status: "completed",
+          instruction: "Click the grounded `Continue` control to continue for: failed export retry",
+          output_text: "[sandbox-browser-real] Clicked the requested control on https://docs.example.org/start",
+          metadata: {
+            target_hint: "Continue",
+            target_selector: "button:has-text(\"Continue\")"
+          }
+        },
+        {
           id: "s3",
           action_type: "execute_code",
           status: "failed",
@@ -485,6 +496,7 @@ describe("App run inbox e2e", () => {
     expect(screen.getByText("python -c print(1)")).toBeInTheDocument();
     expect(screen.getByText("reports/generated.txt")).toBeInTheDocument();
     expect(screen.getByText("updated")).toBeInTheDocument();
+    expect(screen.getByText("button:has-text(\"Continue\")")).toBeInTheDocument();
     expect(screen.getByText("Delegated researcher")).toBeInTheDocument();
     expect(screen.getByText("Collected 3 relevant docs")).toBeInTheDocument();
     expect(screen.getByText("Start from prior research")).toBeInTheDocument();

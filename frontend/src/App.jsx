@@ -89,6 +89,12 @@ function buildTranscriptDetails(step) {
   if (typeof metadata.exit_code === "number") {
     details.push({ label: "Exit code", value: String(metadata.exit_code) });
   }
+  if (typeof metadata.target_hint === "string" && metadata.target_hint) {
+    details.push({ label: "Target", value: metadata.target_hint });
+  }
+  if (typeof metadata.target_selector === "string" && metadata.target_selector) {
+    details.push({ label: "Selector", value: metadata.target_selector });
+  }
 
   return details;
 }
