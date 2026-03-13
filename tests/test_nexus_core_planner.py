@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from nexus_core.models import CitationRecord, StepExecutionResult
-from nexus_core.planner import plan_follow_up_steps
+from nexus_core.models import RunMode
+from nexus_core.planner import RuleAdaptivePlanner, plan_follow_up_steps
 
 
 def _step(step_index: int, action_type: str) -> dict[str, object]:
@@ -162,3 +165,22 @@ def test_plan_follow_up_steps_scroll_retries_extraction_after_context_gathering(
     )
 
     assert [step.action_type for step in steps] == ["extract"]
+
+
+@pytest.mark.asyncio
+async def test_rule_adaptive_planner_initial_bootstrap_returns_single_seed_step() -> None:
+    planner = RuleAdaptivePlanner()
+
+    research_steps = await planner.plan_initial_steps(
+        objective="Research grounded browser runtime docs",
+        mode=RunMode.SUPERVISED,
+    )
+    workflow_steps = await planner.plan_initial_steps(
+        objective="Fill out the signup form at https://example.com/register",
+        mode=RunMode.SUPERVISED,
+    )
+
+    assert [step.action_type for step in research_steps] == ["search_web"]
+    assert research_steps[0].metadata["planner_phase"] == "initial"
+    assert [step.action_type for step in workflow_steps] == ["navigate"]
+    assert workflow_steps[0].metadata["planner_phase"] == "initial"

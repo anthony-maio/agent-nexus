@@ -25,7 +25,14 @@ from nexus_core.models import (
     StepExecutionResult,
     StepStatus,
 )
-from nexus_core.planner import AdaptivePlanner, RuleAdaptivePlanner, apply_follow_up_policy
+from nexus_core.planner import (
+    AdaptivePlanner,
+    RuleAdaptivePlanner,
+    annotate_planner_steps,
+    apply_follow_up_policy,
+    apply_initial_plan_policy,
+    plan_steps_for_objective,
+)
 from nexus_core.policy import (
     delegated_output_contract_violations,
     delegated_role_allows_action,
@@ -136,16 +143,32 @@ class RunEngine:
         delegation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a run and execute until completion or approval gate."""
+        planned_steps = steps or await self._plan_initial_steps(objective=objective, mode=mode)
         run = self.repo.create_run(
             objective=objective,
             mode=mode.value,
-            steps=steps,
+            steps=planned_steps,
             parent_run_id=parent_run_id,
             delegation=delegation,
         )
         await self._publish(run["id"], "run.created", {"objective": objective})
         await self._execute_until_gate(run["id"])
         return self.repo.get_run(run["id"]) or run
+
+    async def _plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+    ) -> list[StepDefinition]:
+        proposed = await self.adaptive_planner.plan_initial_steps(objective=objective, mode=mode)
+        planned = apply_initial_plan_policy(proposed, mode=mode)
+        if planned:
+            return planned
+        return annotate_planner_steps(
+            plan_steps_for_objective(objective),
+            planner_source="rule",
+            planner_phase="initial",
+        )
 
     async def decide_approval(
         self,
@@ -480,15 +503,9 @@ class RunEngine:
         payload = self._parse_delegate_payload(step["instruction"])
         child_steps = payload.steps
         child_mode = self._delegated_child_mode(step["run_id"], payload, child_steps)
-        if not child_steps:
-            child_steps = await self.adaptive_planner.plan_initial_steps(
-                objective=payload.objective,
-                mode=child_mode,
-            )
-            child_mode = self._delegated_child_mode(step["run_id"], payload, child_steps)
-        child_run = self.repo.create_run(
+        child_run = await self.create_run(
             objective=payload.objective,
-            mode=child_mode.value,
+            mode=child_mode,
             steps=child_steps,
             parent_run_id=step["run_id"],
             delegation={
@@ -501,11 +518,6 @@ class RunEngine:
         )
         child_run_id = child_run["id"]
         await self._publish(
-            child_run_id,
-            "run.created",
-            {"objective": payload.objective, "delegated_from": step["run_id"]},
-        )
-        await self._publish(
             step["run_id"],
             "delegate.started",
             {
@@ -515,7 +527,6 @@ class RunEngine:
                 "objective": payload.objective,
             },
         )
-        await self._execute_until_gate(child_run_id)
         child_run = self.repo.get_run(child_run_id) or child_run
         child_status = str(child_run.get("status", RunStatus.FAILED.value))
         if child_status == RunStatus.PENDING_APPROVAL.value:

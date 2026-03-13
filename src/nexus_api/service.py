@@ -14,22 +14,10 @@ from nexus_api.config import ApiSettings
 from nexus_api.db import build_engine, build_session_factory
 from nexus_api.migrator import run_migrations
 from nexus_core.events import RunEventBus
-from nexus_core.models import StepDefinition
 from nexus_core.planner import (
     CompositeAdaptivePlanner,
     RuleAdaptivePlanner,
-    annotate_planner_steps,
-    plan_steps_for_objective,
 )
-
-
-def default_steps_for_objective(objective: str) -> list[StepDefinition]:
-    """Generate browser-first baseline steps for app-first execution."""
-    return annotate_planner_steps(
-        plan_steps_for_objective(objective),
-        planner_source="rule",
-        planner_phase="initial",
-    )
 
 
 @dataclass

@@ -214,6 +214,40 @@ class DelegateReplanApprovalPlanner:
         return []
 
 
+class MultiStepInitialPlanner:
+    def __init__(self) -> None:
+        self.rule = RuleAdaptivePlanner()
+
+    async def plan_initial_steps(self, objective: str, mode: object) -> list[StepDefinition]:
+        _ = objective, mode
+        return [
+            StepDefinition(
+                action_type="search_web",
+                instruction="collect grounded sources",
+                metadata={"planner_source": "model", "planner_phase": "initial"},
+            ),
+            StepDefinition(
+                action_type="fetch_url",
+                instruction="open the first grounded source",
+                metadata={"planner_source": "model", "planner_phase": "initial"},
+            ),
+        ]
+
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, str],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, str]],
+    ) -> list[StepDefinition]:
+        return await self.rule.propose_follow_up(
+            objective=objective,
+            completed_step=completed_step,
+            result=result,
+            existing_steps=existing_steps,
+        )
+
+
 class WorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
     async def execute_step(
         self, run_id: str, step_id: str, action_type: str, instruction: str
@@ -535,6 +569,12 @@ def test_default_research_run_bootstraps_autonomous_tool_loop(tmp_path: Path) ->
     ]
     assert run["steps"][0]["metadata"]["planner_source"] == "rule"
     assert run["steps"][0]["metadata"]["planner_phase"] == "initial"
+    assert [step["metadata"]["planner_phase"] for step in run["steps"]] == [
+        "initial",
+        "follow_up",
+        "follow_up",
+        "follow_up",
+    ]
     assert run["status"] == "pending_approval"
 
     timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
@@ -568,6 +608,11 @@ def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: P
         "completed",
         "completed",
         "pending_approval",
+    ]
+    assert [step["metadata"]["planner_phase"] for step in run["steps"]] == [
+        "initial",
+        "follow_up",
+        "follow_up",
     ]
     assert run["status"] == "pending_approval"
 
@@ -603,6 +648,18 @@ def test_initial_planner_safe_bootstrap_step_is_used(tmp_path: Path) -> None:
     assert run["steps"][0]["instruction"].startswith("Model bootstrap search for:")
     assert run["steps"][0]["metadata"]["planner_source"] == "model"
     assert run["steps"][0]["metadata"]["planner_phase"] == "initial"
+    assert [step["metadata"]["planner_source"] for step in run["steps"]] == [
+        "model",
+        "rule",
+        "rule",
+        "rule",
+    ]
+    assert [step["metadata"]["planner_phase"] for step in run["steps"]] == [
+        "initial",
+        "follow_up",
+        "follow_up",
+        "follow_up",
+    ]
     assert run["steps"][3]["status"] == "pending_approval"
     assert run["status"] == "pending_approval"
 
@@ -636,6 +693,11 @@ def test_initial_planner_unsafe_bootstrap_step_falls_back_to_default_bootstrap(
 
     assert [step["action_type"] for step in run["steps"]] == ["navigate", "inspect", "type"]
     assert run["steps"][0]["instruction"].startswith("Navigate directly to https://example.com/contact")
+    assert [step["metadata"]["planner_phase"] for step in run["steps"]] == [
+        "initial",
+        "follow_up",
+        "follow_up",
+    ]
     assert run["steps"][2]["status"] == "pending_approval"
     assert run["status"] == "pending_approval"
 
@@ -1238,6 +1300,43 @@ def test_supervised_delegate_executes_when_child_plan_is_low_risk(tmp_path: Path
         item["run_id"] == run["id"] and item["action_type"] == "delegate"
         for item in pending.json()["items"]
     )
+
+
+def test_delegate_child_autoplan_truncates_initial_plan_to_single_seed_step(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=MultiStepInitialPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parent run with delegated child bootstrap",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "delegate",
+                    "instruction": json.dumps(
+                        {
+                            "role": "researcher",
+                            "objective": "Collect delegated grounded sources",
+                            "mode": "manual",
+                            "steps": [],
+                        }
+                    ),
+                }
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert len(run["child_runs"]) == 1
+    child = run["child_runs"][0]
+    assert [step["action_type"] for step in child["steps"][:2]] == ["search_web", "fetch_url"]
+    assert child["steps"][0]["metadata"]["planner_source"] == "model"
+    assert child["steps"][0]["metadata"]["planner_phase"] == "initial"
+    assert all(step["metadata"]["planner_phase"] == "follow_up" for step in child["steps"][1:])
+    assert all(step["metadata"]["planner_source"] == "rule" for step in child["steps"][1:])
 
 
 def test_supervised_delegate_replan_gates_child_approval_and_pauses_parent(tmp_path: Path) -> None:
