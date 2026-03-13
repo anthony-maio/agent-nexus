@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from nexus_core.models import RunMode, StepDefinition, StepExecutionResult
-from nexus_core.planner import AdaptivePlanner, annotate_planner_steps
+from nexus_core.planner import AdaptivePlanner, annotate_planner_steps, request_next_steps
 
 log = logging.getLogger(__name__)
 
@@ -34,59 +34,53 @@ class OpenRouterAdaptivePlanner:
         self.timeout_sec = timeout_sec
         self.max_steps = max(1, min(max_steps, 8))
 
-    async def plan_initial_steps(
+    async def plan_next_steps(
         self,
         objective: str,
         mode: RunMode,
-    ) -> list[StepDefinition]:
-        if not self.api_key or not self.model:
-            return []
-
-        step_budget = 1
-        allowed_actions = [
-            "search_web",
-            "fetch_url",
-            "navigate",
-            "inspect",
-            "read",
-            "list_files",
-            "read_file",
-        ]
-        payload = {
-            "objective": objective,
-            "mode": mode.value,
-            "constraints": {
-                "allowed_actions": allowed_actions,
-                "max_steps": step_budget,
-            },
-        }
-        parsed = await self._request_plan(
-            prompt=(
-                "Return strict JSON with shape "
-                '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
-                "Plan exactly one grounded bootstrap tool call. "
-                "Use only low-risk starting actions that gather context or open the correct page/file. "
-                "Prefer workspace read tools when the objective references local files. No prose."
-            ),
-            payload=payload,
-        )
-        return annotate_planner_steps(
-            self._step_definitions_from_payload(parsed, limit=step_budget),
-            planner_source="model",
-            planner_phase="initial",
-        )
-
-    async def propose_follow_up(
-        self,
-        objective: str,
-        completed_step: dict[str, Any],
-        result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
+        completed_step: dict[str, Any] | None = None,
+        result: StepExecutionResult | None = None,
     ) -> list[StepDefinition]:
         if not self.api_key or not self.model:
             return []
 
         step_budget = 1
+        _ = existing_steps
+        if completed_step is None or result is None:
+            allowed_actions = [
+                "search_web",
+                "fetch_url",
+                "navigate",
+                "inspect",
+                "read",
+                "list_files",
+                "read_file",
+            ]
+            payload = {
+                "objective": objective,
+                "mode": mode.value,
+                "constraints": {
+                    "allowed_actions": allowed_actions,
+                    "max_steps": step_budget,
+                },
+            }
+            parsed = await self._request_plan(
+                prompt=(
+                    "Return strict JSON with shape "
+                    '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
+                    "Plan exactly one grounded bootstrap tool call. "
+                    "Use only low-risk starting actions that gather context or open the correct page/file. "
+                    "Prefer workspace read tools when the objective references local files. No prose."
+                ),
+                payload=payload,
+            )
+            return annotate_planner_steps(
+                self._step_definitions_from_payload(parsed, limit=step_budget),
+                planner_source="model",
+                planner_phase="initial",
+            )
+
         payload = {
             "objective": objective,
             "completed_step": {
@@ -144,6 +138,32 @@ class OpenRouterAdaptivePlanner:
             self._step_definitions_from_payload(parsed, limit=step_budget),
             planner_source="model",
             planner_phase="follow_up",
+        )
+
+    async def plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+    ) -> list[StepDefinition]:
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=mode,
+            existing_steps=[],
+        )
+
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, Any],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, Any]],
+    ) -> list[StepDefinition]:
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=RunMode.MANUAL,
+            existing_steps=existing_steps,
+            completed_step=completed_step,
+            result=result,
         )
 
     async def _request_plan(
@@ -208,12 +228,33 @@ class RuleFallbackAdaptivePlanner:
     def __init__(self, planner: AdaptivePlanner) -> None:
         self.planner = planner
 
+    async def plan_next_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+        existing_steps: list[dict[str, Any]],
+        completed_step: dict[str, Any] | None = None,
+        result: StepExecutionResult | None = None,
+    ) -> list[StepDefinition]:
+        return await request_next_steps(
+            self.planner,
+            objective=objective,
+            mode=mode,
+            existing_steps=existing_steps,
+            completed_step=completed_step,
+            result=result,
+        )
+
     async def plan_initial_steps(
         self,
         objective: str,
         mode: RunMode,
     ) -> list[StepDefinition]:
-        return await self.planner.plan_initial_steps(objective=objective, mode=mode)
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=mode,
+            existing_steps=[],
+        )
 
     async def propose_follow_up(
         self,
@@ -222,11 +263,12 @@ class RuleFallbackAdaptivePlanner:
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
     ) -> list[StepDefinition]:
-        return await self.planner.propose_follow_up(
+        return await self.plan_next_steps(
             objective=objective,
+            mode=RunMode.MANUAL,
+            existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
-            existing_steps=existing_steps,
         )
 
 

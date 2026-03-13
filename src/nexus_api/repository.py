@@ -469,6 +469,11 @@ class SqlRunRepository:
                 if isinstance(metadata, dict)
                 else ""
             )
+            planner_fallback_reason = (
+                str(metadata.get("planner_fallback_reason", "")).strip()
+                if isinstance(metadata, dict)
+                else ""
+            )
             events.append(
                 {
                     "type": f"step.{step['status']}",
@@ -480,6 +485,7 @@ class SqlRunRepository:
                     "error_text": step["error_text"],
                     "planner_source": planner_source,
                     "planner_phase": planner_phase,
+                    "planner_fallback_reason": planner_fallback_reason,
                 }
             )
         for approval in self.list_approvals(run_id):

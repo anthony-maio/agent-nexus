@@ -248,6 +248,35 @@ class MultiStepInitialPlanner:
         )
 
 
+class UnifiedNextStepPlanner:
+    def __init__(self) -> None:
+        self.rule = RuleAdaptivePlanner()
+
+    async def plan_next_steps(
+        self,
+        objective: str,
+        mode: object,
+        existing_steps: list[dict[str, str]],
+        completed_step: dict[str, str] | None = None,
+        result: StepExecutionResult | None = None,
+    ) -> list[StepDefinition]:
+        _ = mode
+        if completed_step is None or result is None:
+            return [
+                StepDefinition(
+                    action_type="search_web",
+                    instruction=f"Unified bootstrap search for: {objective}",
+                    metadata={"planner_source": "model", "planner_phase": "initial"},
+                )
+            ]
+        return await self.rule.propose_follow_up(
+            objective=objective,
+            completed_step=completed_step,
+            result=result,
+            existing_steps=existing_steps,
+        )
+
+
 class WorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
     async def execute_step(
         self, run_id: str, step_id: str, action_type: str, instruction: str
@@ -693,12 +722,61 @@ def test_initial_planner_unsafe_bootstrap_step_falls_back_to_default_bootstrap(
 
     assert [step["action_type"] for step in run["steps"]] == ["navigate", "inspect", "type"]
     assert run["steps"][0]["instruction"].startswith("Navigate directly to https://example.com/contact")
+    assert run["steps"][0]["metadata"]["planner_source"] == "rule"
+    assert run["steps"][0]["metadata"]["planner_fallback_reason"] == "policy_rejected"
     assert [step["metadata"]["planner_phase"] for step in run["steps"]] == [
         "initial",
         "follow_up",
         "follow_up",
     ]
     assert run["steps"][2]["status"] == "pending_approval"
+    assert run["status"] == "pending_approval"
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    first_step_event = next(
+        item
+        for item in timeline.json()["timeline"]
+        if item["step_id"] == run["steps"][0]["id"] and item["type"] == "step.completed"
+    )
+    assert first_step_event["planner_fallback_reason"] == "policy_rejected"
+
+
+def test_unified_next_step_planner_drives_initial_and_follow_up_paths(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=UnifiedNextStepPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research payroll automation competitors and capture citations",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "search_web",
+        "fetch_url",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][0]["instruction"].startswith("Unified bootstrap search for:")
+    assert [step["metadata"]["planner_source"] for step in run["steps"]] == [
+        "model",
+        "rule",
+        "rule",
+        "rule",
+    ]
+    assert [step["metadata"]["planner_phase"] for step in run["steps"]] == [
+        "initial",
+        "follow_up",
+        "follow_up",
+        "follow_up",
+    ]
+    assert run["steps"][3]["status"] == "pending_approval"
     assert run["status"] == "pending_approval"
 
 

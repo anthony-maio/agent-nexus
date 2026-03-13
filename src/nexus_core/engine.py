@@ -28,10 +28,12 @@ from nexus_core.models import (
 from nexus_core.planner import (
     AdaptivePlanner,
     RuleAdaptivePlanner,
+    annotate_planner_fallback,
     annotate_planner_steps,
     apply_follow_up_policy,
     apply_initial_plan_policy,
     plan_steps_for_objective,
+    request_next_steps,
 )
 from nexus_core.policy import (
     delegated_output_contract_violations,
@@ -143,7 +145,11 @@ class RunEngine:
         delegation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a run and execute until completion or approval gate."""
-        planned_steps = steps or await self._plan_initial_steps(objective=objective, mode=mode)
+        planned_steps = steps or await self._plan_next_steps(
+            objective=objective,
+            mode=mode,
+            existing_steps=[],
+        )
         run = self.repo.create_run(
             objective=objective,
             mode=mode.value,
@@ -155,19 +161,39 @@ class RunEngine:
         await self._execute_until_gate(run["id"])
         return self.repo.get_run(run["id"]) or run
 
-    async def _plan_initial_steps(
+    async def _plan_next_steps(
         self,
+        *,
         objective: str,
         mode: RunMode,
+        existing_steps: list[dict[str, Any]],
+        completed_step: dict[str, Any] | None = None,
+        result: StepExecutionResult | None = None,
     ) -> list[StepDefinition]:
-        proposed = await self.adaptive_planner.plan_initial_steps(objective=objective, mode=mode)
-        planned = apply_initial_plan_policy(proposed, mode=mode)
-        if planned:
-            return planned
-        return annotate_planner_steps(
-            plan_steps_for_objective(objective),
-            planner_source="rule",
-            planner_phase="initial",
+        proposed = await request_next_steps(
+            self.adaptive_planner,
+            objective=objective,
+            mode=mode,
+            existing_steps=existing_steps,
+            completed_step=completed_step,
+            result=result,
+        )
+        if completed_step is None or result is None:
+            planned = apply_initial_plan_policy(proposed, mode=mode)
+            if planned:
+                return planned
+            fallback_reason = "policy_rejected" if proposed else "no_steps"
+            return annotate_planner_fallback(
+                annotate_planner_steps(
+                    plan_steps_for_objective(objective),
+                    planner_source="rule",
+                    planner_phase="initial",
+                ),
+                fallback_reason=fallback_reason,
+            )
+        return apply_follow_up_policy(
+            proposed,
+            mode=mode,
         )
 
     async def decide_approval(
@@ -569,15 +595,12 @@ class RunEngine:
         ):
             return
 
-        proposed_steps = await self.adaptive_planner.propose_follow_up(
+        follow_up_steps = await self._plan_next_steps(
             objective=run["objective"],
+            mode=RunMode(run["mode"]),
+            existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
-            existing_steps=existing_steps,
-        )
-        follow_up_steps = apply_follow_up_policy(
-            proposed_steps,
-            mode=RunMode(run["mode"]),
         )
         if not follow_up_steps:
             return
@@ -631,10 +654,13 @@ class RunEngine:
         if isinstance(metadata, dict):
             planner_source = str(metadata.get("planner_source", "")).strip()
             planner_phase = str(metadata.get("planner_phase", "")).strip()
+            planner_fallback_reason = str(metadata.get("planner_fallback_reason", "")).strip()
             if planner_source:
                 payload["planner_source"] = planner_source
             if planner_phase:
                 payload["planner_phase"] = planner_phase
+            if planner_fallback_reason:
+                payload["planner_fallback_reason"] = planner_fallback_reason
         payload.update(extra)
         return payload
 

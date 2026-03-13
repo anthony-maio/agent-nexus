@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
-from nexus_core.models import CitationRecord, StepExecutionResult
-from nexus_core.models import RunMode
-from nexus_core.planner import RuleAdaptivePlanner, plan_follow_up_steps
+from nexus_core.models import CitationRecord, RunMode, StepDefinition, StepExecutionResult
+from nexus_core.planner import (
+    CompositeAdaptivePlanner,
+    RuleAdaptivePlanner,
+    plan_follow_up_steps,
+    request_next_steps,
+)
 
 
 def _step(step_index: int, action_type: str) -> dict[str, object]:
@@ -184,3 +190,77 @@ async def test_rule_adaptive_planner_initial_bootstrap_returns_single_seed_step(
     assert research_steps[0].metadata["planner_phase"] == "initial"
     assert [step.action_type for step in workflow_steps] == ["navigate"]
     assert workflow_steps[0].metadata["planner_phase"] == "initial"
+
+
+@pytest.mark.asyncio
+async def test_request_next_steps_supports_unified_planner_contract() -> None:
+    class UnifiedOnlyPlanner:
+        async def plan_next_steps(
+            self,
+            objective: str,
+            mode: RunMode,
+            existing_steps: list[dict[str, Any]],
+            completed_step: dict[str, Any] | None = None,
+            result: StepExecutionResult | None = None,
+        ) -> list[StepDefinition]:
+            _ = mode, existing_steps
+            if completed_step is None or result is None:
+                return [
+                    StepDefinition(
+                        action_type="search_web",
+                        instruction=f"bootstrap {objective}",
+                    )
+                ]
+            return [
+                StepDefinition(
+                    action_type="extract",
+                    instruction=f"follow up {objective}",
+                )
+            ]
+
+    planner = UnifiedOnlyPlanner()
+
+    initial_steps = await request_next_steps(
+        planner,
+        objective="Research grounded browser runtime docs",
+        mode=RunMode.SUPERVISED,
+        existing_steps=[],
+    )
+    follow_up_steps = await request_next_steps(
+        planner,
+        objective="Research grounded browser runtime docs",
+        mode=RunMode.SUPERVISED,
+        existing_steps=[_step(0, "search_web")],
+        completed_step=_step(0, "search_web"),
+        result=StepExecutionResult(output_text="search complete"),
+    )
+
+    assert [step.action_type for step in initial_steps] == ["search_web"]
+    assert [step.action_type for step in follow_up_steps] == ["extract"]
+
+
+@pytest.mark.asyncio
+async def test_composite_adaptive_planner_marks_fallback_steps_when_primary_returns_no_steps() -> None:
+    class EmptyPlanner:
+        async def plan_next_steps(
+            self,
+            objective: str,
+            mode: RunMode,
+            existing_steps: list[dict[str, Any]],
+            completed_step: dict[str, Any] | None = None,
+            result: StepExecutionResult | None = None,
+        ) -> list[StepDefinition]:
+            _ = objective, mode, existing_steps, completed_step, result
+            return []
+
+    planner = CompositeAdaptivePlanner([EmptyPlanner(), RuleAdaptivePlanner()])
+
+    steps = await planner.plan_next_steps(
+        objective="Research grounded browser runtime docs",
+        mode=RunMode.SUPERVISED,
+        existing_steps=[],
+    )
+
+    assert [step.action_type for step in steps] == ["search_web"]
+    assert steps[0].metadata["planner_source"] == "rule"
+    assert steps[0].metadata["planner_fallback_reason"] == "no_steps"

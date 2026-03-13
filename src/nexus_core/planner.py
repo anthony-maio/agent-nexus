@@ -107,6 +107,27 @@ def annotate_planner_steps(
     return annotated
 
 
+def annotate_planner_fallback(
+    steps: list[StepDefinition],
+    *,
+    fallback_reason: str,
+) -> list[StepDefinition]:
+    """Attach fallback metadata to planner-produced steps."""
+
+    annotated: list[StepDefinition] = []
+    for step in steps:
+        metadata = dict(step.metadata)
+        metadata["planner_fallback_reason"] = fallback_reason
+        annotated.append(
+            StepDefinition(
+                action_type=step.action_type,
+                instruction=step.instruction,
+                metadata=metadata,
+            )
+        )
+    return annotated
+
+
 def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
     """Return bootstrap steps for an autonomous tool loop."""
     cleaned = " ".join(objective.split())
@@ -350,6 +371,16 @@ def plan_follow_up_steps(
 
 
 class AdaptivePlanner(Protocol):
+    async def plan_next_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+        existing_steps: list[dict[str, Any]],
+        completed_step: dict[str, Any] | None = None,
+        result: StepExecutionResult | None = None,
+    ) -> list[StepDefinition]:
+        """Return the next steps for either bootstrap or follow-up planning."""
+
     async def plan_initial_steps(
         self,
         objective: str,
@@ -367,26 +398,51 @@ class AdaptivePlanner(Protocol):
         """Return proposed follow-up steps for current run context."""
 
 
+async def request_next_steps(
+    planner: Any,
+    *,
+    objective: str,
+    mode: RunMode,
+    existing_steps: list[dict[str, Any]],
+    completed_step: dict[str, Any] | None = None,
+    result: StepExecutionResult | None = None,
+) -> list[StepDefinition]:
+    """Dispatch to the planner's shared next-step contract when available."""
+
+    if hasattr(planner, "plan_next_steps"):
+        return await planner.plan_next_steps(
+            objective=objective,
+            mode=mode,
+            existing_steps=existing_steps,
+            completed_step=completed_step,
+            result=result,
+        )
+    if completed_step is None or result is None:
+        return await planner.plan_initial_steps(objective=objective, mode=mode)
+    return await planner.propose_follow_up(
+        objective=objective,
+        completed_step=completed_step,
+        result=result,
+        existing_steps=existing_steps,
+    )
+
+
 class RuleAdaptivePlanner:
-    async def plan_initial_steps(
+    async def plan_next_steps(
         self,
         objective: str,
         mode: RunMode,
+        existing_steps: list[dict[str, Any]],
+        completed_step: dict[str, Any] | None = None,
+        result: StepExecutionResult | None = None,
     ) -> list[StepDefinition]:
         _ = mode
-        return annotate_planner_steps(
-            plan_steps_for_objective(objective),
-            planner_source="rule",
-            planner_phase="initial",
-        )
-
-    async def propose_follow_up(
-        self,
-        objective: str,
-        completed_step: dict[str, Any],
-        result: StepExecutionResult,
-        existing_steps: list[dict[str, Any]],
-    ) -> list[StepDefinition]:
+        if completed_step is None or result is None:
+            return annotate_planner_steps(
+                plan_steps_for_objective(objective),
+                planner_source="rule",
+                planner_phase="initial",
+            )
         return annotate_planner_steps(
             plan_follow_up_steps(
                 objective=objective,
@@ -398,25 +454,16 @@ class RuleAdaptivePlanner:
             planner_phase="follow_up",
         )
 
-
-class CompositeAdaptivePlanner:
-    def __init__(self, planners: list[AdaptivePlanner]) -> None:
-        self.planners = planners
-
     async def plan_initial_steps(
         self,
         objective: str,
         mode: RunMode,
     ) -> list[StepDefinition]:
-        for planner in self.planners:
-            try:
-                proposed = await planner.plan_initial_steps(objective=objective, mode=mode)
-            except Exception as exc:
-                log.warning("Adaptive planner failed (%s): %s", type(planner).__name__, exc)
-                continue
-            if proposed:
-                return proposed
-        return []
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=mode,
+            existing_steps=[],
+        )
 
     async def propose_follow_up(
         self,
@@ -425,20 +472,77 @@ class CompositeAdaptivePlanner:
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
     ) -> list[StepDefinition]:
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=RunMode.MANUAL,
+            existing_steps=existing_steps,
+            completed_step=completed_step,
+            result=result,
+        )
+
+
+class CompositeAdaptivePlanner:
+    def __init__(self, planners: list[AdaptivePlanner]) -> None:
+        self.planners = planners
+
+    async def plan_next_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+        existing_steps: list[dict[str, Any]],
+        completed_step: dict[str, Any] | None = None,
+        result: StepExecutionResult | None = None,
+    ) -> list[StepDefinition]:
+        fallback_reason = ""
         for planner in self.planners:
             try:
-                proposed = await planner.propose_follow_up(
+                proposed = await request_next_steps(
+                    planner,
                     objective=objective,
+                    mode=mode,
+                    existing_steps=existing_steps,
                     completed_step=completed_step,
                     result=result,
-                    existing_steps=existing_steps,
                 )
             except Exception as exc:
                 log.warning("Adaptive planner failed (%s): %s", type(planner).__name__, exc)
+                fallback_reason = "planner_error"
                 continue
             if proposed:
+                if fallback_reason:
+                    return annotate_planner_fallback(
+                        proposed,
+                        fallback_reason=fallback_reason,
+                    )
                 return proposed
+            fallback_reason = "no_steps"
         return []
+
+    async def plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+    ) -> list[StepDefinition]:
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=mode,
+            existing_steps=[],
+        )
+
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, Any],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, Any]],
+    ) -> list[StepDefinition]:
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=RunMode.MANUAL,
+            existing_steps=existing_steps,
+            completed_step=completed_step,
+            result=result,
+        )
 
 
 def apply_initial_plan_policy(
