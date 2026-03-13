@@ -107,6 +107,38 @@ def test_plan_follow_up_steps_extract_without_citations_scrolls_before_retrying(
     assert [step.action_type for step in steps] == ["scroll"]
 
 
+def test_plan_follow_up_steps_workflow_extract_grounds_submit_control() -> None:
+    objective = "Fill out the signup form at https://example.com/register"
+    existing_steps = [
+        _step(0, "navigate"),
+        _step(1, "inspect"),
+        _step(2, "type"),
+        _step(3, "click"),
+        _step(4, "wait"),
+        _step(5, "extract"),
+    ]
+
+    steps = plan_follow_up_steps(
+        objective=objective,
+        completed_step=_step(5, "extract"),
+        result=StepExecutionResult(
+            output_text="workflow ready for submission",
+            citations=[
+                CitationRecord(url="https://example.com/register", title="Signup form", snippet="Ready")
+            ],
+            metadata={
+                "page_affordances": {
+                    "buttons": [{"text": "Continue", "type": "submit"}]
+                }
+            },
+        ),
+        existing_steps=existing_steps,
+    )
+
+    assert [step.action_type for step in steps] == ["submit"]
+    assert "Continue" in steps[0].instruction
+
+
 def test_plan_follow_up_steps_scroll_retries_extraction_after_context_gathering() -> None:
     steps = plan_follow_up_steps(
         objective="Research grounded browser runtime docs",

@@ -268,10 +268,16 @@ def plan_follow_up_steps(
         if _looks_like_workflow(objective) and _has_action_before(existing_steps, step_index, "type"):
             if _has_action_after(existing_steps, step_index, "submit"):
                 return []
+            button_hints = _button_hints(result, max_items=1)
+            instruction = (
+                f"Submit the workflow via the grounded `{button_hints[0]}` control only after approval for: {objective}"
+                if button_hints
+                else f"Submit the workflow only after approval for: {objective}"
+            )
             return [
                 StepDefinition(
                     action_type="submit",
-                    instruction=f"Submit the workflow only after approval for: {objective}",
+                    instruction=instruction,
                 )
             ]
         if _has_action_after(existing_steps, step_index, "export"):
