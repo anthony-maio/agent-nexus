@@ -372,7 +372,11 @@ class RunEngine:
                 await self._publish(
                     run_id,
                     "step.failed",
-                    {"step_id": next_step["id"], "error": str(exc)},
+                    self._step_event_payload(
+                        next_step,
+                        step_id=next_step["id"],
+                        error=str(exc),
+                    ),
                 )
                 await self._mark_run_failed(run_id, next_step["id"])
                 return
@@ -392,11 +396,7 @@ class RunEngine:
                 await self._publish(
                     run_id,
                     "step.pending_approval",
-                    {
-                        "step_id": next_step["id"],
-                        "action_type": next_step["action_type"],
-                        "instruction": next_step["instruction"],
-                    },
+                    self._step_event_payload(next_step, step_id=next_step["id"]),
                 )
                 return
 
@@ -420,11 +420,7 @@ class RunEngine:
             await self._publish(
                 run_id,
                 "step.running",
-                {
-                    "step_id": step_id,
-                    "action_type": step["action_type"],
-                    "instruction": step["instruction"],
-                },
+                self._step_event_payload(step, step_id=step_id),
             )
             if str(step["action_type"]).strip().lower() == "delegate":
                 result = await self._execute_delegate_step(step)
@@ -443,6 +439,7 @@ class RunEngine:
                 StepStatus.COMPLETED.value,
                 output_text=result.output_text,
             )
+            self.repo.merge_step_metadata(step_id, result.metadata)
             self.repo.add_citations(
                 run_id=run_id,
                 step_id=step_id,
@@ -456,12 +453,13 @@ class RunEngine:
             await self._publish(
                 run_id,
                 "step.completed",
-                {
-                    "step_id": step_id,
-                    "output_text": result.output_text[:500],
-                    "citations": len(result.citations),
-                    "artifacts": len(result.artifacts),
-                },
+                self._step_event_payload(
+                    step,
+                    step_id=step_id,
+                    output_text=result.output_text[:500],
+                    citations=len(result.citations),
+                    artifacts=len(result.artifacts),
+                ),
             )
             return result
         except Exception as exc:
@@ -474,7 +472,7 @@ class RunEngine:
             await self._publish(
                 run_id,
                 "step.failed",
-                {"step_id": step_id, "error": str(exc)},
+                self._step_event_payload(step, step_id=step_id, error=str(exc)),
             )
             return None
 
@@ -600,11 +598,7 @@ class RunEngine:
             await self._publish(
                 run["id"],
                 "step.pending_approval",
-                {
-                    "step_id": gated_follow_up_step["id"],
-                    "action_type": gated_follow_up_step["action_type"],
-                    "instruction": gated_follow_up_step["instruction"],
-                },
+                self._step_event_payload(gated_follow_up_step, step_id=gated_follow_up_step["id"]),
             )
 
     async def _mark_run_failed(self, run_id: str, step_id: str) -> None:
@@ -614,6 +608,24 @@ class RunEngine:
 
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         await self.events.publish(RunEvent(run_id=run_id, event_type=event_type, payload=payload))
+
+    @staticmethod
+    def _step_event_payload(step: dict[str, Any], **extra: Any) -> dict[str, Any]:
+        payload = {
+            "step_id": str(step.get("id", "")),
+            "action_type": str(step.get("action_type", "")),
+            "instruction": str(step.get("instruction", "")),
+        }
+        metadata = step.get("metadata")
+        if isinstance(metadata, dict):
+            planner_source = str(metadata.get("planner_source", "")).strip()
+            planner_phase = str(metadata.get("planner_phase", "")).strip()
+            if planner_source:
+                payload["planner_source"] = planner_source
+            if planner_phase:
+                payload["planner_phase"] = planner_phase
+        payload.update(extra)
+        return payload
 
     @staticmethod
     def _parse_delegate_payload(instruction: str) -> DelegationStepPayload:
@@ -855,6 +867,7 @@ class RunEngine:
         payload = self._parse_delegate_payload(waiting_step["instruction"])
         result = await self._finalize_delegate_step(waiting_step, payload, child_run)
         self.repo.mark_step_status(waiting_step["id"], StepStatus.COMPLETED.value, output_text=result.output_text)
+        self.repo.merge_step_metadata(waiting_step["id"], result.metadata)
         self.repo.add_citations(
             run_id=parent_run_id,
             step_id=waiting_step["id"],
@@ -868,12 +881,13 @@ class RunEngine:
         await self._publish(
             parent_run_id,
             "step.completed",
-            {
-                "step_id": waiting_step["id"],
-                "output_text": result.output_text[:500],
-                "citations": len(result.citations),
-                "artifacts": len(result.artifacts),
-            },
+            self._step_event_payload(
+                waiting_step,
+                step_id=waiting_step["id"],
+                output_text=result.output_text[:500],
+                citations=len(result.citations),
+                artifacts=len(result.artifacts),
+            ),
         )
         parent_run = self.repo.get_run(parent_run_id)
         if parent_run is None:

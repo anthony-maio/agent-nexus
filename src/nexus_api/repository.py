@@ -65,6 +65,7 @@ class SqlRunRepository:
                     instruction=step.instruction.strip(),
                     risk_tier=risk.value,
                     status=StepStatus.PENDING.value,
+                    metadata_json=self._serialize_context(step.metadata),
                 )
             )
         self.session.flush()
@@ -195,6 +196,7 @@ class SqlRunRepository:
                     instruction=step.instruction.strip(),
                     risk_tier=risk.value,
                     status=StepStatus.PENDING.value,
+                    metadata_json=self._serialize_context(step.metadata),
                 )
             )
         self.session.flush()
@@ -250,6 +252,17 @@ class SqlRunRepository:
         step.ended_at = None
         self.session.flush()
         return True
+
+    def merge_step_metadata(self, step_id: str, metadata: dict[str, Any]) -> None:
+        if not isinstance(metadata, dict) or not metadata:
+            return
+        step = self.session.get(RunStep, step_id)
+        if step is None:
+            return
+        merged = self._deserialize_context(step.metadata_json)
+        merged.update(metadata)
+        step.metadata_json = self._serialize_context(merged)
+        self.session.flush()
 
     def add_citations(self, run_id: str, step_id: str, citations: list[dict[str, str]]) -> None:
         for citation in citations:
@@ -445,6 +458,17 @@ class SqlRunRepository:
             return events
 
         for step in run["steps"]:
+            metadata = step.get("metadata")
+            planner_source = (
+                str(metadata.get("planner_source", "")).strip()
+                if isinstance(metadata, dict)
+                else ""
+            )
+            planner_phase = (
+                str(metadata.get("planner_phase", "")).strip()
+                if isinstance(metadata, dict)
+                else ""
+            )
             events.append(
                 {
                     "type": f"step.{step['status']}",
@@ -454,6 +478,8 @@ class SqlRunRepository:
                     "instruction": step["instruction"],
                     "output_text": step["output_text"],
                     "error_text": step["error_text"],
+                    "planner_source": planner_source,
+                    "planner_phase": planner_phase,
                 }
             )
         for approval in self.list_approvals(run_id):
@@ -580,8 +606,7 @@ class SqlRunRepository:
             "updated_at": delegation.updated_at.isoformat() if delegation.updated_at else None,
         }
 
-    @staticmethod
-    def _step_to_dict(step: RunStep) -> dict[str, Any]:
+    def _step_to_dict(self, step: RunStep) -> dict[str, Any]:
         return {
             "id": step.id,
             "run_id": step.run_id,
@@ -592,6 +617,7 @@ class SqlRunRepository:
             "status": step.status,
             "output_text": step.output_text,
             "error_text": step.error_text,
+            "metadata": self._deserialize_context(step.metadata_json),
             "created_at": step.created_at.isoformat() if step.created_at else None,
             "started_at": step.started_at.isoformat() if step.started_at else None,
             "ended_at": step.ended_at.isoformat() if step.ended_at else None,

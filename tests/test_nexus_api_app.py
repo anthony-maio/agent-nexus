@@ -121,10 +121,12 @@ class ModelSuggestionPlanner:
             StepDefinition(
                 action_type="delete",
                 instruction="delete all source documents",
+                metadata={"planner_source": "model", "planner_phase": "follow_up"},
             ),
             StepDefinition(
                 action_type="submit",
                 instruction="submit the prepared workflow changes",
+                metadata={"planner_source": "model", "planner_phase": "follow_up"},
             ),
         ]
 
@@ -139,6 +141,7 @@ class SafeInitialSearchPlanner:
             StepDefinition(
                 action_type="search_web",
                 instruction=f"Model bootstrap search for: {objective}",
+                metadata={"planner_source": "model", "planner_phase": "initial"},
             )
         ]
 
@@ -167,6 +170,7 @@ class UnsafeInitialTypePlanner:
             StepDefinition(
                 action_type="type",
                 instruction="enter draft values immediately",
+                metadata={"planner_source": "model", "planner_phase": "initial"},
             )
         ]
 
@@ -204,6 +208,7 @@ class DelegateReplanApprovalPlanner:
                     instruction=json.dumps(
                         {"path": "reports/summary.md", "content": "delegated replan"}
                     ),
+                    metadata={"planner_source": "model", "planner_phase": "follow_up"},
                 )
             ]
         return []
@@ -528,7 +533,19 @@ def test_default_research_run_bootstraps_autonomous_tool_loop(tmp_path: Path) ->
         "completed",
         "pending_approval",
     ]
+    assert run["steps"][0]["metadata"]["planner_source"] == "rule"
+    assert run["steps"][0]["metadata"]["planner_phase"] == "initial"
     assert run["status"] == "pending_approval"
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    first_step_event = next(
+        item
+        for item in timeline.json()["timeline"]
+        if item["step_id"] == run["steps"][0]["id"] and item["type"] == "step.completed"
+    )
+    assert first_step_event["planner_source"] == "rule"
+    assert first_step_event["planner_phase"] == "initial"
 
 
 def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: Path) -> None:
@@ -584,8 +601,20 @@ def test_initial_planner_safe_bootstrap_step_is_used(tmp_path: Path) -> None:
         "type",
     ]
     assert run["steps"][0]["instruction"].startswith("Model bootstrap search for:")
+    assert run["steps"][0]["metadata"]["planner_source"] == "model"
+    assert run["steps"][0]["metadata"]["planner_phase"] == "initial"
     assert run["steps"][3]["status"] == "pending_approval"
     assert run["status"] == "pending_approval"
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    first_step_event = next(
+        item
+        for item in timeline.json()["timeline"]
+        if item["step_id"] == run["steps"][0]["id"] and item["type"] == "step.completed"
+    )
+    assert first_step_event["planner_source"] == "model"
+    assert first_step_event["planner_phase"] == "initial"
 
 
 def test_initial_planner_unsafe_bootstrap_step_falls_back_to_default_bootstrap(
@@ -609,6 +638,41 @@ def test_initial_planner_unsafe_bootstrap_step_falls_back_to_default_bootstrap(
     assert run["steps"][0]["instruction"].startswith("Navigate directly to https://example.com/contact")
     assert run["steps"][2]["status"] == "pending_approval"
     assert run["status"] == "pending_approval"
+
+
+def test_explicit_user_steps_preserve_user_planner_provenance(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Open the provided workspace brief",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "read_file",
+                    "instruction": json.dumps({"path": "workspace/brief.txt"}),
+                }
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["steps"][0]["metadata"]["planner_source"] == "user"
+    assert run["steps"][0]["metadata"]["planner_phase"] == "initial"
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    first_step_event = next(
+        item
+        for item in timeline.json()["timeline"]
+        if item["step_id"] == run["steps"][0]["id"] and item["type"] == "step.completed"
+    )
+    assert first_step_event["planner_source"] == "user"
+    assert first_step_event["planner_phase"] == "initial"
 
 
 def test_default_workspace_file_run_bootstraps_with_read_file(tmp_path: Path) -> None:

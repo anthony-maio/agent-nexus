@@ -34,7 +34,7 @@ from nexus_api.schemas import (
 from nexus_api.service import ApiContext, build_context, default_steps_for_objective
 from nexus_core.engine import RunEngine
 from nexus_core.models import RunMode, RunStatus
-from nexus_core.planner import apply_initial_plan_policy
+from nexus_core.planner import annotate_planner_steps, apply_initial_plan_policy
 
 log = logging.getLogger(__name__)
 
@@ -160,7 +160,11 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         if request.steps:
-            steps = request.steps
+            steps = annotate_planner_steps(
+                request.steps,
+                planner_source="user",
+                planner_phase="initial",
+            )
         else:
             planner_fn = getattr(ctx.adaptive_planner, "plan_initial_steps", None)
             planner_steps = []

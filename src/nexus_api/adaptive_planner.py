@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from nexus_core.models import RunMode, StepDefinition, StepExecutionResult
-from nexus_core.planner import AdaptivePlanner
+from nexus_core.planner import AdaptivePlanner, annotate_planner_steps
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +70,11 @@ class OpenRouterAdaptivePlanner:
             ),
             payload=payload,
         )
-        return self._step_definitions_from_payload(parsed, limit=step_budget)
+        return annotate_planner_steps(
+            self._step_definitions_from_payload(parsed, limit=step_budget),
+            planner_source="model",
+            planner_phase="initial",
+        )
 
     async def propose_follow_up(
         self,
@@ -136,7 +140,11 @@ class OpenRouterAdaptivePlanner:
             ),
             payload=payload,
         )
-        return self._step_definitions_from_payload(parsed, limit=step_budget)
+        return annotate_planner_steps(
+            self._step_definitions_from_payload(parsed, limit=step_budget),
+            planner_source="model",
+            planner_phase="follow_up",
+        )
 
     async def _request_plan(
         self,

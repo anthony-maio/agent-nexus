@@ -84,6 +84,7 @@ class RunStep(Base):
     status: Mapped[str] = mapped_column(String(40), nullable=False)
     output_text: Mapped[str] = mapped_column(Text, default="")
     error_text: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

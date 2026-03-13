@@ -176,6 +176,8 @@ async def test_openrouter_plan_initial_steps_uses_single_step_budget(
 
     assert len(steps) == 1
     assert steps[0].action_type == "search_web"
+    assert steps[0].metadata["planner_source"] == "model"
+    assert steps[0].metadata["planner_phase"] == "initial"
     payload = jsonlib.loads(captured["request_body"]["messages"][1]["content"])
     assert payload["constraints"]["max_steps"] == 1
     assert payload["constraints"]["allowed_actions"] == [
@@ -244,5 +246,7 @@ async def test_openrouter_follow_up_uses_single_step_budget(
 
     assert len(steps) == 1
     assert steps[0].action_type == "fetch_url"
+    assert steps[0].metadata["planner_source"] == "model"
+    assert steps[0].metadata["planner_phase"] == "follow_up"
     payload = jsonlib.loads(captured["request_body"]["messages"][1]["content"])
     assert payload["constraints"]["max_steps"] == 1

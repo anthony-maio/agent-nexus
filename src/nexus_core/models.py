@@ -58,6 +58,7 @@ class StepDefinition(BaseModel):
 
     action_type: str = Field(min_length=1, max_length=64)
     instruction: str = Field(min_length=1, max_length=2000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DelegationStepPayload(BaseModel):

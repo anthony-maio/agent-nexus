@@ -52,6 +52,32 @@ function stringifyCommand(command) {
   return typeof command === "string" ? command : "";
 }
 
+function formatPlannerPhase(phase) {
+  return typeof phase === "string" && phase ? phase.replaceAll("_", "-") : "";
+}
+
+function formatPlannerBadge(source, phase) {
+  const parts = [];
+  if (typeof source === "string" && source) {
+    parts.push(source);
+  }
+  const normalizedPhase = formatPlannerPhase(phase);
+  if (normalizedPhase) {
+    parts.push(normalizedPhase);
+  }
+  return parts.join(" ");
+}
+
+function formatPlannerSentence(source, phase) {
+  if (typeof source !== "string" || !source) {
+    return "";
+  }
+  const normalizedPhase = formatPlannerPhase(phase);
+  return normalizedPhase
+    ? `Planned by ${source} (${normalizedPhase}).`
+    : `Planned by ${source}.`;
+}
+
 function buildTranscriptDetails(step) {
   const metadata = step?.metadata && typeof step.metadata === "object" ? step.metadata : {};
   const payload = parseInstructionPayload(step?.instruction);
@@ -94,6 +120,10 @@ function buildTranscriptDetails(step) {
   }
   if (typeof metadata.target_selector === "string" && metadata.target_selector) {
     details.push({ label: "Selector", value: metadata.target_selector });
+  }
+  const planner = formatPlannerBadge(metadata.planner_source, metadata.planner_phase);
+  if (planner) {
+    details.push({ label: "Planner", value: planner });
   }
 
   return details;
@@ -141,6 +171,7 @@ function summarizeTimelineEvent(event) {
   const type = typeof event?.type === "string" ? event.type : "";
   const instruction =
     typeof event?.instruction === "string" ? event.instruction.trim() : "";
+  const plannerDetail = formatPlannerSentence(event?.planner_source, event?.planner_phase);
   if (type === "delegate.started") {
     const role = typeof event?.role === "string" && event.role ? event.role : "worker";
     const objective =
@@ -148,7 +179,8 @@ function summarizeTimelineEvent(event) {
     return {
       label: "Delegation started",
       tone: "info",
-      detail: `Delegated ${role} started ${objective}.`
+      detail: `Delegated ${role} started ${objective}.`,
+      plannerDetail
     };
   }
   if (type === "delegate.completed") {
@@ -156,7 +188,8 @@ function summarizeTimelineEvent(event) {
     return {
       label: "Delegation completed",
       tone: "success",
-      detail: summary || "Delegated run completed."
+      detail: summary || "Delegated run completed.",
+      plannerDetail
     };
   }
   if (type === "delegate.failed") {
@@ -164,7 +197,8 @@ function summarizeTimelineEvent(event) {
     return {
       label: "Delegation failed",
       tone: "danger",
-      detail: summary || "Delegated run failed."
+      detail: summary || "Delegated run failed.",
+      plannerDetail
     };
   }
   if (type === "approval.recorded") {
@@ -173,7 +207,8 @@ function summarizeTimelineEvent(event) {
     return {
       label: `Approval ${decision}`,
       tone: decision === "reject" ? "danger" : "success",
-      detail: reason || "Approval decision recorded."
+      detail: reason || "Approval decision recorded.",
+      plannerDetail
     };
   }
   if (type === "artifact.promoted") {
@@ -181,7 +216,8 @@ function summarizeTimelineEvent(event) {
     return {
       label: "Artifact promoted",
       tone: "success",
-      detail: target || "Artifact moved to a promoted destination."
+      detail: target || "Artifact moved to a promoted destination.",
+      plannerDetail
     };
   }
   if (type.startsWith("step.")) {
@@ -205,13 +241,15 @@ function summarizeTimelineEvent(event) {
     return {
       label: labels[status] || type,
       tone: tones[status] || "muted",
-      detail: instruction || "Step updated."
+      detail: instruction || "Step updated.",
+      plannerDetail
     };
   }
   return {
     label: type || "Event",
     tone: "muted",
-    detail: instruction || "Runtime event recorded."
+    detail: instruction || "Runtime event recorded.",
+    plannerDetail
   };
 }
 
@@ -226,6 +264,7 @@ function TranscriptEvent({ event }) {
         {event?.timestamp ? <code>{event.timestamp}</code> : null}
       </div>
       <p>{summary.detail}</p>
+      {summary.plannerDetail ? <p className="transcript-event-planner">{summary.plannerDetail}</p> : null}
       {event?.action_type ? (
         <p className="transcript-event-action">{`Tool ${event.action_type}`}</p>
       ) : null}
@@ -1124,6 +1163,7 @@ function App() {
                       {item.action_type ? <span className="timeline-action">{item.action_type}</span> : null}
                     </div>
                     <p className="timeline-detail">{summary.detail}</p>
+                    {summary.plannerDetail ? <p className="timeline-detail">{summary.plannerDetail}</p> : null}
                   </li>
                 );
               })}

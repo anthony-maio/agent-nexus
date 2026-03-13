@@ -84,6 +84,29 @@ _BLOCKED_MODEL_ACTIONS: frozenset[str] = frozenset(
 _MAX_FOLLOW_UP_STEPS = 4
 
 
+def annotate_planner_steps(
+    steps: list[StepDefinition],
+    *,
+    planner_source: str,
+    planner_phase: str,
+) -> list[StepDefinition]:
+    """Attach planner provenance metadata to each step."""
+
+    annotated: list[StepDefinition] = []
+    for step in steps:
+        metadata = dict(step.metadata)
+        metadata["planner_source"] = planner_source
+        metadata["planner_phase"] = planner_phase
+        annotated.append(
+            StepDefinition(
+                action_type=step.action_type,
+                instruction=step.instruction,
+                metadata=metadata,
+            )
+        )
+    return annotated
+
+
 def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
     """Return bootstrap steps for an autonomous tool loop."""
     cleaned = " ".join(objective.split())
@@ -351,7 +374,11 @@ class RuleAdaptivePlanner:
         mode: RunMode,
     ) -> list[StepDefinition]:
         _ = mode
-        return plan_steps_for_objective(objective)
+        return annotate_planner_steps(
+            plan_steps_for_objective(objective),
+            planner_source="rule",
+            planner_phase="initial",
+        )
 
     async def propose_follow_up(
         self,
@@ -360,11 +387,15 @@ class RuleAdaptivePlanner:
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
     ) -> list[StepDefinition]:
-        return plan_follow_up_steps(
-            objective=objective,
-            completed_step=completed_step,
-            result=result,
-            existing_steps=existing_steps,
+        return annotate_planner_steps(
+            plan_follow_up_steps(
+                objective=objective,
+                completed_step=completed_step,
+                result=result,
+                existing_steps=existing_steps,
+            ),
+            planner_source="rule",
+            planner_phase="follow_up",
         )
 
 
@@ -428,7 +459,13 @@ def apply_initial_plan_policy(
             continue
         if mode == RunMode.MANUAL and is_high_risk_action(action, instruction):
             continue
-        sanitized.append(StepDefinition(action_type=action, instruction=instruction))
+        sanitized.append(
+            StepDefinition(
+                action_type=action,
+                instruction=instruction,
+                metadata=dict(step.metadata),
+            )
+        )
         break
     return sanitized
 
@@ -454,7 +491,13 @@ def apply_follow_up_policy(
         if mode == RunMode.MANUAL and is_high_risk_action(action, instruction):
             # Manual mode should not add extra risky actions autonomously.
             continue
-        sanitized.append(StepDefinition(action_type=action, instruction=instruction))
+        sanitized.append(
+            StepDefinition(
+                action_type=action,
+                instruction=instruction,
+                metadata=dict(step.metadata),
+            )
+        )
         if len(sanitized) >= _MAX_FOLLOW_UP_STEPS:
             break
     return sanitized

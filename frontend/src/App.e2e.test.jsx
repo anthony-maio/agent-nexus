@@ -86,7 +86,12 @@ function createRunState() {
           status: "completed",
           instruction: "{\"path\":\"notes/brief.txt\"}",
           output_text: "Draft brief",
-          metadata: { file_path: "notes/brief.txt", bytes_read: 11 }
+          metadata: {
+            file_path: "notes/brief.txt",
+            bytes_read: 11,
+            planner_source: "rule",
+            planner_phase: "initial"
+          }
         },
         {
           id: "s2",
@@ -252,7 +257,9 @@ function createRunState() {
           timestamp: "2026-03-06T12:08:35+00:00",
           step_id: "child-p2",
           action_type: "write_file",
-          instruction: "{\"path\":\"reports/summary.md\",\"content\":\"delegated summary\"}"
+          instruction: "{\"path\":\"reports/summary.md\",\"content\":\"delegated summary\"}",
+          planner_source: "model",
+          planner_phase: "follow_up"
         }
       ]
     },
@@ -496,6 +503,7 @@ describe("App run inbox e2e", () => {
     expect(screen.getByText("python -c print(1)")).toBeInTheDocument();
     expect(screen.getByText("reports/generated.txt")).toBeInTheDocument();
     expect(screen.getByText("updated")).toBeInTheDocument();
+    expect(screen.getByText("rule initial")).toBeInTheDocument();
     expect(screen.getByText("button:has-text(\"Continue\")")).toBeInTheDocument();
     expect(screen.getByText("Delegated researcher")).toBeInTheDocument();
     expect(screen.getByText("Collected 3 relevant docs")).toBeInTheDocument();
@@ -542,6 +550,7 @@ describe("App run inbox e2e", () => {
     expect(transcriptScope.getByText("Awaiting approval")).toBeInTheDocument();
     expect(transcriptScope.getAllByText("Runtime event").length).toBeGreaterThan(0);
     expect(transcriptScope.getByText("Approval needed")).toBeInTheDocument();
+    expect(transcriptScope.getByText("Planned by model (follow-up).")).toBeInTheDocument();
     fireEvent.click(transcriptScope.getByRole("button", { name: "Approve" }));
 
     await waitFor(() => {
@@ -589,6 +598,7 @@ describe("App run inbox e2e", () => {
     const timeline = within(timelineCard);
     expect(timeline.getByText("Delegation started")).toBeInTheDocument();
     expect(timeline.getByText("Awaiting approval")).toBeInTheDocument();
+    expect(timeline.getByText("Planned by model (follow-up).")).toBeInTheDocument();
   });
 
   it("reconnects stream after websocket close", async () => {
