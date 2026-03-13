@@ -1457,6 +1457,138 @@ def _container_script() -> str:
                     return str(top.get("url", "")).strip()
             return ""
 
+        def normalize_hint(value):
+            return re.sub(r"\\s+", " ", str(value or "")).strip().strip("`'").strip('"')
+
+        def unique_hints(values):
+            ordered = []
+            seen = set()
+            for value in values:
+                hint = normalize_hint(value)
+                key = hint.lower()
+                if not hint or key in seen:
+                    continue
+                seen.add(key)
+                ordered.append(hint)
+            return ordered
+
+        def instruction_field_hints():
+            hints = []
+            affordances = session.get("last_page_affordances", {}) or {}
+            fields = affordances.get("input_fields") if isinstance(affordances, dict) else []
+            if isinstance(fields, list):
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    for key in ("name", "label", "placeholder", "type"):
+                        value = normalize_hint(field.get(key, ""))
+                        if value and re.search(rf"(?i)\\b{re.escape(value)}\\b", instruction):
+                            hints.append(value)
+                            break
+            match = re.search(r"grounded fields?\\s*\\(([^)]*)\\)", instruction, re.IGNORECASE)
+            if match:
+                hints.extend(
+                    part
+                    for part in re.split(r",|\\band\\b", match.group(1))
+                    if normalize_hint(part)
+                )
+            if hints:
+                return unique_hints(hints)
+            if isinstance(fields, list):
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    for key in ("name", "label", "placeholder", "type"):
+                        value = normalize_hint(field.get(key, ""))
+                        if value:
+                            hints.append(value)
+                            break
+            return unique_hints(hints)
+
+        def instruction_button_hint():
+            affordances = session.get("last_page_affordances", {}) or {}
+            buttons = affordances.get("buttons") if isinstance(affordances, dict) else []
+            if isinstance(buttons, list):
+                for button in buttons:
+                    if not isinstance(button, dict):
+                        continue
+                    value = normalize_hint(button.get("text", ""))
+                    if value and re.search(rf"(?i)\\b{re.escape(value)}\\b", instruction):
+                        return value
+            for match in re.finditer(r'[`"]([^`"]+)[`"]', instruction):
+                value = normalize_hint(match.group(1))
+                if value:
+                    return value
+            if isinstance(buttons, list):
+                for button in buttons:
+                    if not isinstance(button, dict):
+                        continue
+                    value = normalize_hint(button.get("text", ""))
+                    if value:
+                        return value
+            return ""
+
+        def submit_button_hint():
+            affordances = session.get("last_page_affordances", {}) or {}
+            buttons = affordances.get("buttons") if isinstance(affordances, dict) else []
+            if not isinstance(buttons, list):
+                return ""
+            for button in buttons:
+                if not isinstance(button, dict):
+                    continue
+                button_type = normalize_hint(button.get("type", "")).lower()
+                value = normalize_hint(
+                    button.get("text", "") or button.get("label", "") or button.get("name", "")
+                )
+                if button_type == "submit" and value:
+                    return value
+            for button in buttons:
+                if not isinstance(button, dict):
+                    continue
+                value = normalize_hint(
+                    button.get("text", "") or button.get("label", "") or button.get("name", "")
+                )
+                if value:
+                    return value
+            return ""
+
+        def field_selector_from_hint(hint):
+            value = normalize_hint(hint)
+            if not value:
+                return ""
+            quoted = json.dumps(value)
+            selectors = [
+                f"input[name*={quoted} i]",
+                f"textarea[name*={quoted} i]",
+                f"select[name*={quoted} i]",
+                f"[aria-label*={quoted} i]",
+                f"[placeholder*={quoted} i]",
+                f"[title*={quoted} i]",
+            ]
+            lowered = value.lower()
+            if "email" in lowered:
+                selectors.insert(0, "input[type=email]")
+            if any(token in lowered for token in ("message", "comment", "description")):
+                selectors.insert(0, "textarea")
+            return ", ".join(selectors)
+
+        def button_selector_from_hint(hint):
+            value = normalize_hint(hint)
+            if not value:
+                return ""
+            quoted = json.dumps(value)
+            return ", ".join(
+                [
+                    f"button:has-text({quoted})",
+                    f"[role='button']:has-text({quoted})",
+                    f"a:has-text({quoted})",
+                    f"input[type=submit][value*={quoted} i]",
+                    f"input[type=button][value*={quoted} i]",
+                    f"[aria-label*={quoted} i]",
+                    f"[title*={quoted} i]",
+                ]
+            )
+
         def resolve_or_fetch_page(refresh=False):
             target_url = resolve_target_url()
             cached = page_from_session()
@@ -1738,17 +1870,38 @@ def _container_script() -> str:
                     page = context.new_page()
                     page.goto(target_url, wait_until="domcontentloaded", timeout=browser_timeout_ms)
                     if action == "type":
-                        page.locator(
-                            "textarea, input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]), [contenteditable='true']"
-                        ).first.fill(instruction, timeout=browser_timeout_ms)
+                        field_hints = instruction_field_hints()
+                        selector = field_selector_from_hint(field_hints[0] if field_hints else "")
+                        if not selector:
+                            selector = (
+                                "textarea, input:not([type=hidden]):not([type=submit]):not([type=button]):"
+                                "not([type=checkbox]):not([type=radio]), [contenteditable='true']"
+                            )
+                        metadata["target_selector"] = selector
+                        if field_hints:
+                            metadata["target_hint"] = field_hints[0]
+                        page.locator(selector).first.fill(instruction, timeout=browser_timeout_ms)
                     elif action == "click":
-                        page.locator(
-                            "button, [role='button'], input[type=submit], input[type=button], a"
-                        ).first.click(timeout=browser_timeout_ms)
+                        button_hint = instruction_button_hint()
+                        selector = button_selector_from_hint(button_hint)
+                        if not selector:
+                            selector = "button, [role='button'], input[type=submit], input[type=button], a"
+                        metadata["target_selector"] = selector
+                        if button_hint:
+                            metadata["target_hint"] = button_hint
+                        page.locator(selector).first.click(timeout=browser_timeout_ms)
                     elif action == "wait":
                         page.wait_for_load_state("networkidle", timeout=browser_timeout_ms)
                     else:
-                        page.locator("form").first.evaluate("(form) => form.requestSubmit()")
+                        button_hint = submit_button_hint()
+                        selector = button_selector_from_hint(button_hint)
+                        if selector:
+                            metadata["target_selector"] = selector
+                            metadata["target_hint"] = button_hint
+                            page.locator(selector).first.click(timeout=browser_timeout_ms)
+                        else:
+                            metadata["target_selector"] = "form"
+                            page.locator("form").first.evaluate("(form) => form.requestSubmit()")
                     resolved_url = page.url or target_url
                     title = page.title() or resolved_url
                     try:

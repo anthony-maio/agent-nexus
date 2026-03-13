@@ -938,6 +938,456 @@ def sync_playwright():
         assert session["submitted"] is True
 
 
+def test_container_script_real_browser_click_targets_grounded_button_hint(
+    tmp_path: Path,
+) -> None:
+    fake_pkg = tmp_path / "fake_playwright_click"
+    playwright_dir = fake_pkg / "playwright"
+    playwright_dir.mkdir(parents=True, exist_ok=True)
+    (playwright_dir / "__init__.py").write_text("", encoding="utf-8")
+    (playwright_dir / "sync_api.py").write_text(
+        """
+import json
+import os
+from pathlib import Path
+
+
+def _append_log(payload):
+    log_path = os.environ.get("FAKE_PLAYWRIGHT_LOG", "")
+    if not log_path:
+        return
+    with Path(log_path).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + "\\n")
+
+
+class _FakeLocator:
+    def __init__(self, selector):
+        self._selector = selector
+        self.first = self
+
+    def click(self, timeout=None):
+        _append_log({"event": "click", "selector": self._selector, "timeout": timeout})
+
+    def fill(self, value, timeout=None):
+        _append_log({"event": "fill", "selector": self._selector, "value": value, "timeout": timeout})
+
+    def evaluate(self, expression):
+        _append_log({"event": "submit", "selector": self._selector, "expression": expression})
+        return None
+
+
+class _FakePage:
+    def __init__(self):
+        self.url = "https://docs.example.org/start"
+        self.mouse = self
+
+    def goto(self, url, wait_until=None, timeout=None):
+        self.url = url
+
+    def wheel(self, x, y):
+        return None
+
+    def title(self):
+        return "Fake interactive page"
+
+    def inner_text(self, selector):
+        return "Interactive body text"
+
+    def inner_html(self, selector):
+        return "<form><button>Continue</button></form>"
+
+    def screenshot(self, path, full_page=True):
+        Path(path).write_bytes(b"fake-image")
+
+    def wait_for_load_state(self, state="load", timeout=None):
+        _append_log({"event": "wait_for_load_state", "state": state, "timeout": timeout})
+
+    def locator(self, selector):
+        return _FakeLocator(selector)
+
+
+class _FakeContext:
+    def __init__(self, storage_state_path):
+        self._storage_state_path = storage_state_path
+        self._page = _FakePage()
+
+    def new_page(self):
+        return self._page
+
+    def storage_state(self, path):
+        Path(path).write_text(json.dumps({"cookies": [], "origins": []}), encoding="utf-8")
+
+    def close(self):
+        return None
+
+
+class _FakeBrowser:
+    def new_context(self, storage_state=None):
+        return _FakeContext(storage_state)
+
+    def close(self):
+        return None
+
+
+class _FakeChromium:
+    def launch(self, headless=True):
+        return _FakeBrowser()
+
+
+class _FakePlaywright:
+    def __init__(self):
+        self.chromium = _FakeChromium()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def sync_playwright():
+    return _FakePlaywright()
+""".strip(),
+        encoding="utf-8",
+    )
+
+    log_path = tmp_path / "click-target.log"
+    pythonpath_parts = [str(fake_pkg)]
+    existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+
+    _run_container_script_step(
+        tmp_path,
+        action_type="click",
+        instruction="Click the grounded `Continue` control to continue for: Fill out the signup form",
+        step_id="step-click-target",
+        browser_mode="real",
+        session={
+            "current_url": "https://docs.example.org/start",
+            "last_title": "Grounded page",
+            "last_page_text": "Grounded page text",
+            "last_page_affordances": {
+                "buttons": [
+                    {"text": "Continue", "type": "submit"},
+                    {"text": "Cancel", "type": "button"},
+                ]
+            },
+            "search_results": [],
+            "draft_inputs": [],
+            "submitted": False,
+        },
+        extra_env={
+            "PYTHONPATH": os.pathsep.join(pythonpath_parts),
+            "FAKE_PLAYWRIGHT_LOG": str(log_path),
+        },
+    )
+
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    click_event = next(event for event in events if event["event"] == "click")
+    assert "Continue" in click_event["selector"]
+
+
+def test_container_script_real_browser_type_targets_grounded_field_hint(
+    tmp_path: Path,
+) -> None:
+    fake_pkg = tmp_path / "fake_playwright_type"
+    playwright_dir = fake_pkg / "playwright"
+    playwright_dir.mkdir(parents=True, exist_ok=True)
+    (playwright_dir / "__init__.py").write_text("", encoding="utf-8")
+    (playwright_dir / "sync_api.py").write_text(
+        """
+import json
+import os
+from pathlib import Path
+
+
+def _append_log(payload):
+    log_path = os.environ.get("FAKE_PLAYWRIGHT_LOG", "")
+    if not log_path:
+        return
+    with Path(log_path).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + "\\n")
+
+
+class _FakeLocator:
+    def __init__(self, selector):
+        self._selector = selector
+        self.first = self
+
+    def click(self, timeout=None):
+        _append_log({"event": "click", "selector": self._selector, "timeout": timeout})
+
+    def fill(self, value, timeout=None):
+        _append_log({"event": "fill", "selector": self._selector, "value": value, "timeout": timeout})
+
+    def evaluate(self, expression):
+        _append_log({"event": "submit", "selector": self._selector, "expression": expression})
+        return None
+
+
+class _FakePage:
+    def __init__(self):
+        self.url = "https://docs.example.org/start"
+        self.mouse = self
+
+    def goto(self, url, wait_until=None, timeout=None):
+        self.url = url
+
+    def wheel(self, x, y):
+        return None
+
+    def title(self):
+        return "Fake interactive page"
+
+    def inner_text(self, selector):
+        return "Interactive body text"
+
+    def inner_html(self, selector):
+        return "<form><input type='email' name='email' /><textarea name='message'></textarea></form>"
+
+    def screenshot(self, path, full_page=True):
+        Path(path).write_bytes(b"fake-image")
+
+    def wait_for_load_state(self, state="load", timeout=None):
+        _append_log({"event": "wait_for_load_state", "state": state, "timeout": timeout})
+
+    def locator(self, selector):
+        return _FakeLocator(selector)
+
+
+class _FakeContext:
+    def __init__(self, storage_state_path):
+        self._storage_state_path = storage_state_path
+        self._page = _FakePage()
+
+    def new_page(self):
+        return self._page
+
+    def storage_state(self, path):
+        Path(path).write_text(json.dumps({"cookies": [], "origins": []}), encoding="utf-8")
+
+    def close(self):
+        return None
+
+
+class _FakeBrowser:
+    def new_context(self, storage_state=None):
+        return _FakeContext(storage_state)
+
+    def close(self):
+        return None
+
+
+class _FakeChromium:
+    def launch(self, headless=True):
+        return _FakeBrowser()
+
+
+class _FakePlaywright:
+    def __init__(self):
+        self.chromium = _FakeChromium()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def sync_playwright():
+    return _FakePlaywright()
+""".strip(),
+        encoding="utf-8",
+    )
+
+    log_path = tmp_path / "type-target.log"
+    pythonpath_parts = [str(fake_pkg)]
+    existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+
+    _run_container_script_step(
+        tmp_path,
+        action_type="type",
+        instruction="Enter only the minimum draft input required in the grounded fields (email, message) to continue the workflow for: Fill out the signup form",
+        step_id="step-type-target",
+        browser_mode="real",
+        session={
+            "current_url": "https://docs.example.org/start",
+            "last_title": "Grounded page",
+            "last_page_text": "Grounded page text",
+            "last_page_affordances": {
+                "input_fields": [
+                    {"tag": "input", "type": "email", "name": "email"},
+                    {"tag": "textarea", "name": "message"},
+                ]
+            },
+            "search_results": [],
+            "draft_inputs": [],
+            "submitted": False,
+        },
+        extra_env={
+            "PYTHONPATH": os.pathsep.join(pythonpath_parts),
+            "FAKE_PLAYWRIGHT_LOG": str(log_path),
+        },
+    )
+
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    fill_event = next(event for event in events if event["event"] == "fill")
+    assert "email" in fill_event["selector"]
+
+
+def test_container_script_real_browser_submit_targets_grounded_submit_button_hint(
+    tmp_path: Path,
+) -> None:
+    fake_pkg = tmp_path / "fake_playwright_submit"
+    playwright_dir = fake_pkg / "playwright"
+    playwright_dir.mkdir(parents=True, exist_ok=True)
+    (playwright_dir / "__init__.py").write_text("", encoding="utf-8")
+    (playwright_dir / "sync_api.py").write_text(
+        """
+import json
+import os
+from pathlib import Path
+
+
+def _append_log(payload):
+    log_path = os.environ.get("FAKE_PLAYWRIGHT_LOG", "")
+    if not log_path:
+        return
+    with Path(log_path).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + "\\n")
+
+
+class _FakeLocator:
+    def __init__(self, selector):
+        self._selector = selector
+        self.first = self
+
+    def click(self, timeout=None):
+        _append_log({"event": "click", "selector": self._selector, "timeout": timeout})
+
+    def fill(self, value, timeout=None):
+        _append_log({"event": "fill", "selector": self._selector, "value": value, "timeout": timeout})
+
+    def evaluate(self, expression):
+        _append_log({"event": "submit", "selector": self._selector, "expression": expression})
+        return None
+
+
+class _FakePage:
+    def __init__(self):
+        self.url = "https://docs.example.org/start"
+        self.mouse = self
+
+    def goto(self, url, wait_until=None, timeout=None):
+        self.url = url
+
+    def wheel(self, x, y):
+        return None
+
+    def title(self):
+        return "Fake interactive page"
+
+    def inner_text(self, selector):
+        return "Interactive body text"
+
+    def inner_html(self, selector):
+        return "<form><button type='submit'>Continue</button></form>"
+
+    def screenshot(self, path, full_page=True):
+        Path(path).write_bytes(b"fake-image")
+
+    def wait_for_load_state(self, state="load", timeout=None):
+        _append_log({"event": "wait_for_load_state", "state": state, "timeout": timeout})
+
+    def locator(self, selector):
+        return _FakeLocator(selector)
+
+
+class _FakeContext:
+    def __init__(self, storage_state_path):
+        self._storage_state_path = storage_state_path
+        self._page = _FakePage()
+
+    def new_page(self):
+        return self._page
+
+    def storage_state(self, path):
+        Path(path).write_text(json.dumps({"cookies": [], "origins": []}), encoding="utf-8")
+
+    def close(self):
+        return None
+
+
+class _FakeBrowser:
+    def new_context(self, storage_state=None):
+        return _FakeContext(storage_state)
+
+    def close(self):
+        return None
+
+
+class _FakeChromium:
+    def launch(self, headless=True):
+        return _FakeBrowser()
+
+
+class _FakePlaywright:
+    def __init__(self):
+        self.chromium = _FakeChromium()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def sync_playwright():
+    return _FakePlaywright()
+""".strip(),
+        encoding="utf-8",
+    )
+
+    log_path = tmp_path / "submit-target.log"
+    pythonpath_parts = [str(fake_pkg)]
+    existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+
+    _run_container_script_step(
+        tmp_path,
+        action_type="submit",
+        instruction="Submit the workflow only after approval for: Fill out the signup form",
+        step_id="step-submit-target",
+        browser_mode="real",
+        session={
+            "current_url": "https://docs.example.org/start",
+            "last_title": "Grounded page",
+            "last_page_text": "Grounded page text",
+            "last_page_affordances": {
+                "buttons": [
+                    {"text": "Continue", "type": "submit"},
+                    {"text": "Cancel", "type": "button"},
+                ]
+            },
+            "search_results": [],
+            "draft_inputs": [],
+            "submitted": False,
+        },
+        extra_env={
+            "PYTHONPATH": os.pathsep.join(pythonpath_parts),
+            "FAKE_PLAYWRIGHT_LOG": str(log_path),
+        },
+    )
+
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    click_event = next(event for event in events if event["event"] == "click")
+    assert "Continue" in click_event["selector"]
+
+
 def test_container_script_search_web_returns_grounded_results(tmp_path: Path) -> None:
     fake_site = tmp_path / "fake_search"
     fake_site.mkdir(parents=True, exist_ok=True)
