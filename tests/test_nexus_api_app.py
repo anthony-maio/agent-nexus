@@ -12,6 +12,7 @@ from nexus_api.app import create_app
 from nexus_api.config import ApiSettings
 from nexus_api.service import build_context
 from nexus_core.models import ArtifactRecord, CitationRecord, StepDefinition, StepExecutionResult
+from nexus_core.planner import RuleAdaptivePlanner
 
 
 class FakeExecutionAdapter:
@@ -126,6 +127,62 @@ class ModelSuggestionPlanner:
                 instruction="submit the prepared workflow changes",
             ),
         ]
+
+
+class SafeInitialSearchPlanner:
+    def __init__(self) -> None:
+        self.rule = RuleAdaptivePlanner()
+
+    async def plan_initial_steps(self, objective: str, mode: object) -> list[StepDefinition]:
+        _ = mode
+        return [
+            StepDefinition(
+                action_type="search_web",
+                instruction=f"Model bootstrap search for: {objective}",
+            )
+        ]
+
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, str],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, str]],
+    ) -> list[StepDefinition]:
+        return await self.rule.propose_follow_up(
+            objective=objective,
+            completed_step=completed_step,
+            result=result,
+            existing_steps=existing_steps,
+        )
+
+
+class UnsafeInitialTypePlanner:
+    def __init__(self) -> None:
+        self.rule = RuleAdaptivePlanner()
+
+    async def plan_initial_steps(self, objective: str, mode: object) -> list[StepDefinition]:
+        _ = objective, mode
+        return [
+            StepDefinition(
+                action_type="type",
+                instruction="enter draft values immediately",
+            )
+        ]
+
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, str],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, str]],
+    ) -> list[StepDefinition]:
+        return await self.rule.propose_follow_up(
+            objective=objective,
+            completed_step=completed_step,
+            result=result,
+            existing_steps=existing_steps,
+        )
 
 
 class DelegateReplanApprovalPlanner:
@@ -503,6 +560,55 @@ def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: P
     assert len(items) == 1
     assert items[0]["run_id"] == run["id"]
     assert items[0]["action_type"] == "type"
+
+
+def test_initial_planner_safe_bootstrap_step_is_used(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=SafeInitialSearchPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Fill out the contact form at https://example.com/contact",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "search_web",
+        "navigate",
+        "inspect",
+        "type",
+    ]
+    assert run["steps"][0]["instruction"].startswith("Model bootstrap search for:")
+    assert run["steps"][3]["status"] == "pending_approval"
+    assert run["status"] == "pending_approval"
+
+
+def test_initial_planner_unsafe_bootstrap_step_falls_back_to_default_bootstrap(
+    tmp_path: Path,
+) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=UnsafeInitialTypePlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Fill out the contact form at https://example.com/contact",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == ["navigate", "inspect", "type"]
+    assert run["steps"][0]["instruction"].startswith("Navigate directly to https://example.com/contact")
+    assert run["steps"][2]["status"] == "pending_approval"
+    assert run["status"] == "pending_approval"
 
 
 def test_default_workspace_file_run_bootstraps_with_read_file(tmp_path: Path) -> None:

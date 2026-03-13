@@ -178,6 +178,15 @@ async def test_openrouter_plan_initial_steps_uses_single_step_budget(
     assert steps[0].action_type == "search_web"
     payload = jsonlib.loads(captured["request_body"]["messages"][1]["content"])
     assert payload["constraints"]["max_steps"] == 1
+    assert payload["constraints"]["allowed_actions"] == [
+        "search_web",
+        "fetch_url",
+        "navigate",
+        "inspect",
+        "read",
+        "list_files",
+        "read_file",
+    ]
 
 
 @pytest.mark.asyncio

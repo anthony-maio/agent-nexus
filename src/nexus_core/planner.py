@@ -62,6 +62,17 @@ _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
         "submit",
     }
 )
+_ALLOWED_INITIAL_ACTIONS: frozenset[str] = frozenset(
+    {
+        "search_web",
+        "fetch_url",
+        "navigate",
+        "inspect",
+        "read",
+        "list_files",
+        "read_file",
+    }
+)
 _BLOCKED_MODEL_ACTIONS: frozenset[str] = frozenset(
     {
         "delete",
@@ -397,6 +408,29 @@ class CompositeAdaptivePlanner:
             if proposed:
                 return proposed
         return []
+
+
+def apply_initial_plan_policy(
+    steps: list[StepDefinition],
+    mode: RunMode,
+) -> list[StepDefinition]:
+    """Enforce a safe bootstrap surface for model-proposed initial steps."""
+
+    sanitized: list[StepDefinition] = []
+    for step in steps:
+        action = step.action_type.strip().lower()
+        instruction = step.instruction.strip()
+        if not instruction:
+            continue
+        if action not in _ALLOWED_INITIAL_ACTIONS:
+            continue
+        if action in _BLOCKED_MODEL_ACTIONS:
+            continue
+        if mode == RunMode.MANUAL and is_high_risk_action(action, instruction):
+            continue
+        sanitized.append(StepDefinition(action_type=action, instruction=instruction))
+        break
+    return sanitized
 
 
 def apply_follow_up_policy(

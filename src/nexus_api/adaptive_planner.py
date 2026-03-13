@@ -43,31 +43,20 @@ class OpenRouterAdaptivePlanner:
             return []
 
         step_budget = 1
+        allowed_actions = [
+            "search_web",
+            "fetch_url",
+            "navigate",
+            "inspect",
+            "read",
+            "list_files",
+            "read_file",
+        ]
         payload = {
             "objective": objective,
             "mode": mode.value,
             "constraints": {
-                "allowed_actions": [
-                    "search_web",
-                    "fetch_url",
-                    "list_files",
-                    "read_file",
-                    "write_file",
-                    "edit_file",
-                    "execute_code",
-                    "delegate",
-                    "navigate",
-                    "inspect",
-                    "scroll",
-                    "extract",
-                    "read",
-                    "click",
-                    "type",
-                    "wait",
-                    "write",
-                    "submit",
-                    "export",
-                ],
+                "allowed_actions": allowed_actions,
                 "max_steps": step_budget,
             },
         }
@@ -75,8 +64,9 @@ class OpenRouterAdaptivePlanner:
             prompt=(
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
-                "Plan exactly one grounded next tool call. "
-                "Prefer workspace or code tools when the objective references local files. No prose."
+                "Plan exactly one grounded bootstrap tool call. "
+                "Use only low-risk starting actions that gather context or open the correct page/file. "
+                "Prefer workspace read tools when the objective references local files. No prose."
             ),
             payload=payload,
         )

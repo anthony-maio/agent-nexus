@@ -34,6 +34,7 @@ from nexus_api.schemas import (
 from nexus_api.service import ApiContext, build_context, default_steps_for_objective
 from nexus_core.engine import RunEngine
 from nexus_core.models import RunMode, RunStatus
+from nexus_core.planner import apply_initial_plan_policy
 
 log = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
                     objective=request.objective,
                     mode=request.mode,
                 )
+            planner_steps = apply_initial_plan_policy(planner_steps, mode=request.mode)
             steps = planner_steps or default_steps_for_objective(request.objective)
         repo = SqlRunRepository(session)
         engine = RunEngine(
