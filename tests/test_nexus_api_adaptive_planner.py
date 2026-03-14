@@ -7,7 +7,9 @@ from typing import Any
 
 import pytest
 
-from nexus_api.adaptive_planner import OpenRouterAdaptivePlanner
+from nexus_api.adaptive_planner import ChatCompletionsAdaptivePlanner, OpenRouterAdaptivePlanner
+from nexus_api.config import ApiSettings
+from nexus_api.service import build_model_adaptive_planner
 from nexus_core.models import CitationRecord, RunMode, StepExecutionResult
 
 
@@ -250,3 +252,104 @@ async def test_openrouter_follow_up_uses_single_step_budget(
     assert steps[0].metadata["planner_phase"] == "follow_up"
     payload = jsonlib.loads(captured["request_body"]["messages"][1]["content"])
     assert payload["constraints"]["max_steps"] == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_planner_supports_local_endpoint_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, Any],
+        ) -> _FakeResponse:
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["request_body"] = json
+            return _FakeResponse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": jsonlib.dumps(
+                                    {
+                                        "next_steps": [
+                                            {
+                                                "action_type": "search_web",
+                                                "instruction": "Start with grounded search.",
+                                            }
+                                        ]
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("nexus_api.adaptive_planner.httpx.AsyncClient", _FakeAsyncClient)
+
+    planner = ChatCompletionsAdaptivePlanner(
+        api_key="",
+        model="local-qwen",
+        base_url="http://localhost:11434/v1",
+        provider_name="local",
+    )
+    steps = await planner.plan_initial_steps(
+        objective="Research grounded sources",
+        mode=RunMode.SUPERVISED,
+    )
+
+    assert len(steps) == 1
+    assert steps[0].action_type == "search_web"
+    assert captured["url"] == "http://localhost:11434/v1/chat/completions"
+    assert "Authorization" not in captured["headers"]
+    payload = jsonlib.loads(captured["request_body"]["messages"][1]["content"])
+    assert payload["constraints"]["max_steps"] == 1
+
+
+def test_build_model_adaptive_planner_supports_openai_compatible_local_settings() -> None:
+    settings = ApiSettings(
+        APP_DATABASE_URL="sqlite:///./data/app/test.db",
+        APP_MODEL_REPLANNER_PROVIDER="openai_compatible",
+        APP_MODEL_REPLANNER_BASE_URL="http://localhost:11434/v1",
+        APP_MODEL_REPLANNER_MODEL="local-qwen",
+        APP_MODEL_REPLANNER_API_KEY="",
+        OPENROUTER_API_KEY="",
+    )
+
+    planner = build_model_adaptive_planner(settings)
+
+    assert isinstance(planner, ChatCompletionsAdaptivePlanner)
+    assert planner.base_url == "http://localhost:11434/v1"
+    assert planner.model == "local-qwen"
+
+
+def test_build_model_adaptive_planner_preserves_openrouter_defaults() -> None:
+    settings = ApiSettings(
+        APP_DATABASE_URL="sqlite:///./data/app/test.db",
+        APP_MODEL_REPLANNER_PROVIDER="openrouter",
+        APP_MODEL_REPLANNER_API_KEY="router-key",
+        APP_MODEL_REPLANNER_MODEL="openai/gpt-4.1-mini",
+        APP_MODEL_REPLANNER_BASE_URL="https://openrouter.ai/api/v1",
+    )
+
+    planner = build_model_adaptive_planner(settings)
+
+    assert isinstance(planner, OpenRouterAdaptivePlanner)
+    assert planner.base_url == "https://openrouter.ai/api/v1"
+    assert planner.model == "openai/gpt-4.1-mini"

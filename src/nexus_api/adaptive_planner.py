@@ -17,22 +17,24 @@ log = logging.getLogger(__name__)
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 
 
-class OpenRouterAdaptivePlanner:
-    """Adaptive planner that proposes next steps from an OpenRouter model."""
+class ChatCompletionsAdaptivePlanner:
+    """Adaptive planner that targets an OpenAI-compatible chat completions endpoint."""
 
     def __init__(
         self,
         api_key: str,
         model: str,
-        base_url: str = "https://openrouter.ai/api/v1",
+        base_url: str,
         timeout_sec: float = 12.0,
         max_steps: int = 4,
+        provider_name: str = "chat_completions",
     ) -> None:
         self.api_key = api_key.strip()
         self.model = model.strip()
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
         self.max_steps = max(1, min(max_steps, 8))
+        self.provider_name = provider_name.strip() or "chat_completions"
 
     async def plan_next_steps(
         self,
@@ -42,7 +44,7 @@ class OpenRouterAdaptivePlanner:
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
     ) -> list[StepDefinition]:
-        if not self.api_key or not self.model:
+        if not self.model:
             return []
 
         step_budget = 1
@@ -171,10 +173,9 @@ class OpenRouterAdaptivePlanner:
         prompt: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         request_body = {
             "model": self.model,
             "temperature": 0,
@@ -193,7 +194,7 @@ class OpenRouterAdaptivePlanner:
                 response.raise_for_status()
                 data = response.json()
         except Exception as exc:
-            log.warning("OpenRouter adaptive replanner request failed: %s", exc)
+            log.warning("%s adaptive replanner request failed: %s", self.provider_name, exc)
             return {}
         content = str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
         return _parse_model_json(content)
@@ -220,6 +221,27 @@ class OpenRouterAdaptivePlanner:
             except Exception:
                 continue
         return steps
+
+
+class OpenRouterAdaptivePlanner(ChatCompletionsAdaptivePlanner):
+    """Adaptive planner that proposes next steps from an OpenRouter model."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str = "https://openrouter.ai/api/v1",
+        timeout_sec: float = 12.0,
+        max_steps: int = 4,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout_sec=timeout_sec,
+            max_steps=max_steps,
+            provider_name="openrouter",
+        )
 
 
 class RuleFallbackAdaptivePlanner:
