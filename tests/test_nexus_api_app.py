@@ -131,6 +131,24 @@ class ModelSuggestionPlanner:
         ]
 
 
+class BlockedFollowUpPlanner:
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, str],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, str]],
+    ) -> list[StepDefinition]:
+        _ = objective, completed_step, result, existing_steps
+        return [
+            StepDefinition(
+                action_type="delete",
+                instruction="delete the current source set",
+                metadata={"planner_source": "model", "planner_phase": "follow_up"},
+            )
+        ]
+
+
 class SafeInitialSearchPlanner:
     def __init__(self) -> None:
         self.rule = RuleAdaptivePlanner()
@@ -1504,7 +1522,9 @@ def test_supervised_delegate_replan_gates_child_approval_and_pauses_parent(tmp_p
     assert items[0]["action_type"] == "write_file"
 
 
-def test_approving_replanned_child_step_resumes_parent_delegate_run(tmp_path: Path) -> None:
+def test_approving_replanned_child_step_resumes_parent_delegate_run_to_next_gate(
+    tmp_path: Path,
+) -> None:
     client = _client_with_planner(tmp_path, adaptive_planner=DelegateReplanApprovalPlanner())
     headers = _auth_header(client)
 
@@ -1557,9 +1577,14 @@ def test_approving_replanned_child_step_resumes_parent_delegate_run(tmp_path: Pa
     parent_detail = client.get(f"/runs/{run['id']}", headers=headers)
     assert parent_detail.status_code == 200
     parent_run = parent_detail.json()
-    assert parent_run["status"] == "completed"
+    assert parent_run["status"] == "pending_approval"
     assert parent_run["steps"][0]["status"] == "completed"
     assert parent_run["steps"][1]["status"] == "completed"
+    assert parent_run["steps"][2]["action_type"] == "extract"
+    assert parent_run["steps"][2]["status"] == "completed"
+    assert parent_run["steps"][2]["metadata"]["planner_fallback_reason"] == "no_steps"
+    assert parent_run["steps"][3]["action_type"] == "export"
+    assert parent_run["steps"][3]["status"] == "pending_approval"
     assert parent_run["child_runs"][0]["status"] == "completed"
 
 
@@ -2020,3 +2045,33 @@ def test_model_replanner_proposals_are_policy_checked_and_gated(tmp_path: Path) 
         "export",
     ]
     assert run["steps"][2]["status"] == "pending_approval"
+
+
+def test_model_follow_up_policy_rejection_falls_back_to_rule_replan(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=BlockedFollowUpPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research payroll automation competitors and capture citations",
+            "mode": "supervised",
+            "steps": [
+                {"action_type": "search_web", "instruction": "find grounded sources"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "search_web",
+        "fetch_url",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][1]["metadata"]["planner_source"] == "rule"
+    assert run["steps"][1]["metadata"]["planner_phase"] == "follow_up"
+    assert run["steps"][1]["metadata"]["planner_fallback_reason"] == "policy_rejected"
+    assert run["steps"][3]["status"] == "pending_approval"

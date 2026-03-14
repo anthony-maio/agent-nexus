@@ -32,6 +32,7 @@ from nexus_core.planner import (
     annotate_planner_steps,
     apply_follow_up_policy,
     apply_initial_plan_policy,
+    plan_follow_up_steps,
     plan_steps_for_objective,
     request_next_steps,
 )
@@ -191,8 +192,27 @@ class RunEngine:
                 ),
                 fallback_reason=fallback_reason,
             )
-        return apply_follow_up_policy(
+        planned = apply_follow_up_policy(
             proposed,
+            mode=mode,
+        )
+        if planned:
+            return planned
+        fallback_reason = "policy_rejected" if proposed else "no_steps"
+        return apply_follow_up_policy(
+            annotate_planner_fallback(
+                annotate_planner_steps(
+                    plan_follow_up_steps(
+                        objective=objective,
+                        completed_step=completed_step,
+                        result=result,
+                        existing_steps=existing_steps,
+                    ),
+                    planner_source="rule",
+                    planner_phase="follow_up",
+                ),
+                fallback_reason=fallback_reason,
+            ),
             mode=mode,
         )
 
