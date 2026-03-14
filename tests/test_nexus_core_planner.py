@@ -14,13 +14,21 @@ from nexus_core.planner import (
 )
 
 
-def _step(step_index: int, action_type: str) -> dict[str, object]:
-    return {
+def _step(
+    step_index: int,
+    action_type: str,
+    *,
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    step = {
         "step_index": step_index,
         "action_type": action_type,
         "instruction": f"{action_type} step",
         "status": "completed",
     }
+    if metadata:
+        step["metadata"] = metadata
+    return step
 
 
 def test_plan_follow_up_steps_workflow_inspect_returns_only_type_step() -> None:
@@ -215,6 +223,49 @@ def test_plan_follow_up_steps_code_read_file_prefers_execute_code() -> None:
 
     assert [step.action_type for step in steps] == ["execute_code"]
     assert steps[0].instruction == '{"command": ["python", "-m", "pytest", "-q"]}'
+
+
+def test_plan_follow_up_steps_failed_code_execution_reads_diagnostic_file() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement the payment retry backoff fix in the repo and update tests",
+        completed_step=_step(2, "execute_code"),
+        result=StepExecutionResult(
+            output_text="tests failed",
+            metadata={
+                "command_failed": True,
+                "exit_code": 1,
+                "stderr": "AssertionError in src/payments/retry.py:12",
+            },
+        ),
+        existing_steps=[_step(0, "list_files"), _step(1, "read_file"), _step(2, "execute_code")],
+    )
+
+    assert [step.action_type for step in steps] == ["read_file"]
+    assert steps[0].instruction == '{"path": "src/payments/retry.py"}'
+    assert steps[0].metadata["code_follow_up"] == "failed_test_diagnostic"
+
+
+def test_plan_follow_up_steps_diagnostic_read_file_summarizes_instead_of_rerunning_tests() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement the payment retry backoff fix in the repo and update tests",
+        completed_step=_step(
+            3,
+            "read_file",
+            metadata={"code_follow_up": "failed_test_diagnostic"},
+        ),
+        result=StepExecutionResult(
+            output_text="def retry_backoff():\n    return base_delay * 2",
+            metadata={"file_path": "src/payments/retry.py"},
+        ),
+        existing_steps=[
+            _step(0, "list_files"),
+            _step(1, "read_file"),
+            _step(2, "execute_code"),
+            _step(3, "read_file", metadata={"code_follow_up": "failed_test_diagnostic"}),
+        ],
+    )
+
+    assert [step.action_type for step in steps] == ["extract"]
 
 
 @pytest.mark.asyncio

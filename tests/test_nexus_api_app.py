@@ -344,6 +344,38 @@ class CodeArtifactExecutionAdapter(FakeExecutionAdapter):
         return await super().execute_step(run_id, step_id, action_type, instruction)
 
 
+class FailingCodeWorkspaceExecutionAdapter(FakeExecutionAdapter):
+    async def execute_step(
+        self, run_id: str, step_id: str, action_type: str, instruction: str
+    ) -> StepExecutionResult:
+        if action_type == "list_files":
+            return StepExecutionResult(
+                output_text="done:list_files",
+                citations=[],
+                artifacts=[],
+                metadata={"files": ["src/payments/retry.py", "tests/test_retry.py"]},
+            )
+        if action_type == "read_file":
+            return StepExecutionResult(
+                output_text="def retry_backoff(base_delay):\n    return base_delay",
+                citations=[],
+                artifacts=[],
+                metadata={"file_path": "src/payments/retry.py"},
+            )
+        if action_type == "execute_code":
+            return StepExecutionResult(
+                output_text="tests failed",
+                citations=[],
+                artifacts=[],
+                metadata={
+                    "command_failed": True,
+                    "exit_code": 1,
+                    "stderr": "AssertionError in src/payments/retry.py:12",
+                },
+            )
+        return await super().execute_step(run_id, step_id, action_type, instruction)
+
+
 def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = None) -> TestClient:
     settings = ApiSettings(
         APP_DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}",
@@ -964,6 +996,35 @@ def test_code_task_run_reads_code_then_executes_tests(tmp_path: Path) -> None:
     assert run["steps"][2]["instruction"] == '{"command": ["python", "-m", "pytest", "-q"]}'
     assert run["steps"][2]["status"] == "completed"
     assert run["steps"][4]["status"] == "pending_approval"
+
+
+def test_code_task_failed_tests_trigger_diagnostic_file_read(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=FailingCodeWorkspaceExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Implement the payment retry backoff fix in the repo and update tests",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "list_files",
+        "read_file",
+        "execute_code",
+        "read_file",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][3]["instruction"] == '{"path": "src/payments/retry.py"}'
+    assert run["steps"][3]["metadata"]["code_follow_up"] == "failed_test_diagnostic"
+    assert run["steps"][4]["status"] == "completed"
+    assert run["steps"][5]["status"] == "pending_approval"
 
 
 def test_run_adapts_list_files_into_read_file(tmp_path: Path) -> None:

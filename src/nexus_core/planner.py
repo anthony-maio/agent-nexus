@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s)>]+", re.IGNORECASE)
 _WORKSPACE_PATH_RE = re.compile(
-    r"(?P<path>(?:workspace[\\/])?[A-Za-z0-9_.\\/-]+\.(?:txt|md|markdown|json|csv|tsv|yaml|yml|xml|html|log|py|js|ts))",
+    r"(?P<path>(?:workspace[\\/])?[A-Za-z0-9_.\\/-]+\.(?:txt|md|markdown|json|csv|tsv|yaml|yml|xml|html|log|py|go|js|jsx|ts|tsx))",
     re.IGNORECASE,
 )
 _WORKFLOW_HINTS: tuple[str, ...] = (
@@ -221,6 +221,19 @@ def plan_follow_up_steps(
 
     if action == "read_file":
         if _looks_like_code_task(objective):
+            completed_metadata = _step_metadata(completed_step)
+            if completed_metadata.get("code_follow_up") == "failed_test_diagnostic":
+                if _has_action_after(existing_steps, step_index, "extract"):
+                    return []
+                return [
+                    StepDefinition(
+                        action_type="extract",
+                        instruction=(
+                            "Summarize the failing code path, likely fix location, and "
+                            f"next code change for: {objective}"
+                        ),
+                    )
+                ]
             command = _preferred_code_execution_command(result, objective=objective)
             if command and not _has_action_after(existing_steps, step_index, "execute_code"):
                 return [
@@ -252,6 +265,15 @@ def plan_follow_up_steps(
         ]
 
     if action == "execute_code":
+        diagnostic_path = _diagnostic_workspace_path(result)
+        if diagnostic_path and not _has_action_after(existing_steps, step_index, "read_file"):
+            return [
+                StepDefinition(
+                    action_type="read_file",
+                    instruction=_workspace_instruction(diagnostic_path),
+                    metadata={"code_follow_up": "failed_test_diagnostic"},
+                )
+            ]
         next_path = _preferred_workspace_path(objective, result, metadata_key="touched_files")
         if next_path and not _has_action_after(existing_steps, step_index, "read_file"):
             return [
@@ -837,11 +859,39 @@ def _normalize_workspace_path(path: str) -> str:
     return normalized
 
 
+def _diagnostic_workspace_path(result: StepExecutionResult) -> str:
+    if not bool(result.metadata.get("command_failed")):
+        return ""
+
+    candidates: list[str] = []
+    for field in ("stderr", "stdout", "output_text"):
+        raw_text = result.output_text if field == "output_text" else result.metadata.get(field, "")
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            continue
+        for match in _WORKSPACE_PATH_RE.finditer(raw_text):
+            normalized = _normalize_workspace_path(match.group("path"))
+            if not normalized or normalized in candidates:
+                continue
+            candidates.append(normalized)
+    if not candidates:
+        return ""
+    for candidate in candidates:
+        lowered = candidate.lower()
+        if not lowered.startswith("tests/") and not lowered.startswith("test_"):
+            return candidate
+    return candidates[0]
+
+
 def _looks_like_code_task(objective: str) -> bool:
     lowered = objective.lower()
     return any(hint in lowered for hint in _CODE_ACTION_HINTS) and any(
         hint in lowered for hint in _CODE_TARGET_HINTS
     )
+
+
+def _step_metadata(step: dict[str, Any]) -> dict[str, Any]:
+    raw = step.get("metadata")
+    return raw if isinstance(raw, dict) else {}
 
 
 def _preferred_code_execution_command(
