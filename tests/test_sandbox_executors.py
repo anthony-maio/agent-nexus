@@ -321,6 +321,36 @@ def test_local_executor_execute_code_creates_workspace_artifacts(tmp_path: Path)
     assert "generated.txt" in list_result.metadata["files"]
 
 
+def test_local_executor_low_risk_test_command_returns_failed_observation(tmp_path: Path) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+
+    result = executor.execute(
+        StepRequest(
+            run_id="run-code-fail",
+            step_id="step-code-fail",
+            action_type="execute_code",
+            instruction=json.dumps(
+                {
+                    "command": [
+                        sys.executable,
+                        "-m",
+                        "pytest",
+                        "-q",
+                        "tests/test_missing_file.py",
+                    ]
+                }
+            ),
+        ),
+        sandbox_root,
+    )
+
+    assert "failed" in result.output_text.lower()
+    assert result.metadata["exit_code"] != 0
+    assert result.metadata["command_failed"] is True
+    assert result.metadata["failure_mode"] == "observation"
+
+
 def test_fetch_url_content_extracts_page_affordances(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

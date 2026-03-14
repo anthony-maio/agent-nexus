@@ -37,6 +37,21 @@ _DDG_RESULT_RE = re.compile(
 _TAG_RE = re.compile(r"<[^>]+>")
 _SCRIPT_RE = re.compile(r"<(script|style).*?</\1>", re.IGNORECASE | re.DOTALL)
 _WHITESPACE_RE = re.compile(r"\s+")
+_LOW_RISK_EXECUTE_CODE_PREFIXES: tuple[tuple[str, ...], ...] = (
+    ("python", "-m", "pytest"),
+    ("pytest",),
+    ("python", "-m", "unittest"),
+    ("go", "test"),
+    ("cargo", "test"),
+    ("npm", "test"),
+    ("pnpm", "test"),
+    ("yarn", "test"),
+    ("vitest",),
+    ("npx", "vitest"),
+    ("jest",),
+    ("npx", "jest"),
+)
+_SHELL_CONTROL_TOKENS: frozenset[str] = frozenset({"&&", "||", ";", "|", ">", ">>", "<"})
 
 
 class _PageAffordanceParser(HTMLParser):
@@ -733,8 +748,19 @@ def _execute_local_action(
         metadata["command"] = _stringify_command(command)
         metadata["exit_code"] = completed.returncode
         metadata["touched_files"] = touched_files
+        metadata["stdout"] = stdout
+        metadata["stderr"] = stderr
         if completed.returncode != 0:
             detail = stderr or stdout or "command returned non-zero exit status"
+            if _is_low_risk_execute_code_command(command):
+                metadata["command_failed"] = True
+                metadata["failure_mode"] = "observation"
+                output = (
+                    f"[sandbox-code] Test command failed (exit={completed.returncode}): "
+                    f"{detail[:500]}"
+                )
+                _append_history(session, action, instruction)
+                return StepResult(output, citations, artifacts, metadata), session
             raise RuntimeError(
                 f"Sandbox code execution failed (exit={completed.returncode}): {detail[:500]}"
             )
@@ -940,6 +966,34 @@ def _run_workspace_command(
         shell=isinstance(command, str),
         timeout=30,
     )
+
+
+def _is_low_risk_execute_code_command(command: str | list[str]) -> bool:
+    normalized = _normalized_command_tokens(command)
+    if not normalized:
+        return False
+    if any(token in _SHELL_CONTROL_TOKENS for token in normalized):
+        return False
+    return any(
+        tuple(normalized[: len(prefix)]) == prefix for prefix in _LOW_RISK_EXECUTE_CODE_PREFIXES
+    )
+
+
+def _normalized_command_tokens(command: str | list[str]) -> list[str]:
+    raw_tokens = command if isinstance(command, list) else str(command).split()
+    normalized: list[str] = []
+    for index, part in enumerate(raw_tokens):
+        token = str(part).strip().lower()
+        if not token:
+            continue
+        if index == 0:
+            executable = Path(token).name.lower()
+            if executable.startswith("python"):
+                token = "python"
+            else:
+                token = executable
+        normalized.append(token)
+    return normalized
 
 
 def _search_web(query: str, max_results: int = _DEFAULT_SEARCH_RESULTS) -> list[dict[str, str]]:
