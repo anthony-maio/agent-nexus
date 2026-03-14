@@ -39,6 +39,37 @@ _WORKFLOW_HINTS: tuple[str, ...] = (
     "buy",
     "form",
 )
+_CODE_ACTION_HINTS: tuple[str, ...] = (
+    "implement",
+    "fix",
+    "debug",
+    "refactor",
+    "patch",
+    "modify",
+    "edit",
+    "update",
+    "rename",
+    "add test",
+    "add tests",
+    "write test",
+    "write tests",
+)
+_CODE_TARGET_HINTS: tuple[str, ...] = (
+    "repo",
+    "repository",
+    "codebase",
+    "project",
+    "workspace",
+    "function",
+    "class",
+    "module",
+    "handler",
+    "service",
+    "endpoint",
+    "test",
+    "tests",
+    "bug",
+)
 _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
@@ -138,6 +169,13 @@ def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
                 StepDefinition(
                     action_type="read_file",
                     instruction=_workspace_instruction(workspace_path),
+                )
+            ]
+        if _looks_like_code_task(cleaned):
+            return [
+                StepDefinition(
+                    action_type="list_files",
+                    instruction=_workspace_listing_instruction(),
                 )
             ]
     if _looks_like_workflow(cleaned):
@@ -635,6 +673,10 @@ def _workspace_instruction(path: str) -> str:
     return json.dumps({"path": path})
 
 
+def _workspace_listing_instruction(path: str = ".") -> str:
+    return json.dumps({"path": path})
+
+
 def _research_bootstrap_steps(objective: str) -> list[StepDefinition]:
     return [
         StepDefinition(
@@ -782,6 +824,13 @@ def _normalize_workspace_path(path: str) -> str:
     if normalized.lower().startswith("workspace/"):
         normalized = normalized[len("workspace/") :]
     return normalized
+
+
+def _looks_like_code_task(objective: str) -> bool:
+    lowered = objective.lower()
+    return any(hint in lowered for hint in _CODE_ACTION_HINTS) and any(
+        hint in lowered for hint in _CODE_TARGET_HINTS
+    )
 
 
 def _has_action_after(

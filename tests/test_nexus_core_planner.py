@@ -8,6 +8,7 @@ from nexus_core.models import CitationRecord, RunMode, StepDefinition, StepExecu
 from nexus_core.planner import (
     CompositeAdaptivePlanner,
     RuleAdaptivePlanner,
+    plan_steps_for_objective,
     plan_follow_up_steps,
     request_next_steps,
 )
@@ -190,6 +191,15 @@ async def test_rule_adaptive_planner_initial_bootstrap_returns_single_seed_step(
     assert research_steps[0].metadata["planner_phase"] == "initial"
     assert [step.action_type for step in workflow_steps] == ["navigate"]
     assert workflow_steps[0].metadata["planner_phase"] == "initial"
+
+
+def test_plan_steps_for_code_objective_bootstraps_workspace_discovery() -> None:
+    steps = plan_steps_for_objective(
+        "Implement the payment retry backoff fix in the repo and update tests"
+    )
+
+    assert [step.action_type for step in steps] == ["list_files"]
+    assert steps[0].instruction == '{"path": "."}'
 
 
 @pytest.mark.asyncio

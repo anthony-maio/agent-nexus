@@ -891,6 +891,33 @@ def test_default_workspace_file_run_bootstraps_with_read_file(tmp_path: Path) ->
     assert "brief.txt" in run["steps"][0]["instruction"]
 
 
+def test_default_code_task_run_bootstraps_with_workspace_discovery(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=WorkspaceDiscoveryExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Implement the payment retry backoff fix in the repo and update tests",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "list_files",
+        "read_file",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][0]["instruction"] == '{"path": "."}'
+    assert run["steps"][0]["status"] == "completed"
+    assert run["steps"][1]["status"] == "completed"
+    assert run["steps"][3]["status"] == "pending_approval"
+
+
 def test_run_adapts_list_files_into_read_file(tmp_path: Path) -> None:
     client = _client(tmp_path, execution_adapter=WorkspaceDiscoveryExecutionAdapter(tmp_path))
     headers = _auth_header(client)
