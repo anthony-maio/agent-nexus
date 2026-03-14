@@ -220,6 +220,17 @@ def plan_follow_up_steps(
         ]
 
     if action == "read_file":
+        if _looks_like_code_task(objective):
+            command = _preferred_code_execution_command(result, objective=objective)
+            if command and not _has_action_after(existing_steps, step_index, "execute_code"):
+                return [
+                    StepDefinition(
+                        action_type="execute_code",
+                        instruction=json.dumps({"command": command}),
+                    )
+                ]
+            if _has_action_after(existing_steps, step_index, "execute_code"):
+                return []
         if _has_action_after(existing_steps, step_index, "extract"):
             return []
         return [
@@ -831,6 +842,27 @@ def _looks_like_code_task(objective: str) -> bool:
     return any(hint in lowered for hint in _CODE_ACTION_HINTS) and any(
         hint in lowered for hint in _CODE_TARGET_HINTS
     )
+
+
+def _preferred_code_execution_command(
+    result: StepExecutionResult,
+    *,
+    objective: str,
+) -> list[str]:
+    file_path = ""
+    raw_path = result.metadata.get("file_path")
+    if isinstance(raw_path, str) and raw_path.strip():
+        file_path = _normalize_workspace_path(raw_path)
+    if not file_path:
+        file_path = _workspace_path_from_objective(objective)
+    lowered_path = file_path.lower()
+    if lowered_path.endswith(".py"):
+        return ["python", "-m", "pytest", "-q"]
+    if lowered_path.endswith(".go"):
+        return ["go", "test", "./..."]
+    if lowered_path.endswith((".js", ".jsx", ".ts", ".tsx")):
+        return ["npm", "test", "--", "--runInBand"]
+    return []
 
 
 def _has_action_after(

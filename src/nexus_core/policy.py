@@ -72,6 +72,21 @@ _HIGH_RISK_CLICK_HINTS: tuple[str, ...] = (
     "checkout",
     "place order",
 )
+_LOW_RISK_EXECUTE_CODE_PREFIXES: tuple[tuple[str, ...], ...] = (
+    ("python", "-m", "pytest"),
+    ("pytest",),
+    ("python", "-m", "unittest"),
+    ("go", "test"),
+    ("cargo", "test"),
+    ("npm", "test"),
+    ("pnpm", "test"),
+    ("yarn", "test"),
+    ("vitest",),
+    ("npx", "vitest"),
+    ("jest",),
+    ("npx", "jest"),
+)
+_SHELL_CONTROL_TOKENS: frozenset[str] = frozenset({"&&", "||", ";", "|", ">", ">>", "<"})
 
 
 def risk_tier_for_action(action_type: str, instruction: str = "") -> RiskTier:
@@ -79,6 +94,10 @@ def risk_tier_for_action(action_type: str, instruction: str = "") -> RiskTier:
     normalized_action = action_type.strip().lower()
     normalized_instruction = instruction.strip().lower()
     if normalized_action == "delegate" and _delegate_instruction_is_high_risk(instruction):
+        return RiskTier.HIGH
+    if normalized_action == "execute_code":
+        if _execute_code_instruction_is_low_risk(instruction):
+            return RiskTier.LOW
         return RiskTier.HIGH
     if normalized_action in _HIGH_RISK_ACTIONS:
         return RiskTier.HIGH
@@ -214,3 +233,34 @@ def _delegate_instruction_is_high_risk(instruction: str) -> bool:
         if risk_tier_for_action(action_type, child_instruction) == RiskTier.HIGH:
             return True
     return False
+
+
+def _execute_code_instruction_is_low_risk(instruction: str) -> bool:
+    command = _command_from_execute_code_instruction(instruction)
+    if not command:
+        return False
+
+    normalized = [part.strip().lower() for part in command if str(part).strip()]
+    if not normalized:
+        return False
+    if any(token in _SHELL_CONTROL_TOKENS for token in normalized):
+        return False
+
+    return any(
+        tuple(normalized[: len(prefix)]) == prefix for prefix in _LOW_RISK_EXECUTE_CODE_PREFIXES
+    )
+
+
+def _command_from_execute_code_instruction(instruction: str) -> list[str]:
+    payload: Any
+    try:
+        payload = json.loads(instruction)
+    except json.JSONDecodeError:
+        payload = instruction
+
+    command = payload.get("command") if isinstance(payload, dict) else payload
+    if isinstance(command, list):
+        return [str(part) for part in command if str(part).strip()]
+    if isinstance(command, str):
+        return [part for part in command.split() if part]
+    return []

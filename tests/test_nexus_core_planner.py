@@ -202,6 +202,21 @@ def test_plan_steps_for_code_objective_bootstraps_workspace_discovery() -> None:
     assert steps[0].instruction == '{"path": "."}'
 
 
+def test_plan_follow_up_steps_code_read_file_prefers_execute_code() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement the payment retry backoff fix in the repo and update tests",
+        completed_step=_step(1, "read_file"),
+        result=StepExecutionResult(
+            output_text="def retry_backoff():\n    return 1",
+            metadata={"file_path": "src/payments/retry.py"},
+        ),
+        existing_steps=[_step(0, "list_files"), _step(1, "read_file")],
+    )
+
+    assert [step.action_type for step in steps] == ["execute_code"]
+    assert steps[0].instruction == '{"command": ["python", "-m", "pytest", "-q"]}'
+
+
 @pytest.mark.asyncio
 async def test_request_next_steps_supports_unified_planner_contract() -> None:
     class UnifiedOnlyPlanner:

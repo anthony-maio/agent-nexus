@@ -32,10 +32,24 @@ def test_workspace_read_actions_are_low_risk(action_type: str) -> None:
     assert not is_high_risk_action(action_type)
 
 
-@pytest.mark.parametrize("action_type", ["write_file", "edit_file", "execute_code"])
-def test_workspace_mutation_and_code_actions_are_high_risk(action_type: str) -> None:
+@pytest.mark.parametrize("action_type", ["write_file", "edit_file"])
+def test_workspace_mutation_actions_are_high_risk(action_type: str) -> None:
     assert risk_tier_for_action(action_type) == RiskTier.HIGH
     assert is_high_risk_action(action_type)
+
+
+def test_execute_code_test_commands_are_low_risk() -> None:
+    instruction = json.dumps({"command": ["python", "-m", "pytest", "-q"]})
+
+    assert risk_tier_for_action("execute_code", instruction) == RiskTier.LOW
+    assert not is_high_risk_action("execute_code", instruction)
+
+
+def test_execute_code_arbitrary_commands_remain_high_risk() -> None:
+    instruction = json.dumps({"command": ["python", "-c", "print('mutate')"]})
+
+    assert risk_tier_for_action("execute_code", instruction) == RiskTier.HIGH
+    assert is_high_risk_action("execute_code", instruction)
 
 
 def test_delegate_risk_depends_on_child_plan() -> None:
