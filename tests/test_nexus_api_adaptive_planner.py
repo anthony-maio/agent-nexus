@@ -91,6 +91,9 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
             ],
             metadata={
                 "current_url": "https://docs.example.org/start",
+                "command_failed": True,
+                "exit_code": 1,
+                "stderr": "AssertionError in src/payments/retry.py:12",
                 "page_affordances": {
                     "forms_count": 1,
                     "input_fields": [
@@ -118,9 +121,13 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     assert "search_web" in allowed_actions
     assert "fetch_url" in allowed_actions
     assert "page_affordances" in request_body["messages"][0]["content"]
+    assert "command_failed" in request_body["messages"][0]["content"]
     completed_payload = payload["completed_step"]
     assert completed_payload["citations"][0]["url"] == "https://docs.example.org/start"
     assert completed_payload["metadata"]["current_url"] == "https://docs.example.org/start"
+    assert completed_payload["metadata"]["command_failed"] is True
+    assert completed_payload["metadata"]["exit_code"] == 1
+    assert completed_payload["metadata"]["stderr"] == "AssertionError in src/payments/retry.py:12"
     assert completed_payload["metadata"]["page_affordances"]["forms_count"] == 1
     assert completed_payload["metadata"]["page_affordances"]["buttons"][0]["text"] == "Continue"
 

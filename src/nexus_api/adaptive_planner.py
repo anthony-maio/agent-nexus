@@ -132,7 +132,8 @@ class ChatCompletionsAdaptivePlanner:
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
                 "No prose. Return exactly one next step. Prefer workspace and code tools when result metadata references files. "
-                "When metadata includes page_affordances, use those grounded inputs, buttons, and links instead of generic UI guesses."
+                "When metadata includes page_affordances, use those grounded inputs, buttons, and links instead of generic UI guesses. "
+                "When metadata includes command_failed or a non-zero exit_code, treat that as diagnostic evidence and inspect or edit the referenced code path instead of repeating the same command blindly."
             ),
             payload=payload,
         )
