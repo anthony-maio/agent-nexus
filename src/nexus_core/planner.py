@@ -71,6 +71,22 @@ _CODE_TARGET_HINTS: tuple[str, ...] = (
     "tests",
     "bug",
 )
+_REPORT_HINTS: tuple[str, ...] = (
+    "report",
+    "brief",
+    "memo",
+    "writeup",
+    "write-up",
+    "document",
+)
+_CHART_HINTS: tuple[str, ...] = (
+    "chart",
+    "graph",
+    "plot",
+    "visualize",
+    "visualise",
+    "dashboard",
+)
 _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
@@ -91,6 +107,8 @@ _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
         "wait",
         "write",
         "export",
+        "generate_report",
+        "generate_chart",
         "submit",
     }
 )
@@ -407,6 +425,32 @@ def plan_follow_up_steps(
                     instruction=instruction,
                 )
             ]
+        if _wants_chart_artifact(objective):
+            chart_payload = _chart_instruction_payload(objective, result)
+            if (
+                chart_payload
+                and not _has_action_after(existing_steps, step_index, "generate_chart")
+                and not _has_action_after(existing_steps, step_index, "export")
+            ):
+                return [
+                    StepDefinition(
+                        action_type="generate_chart",
+                        instruction=json.dumps(chart_payload),
+                    )
+                ]
+        if _wants_report_artifact(objective) and _supports_explicit_report(
+            existing_steps, step_index, result
+        ):
+            if _has_action_after(existing_steps, step_index, "generate_report") or _has_action_after(
+                existing_steps, step_index, "export"
+            ):
+                return []
+            return [
+                StepDefinition(
+                    action_type="generate_report",
+                    instruction=json.dumps(_report_instruction_payload(objective, result)),
+                )
+            ]
         if _has_action_after(existing_steps, step_index, "export"):
             return []
         return [
@@ -430,6 +474,19 @@ def plan_follow_up_steps(
         ]
 
     if action == "submit":
+        if _wants_report_artifact(objective) and _supports_explicit_report(
+            existing_steps, step_index, result
+        ):
+            if _has_action_after(existing_steps, step_index, "generate_report") or _has_action_after(
+                existing_steps, step_index, "export"
+            ):
+                return []
+            return [
+                StepDefinition(
+                    action_type="generate_report",
+                    instruction=json.dumps(_report_instruction_payload(objective, result)),
+                )
+            ]
         if _has_action_after(existing_steps, step_index, "export"):
             return []
         return [
@@ -722,6 +779,16 @@ def _looks_like_workflow(objective: str) -> bool:
     return any(hint in lowered for hint in _WORKFLOW_HINTS)
 
 
+def _wants_report_artifact(objective: str) -> bool:
+    lowered = objective.lower()
+    return any(hint in lowered for hint in _REPORT_HINTS)
+
+
+def _wants_chart_artifact(objective: str) -> bool:
+    lowered = objective.lower()
+    return any(hint in lowered for hint in _CHART_HINTS)
+
+
 def _extract_url(objective: str) -> str:
     match = _URL_RE.search(objective)
     return match.group(0) if match else ""
@@ -856,6 +923,102 @@ def _count_adaptive_extracts(existing_steps: list[dict[str, Any]]) -> int:
         if instruction.startswith("Adaptive follow-up:"):
             count += 1
     return count
+
+
+def _report_instruction_payload(
+    objective: str,
+    result: StepExecutionResult,
+) -> dict[str, Any]:
+    slug = _artifact_slug(objective, fallback="report")
+    payload: dict[str, Any] = {
+        "path": f"reports/{slug}.md",
+        "title": _artifact_title(objective, fallback="Grounded Report"),
+        "objective": objective,
+    }
+    if result.citations:
+        payload["sources"] = [
+            {"url": citation.url, "title": citation.title, "snippet": citation.snippet}
+            for citation in result.citations[:5]
+        ]
+    return payload
+
+
+def _chart_instruction_payload(
+    objective: str,
+    result: StepExecutionResult,
+) -> dict[str, Any] | None:
+    raw_data = result.metadata.get("chart_data")
+    if not isinstance(raw_data, list):
+        return None
+    data = [item for item in raw_data if isinstance(item, dict)]
+    if not data:
+        return None
+    x_key, y_key = _infer_chart_keys(data)
+    if not x_key or not y_key:
+        return None
+    slug = _artifact_slug(objective, fallback="chart")
+    payload: dict[str, Any] = {
+        "path": f"charts/{slug}.html",
+        "title": str(result.metadata.get("chart_title") or _artifact_title(objective, fallback="Grounded Chart")),
+        "chart_type": str(result.metadata.get("chart_type") or "bar"),
+        "x_key": x_key,
+        "y_key": y_key,
+        "data": data[:12],
+    }
+    if result.citations:
+        payload["sources"] = [
+            {"url": citation.url, "title": citation.title, "snippet": citation.snippet}
+            for citation in result.citations[:5]
+        ]
+    return payload
+
+
+def _artifact_slug(objective: str, *, fallback: str) -> str:
+    parts = re.findall(r"[a-z0-9]+", objective.lower())
+    if not parts:
+        return fallback
+    return "-".join(parts[:6])
+
+
+def _artifact_title(objective: str, *, fallback: str) -> str:
+    compact = " ".join(objective.split()).strip()
+    if not compact:
+        return fallback
+    return compact[:80]
+
+
+def _infer_chart_keys(data: list[dict[str, Any]]) -> tuple[str, str]:
+    sample = data[0] if data else {}
+    x_key = ""
+    y_key = ""
+    for key, value in sample.items():
+        if not x_key and not isinstance(value, (int, float)):
+            x_key = str(key)
+        if not y_key and isinstance(value, (int, float)):
+            y_key = str(key)
+    return x_key, y_key
+
+
+def _has_grounded_report_context(result: StepExecutionResult) -> bool:
+    if result.citations:
+        return True
+    metadata = result.metadata if isinstance(result.metadata, dict) else {}
+    for key in ("current_url", "page_title", "page_excerpt", "search_results"):
+        value = metadata.get(key)
+        if value:
+            return True
+    return False
+
+
+def _supports_explicit_report(
+    existing_steps: list[dict[str, Any]],
+    step_index: int,
+    result: StepExecutionResult,
+) -> bool:
+    if not _has_grounded_report_context(result):
+        return False
+    browser_actions = {"search_web", "fetch_url", "navigate", "inspect", "read", "scroll", "submit"}
+    return any(_has_action_before(existing_steps, step_index, action) for action in browser_actions)
 
 
 def _top_result_url(result: StepExecutionResult) -> str:

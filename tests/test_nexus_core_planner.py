@@ -182,6 +182,56 @@ def test_plan_follow_up_steps_scroll_retries_extraction_after_context_gathering(
     assert [step.action_type for step in steps] == ["extract"]
 
 
+def test_plan_follow_up_steps_extract_for_report_objective_prefers_generate_report() -> None:
+    steps = plan_follow_up_steps(
+        objective="Prepare a report on grounded browser runtime docs",
+        completed_step=_step(2, "extract"),
+        result=StepExecutionResult(
+            output_text="grounded evidence gathered",
+            citations=[
+                CitationRecord(
+                    url="https://docs.example.org/runtime",
+                    title="Runtime docs",
+                    snippet="Grounded evidence",
+                )
+            ],
+            metadata={"current_url": "https://docs.example.org/runtime"},
+        ),
+        existing_steps=[_step(0, "search_web"), _step(1, "fetch_url"), _step(2, "extract")],
+    )
+
+    assert [step.action_type for step in steps] == ["generate_report"]
+    assert "reports/" in steps[0].instruction
+
+
+def test_plan_follow_up_steps_extract_for_chart_objective_prefers_generate_chart() -> None:
+    steps = plan_follow_up_steps(
+        objective="Research payment latency and generate a chart of the findings",
+        completed_step=_step(2, "extract"),
+        result=StepExecutionResult(
+            output_text="grounded evidence gathered",
+            citations=[
+                CitationRecord(
+                    url="https://docs.example.org/metrics",
+                    title="Metrics",
+                    snippet="Latency data",
+                )
+            ],
+            metadata={
+                "chart_data": [
+                    {"provider": "A", "latency_ms": 110},
+                    {"provider": "B", "latency_ms": 85},
+                ],
+                "chart_title": "Latency by provider",
+            },
+        ),
+        existing_steps=[_step(0, "search_web"), _step(1, "fetch_url"), _step(2, "extract")],
+    )
+
+    assert [step.action_type for step in steps] == ["generate_chart"]
+    assert "Latency by provider" in steps[0].instruction
+
+
 @pytest.mark.asyncio
 async def test_rule_adaptive_planner_initial_bootstrap_returns_single_seed_step() -> None:
     planner = RuleAdaptivePlanner()

@@ -16,7 +16,7 @@ from nexus_sandbox_runner.executors import (
     DockerEphemeralExecutor,
     LocalEphemeralExecutor,
     StepRequest,
-    _container_script,
+    _ensure_container_script,
     _fetch_url_content,
     build_executor_from_env,
 )
@@ -351,6 +351,127 @@ def test_local_executor_low_risk_test_command_returns_failed_observation(tmp_pat
     assert result.metadata["failure_mode"] == "observation"
 
 
+def test_local_executor_generate_report_creates_grounded_markdown_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors._search_web",
+        lambda query, max_results=5: [
+            {
+                "url": "https://docs.example.org/runtime",
+                "title": "Runtime guide",
+                "snippet": "Grounded runtime notes",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "nexus_sandbox_runner.executors._fetch_url_content",
+        lambda url, timeout_sec=10.0: {
+            "url": url,
+            "title": "Runtime guide",
+            "text": "Grounded runtime notes with useful implementation detail.",
+            "snippet": "Grounded runtime notes with useful implementation detail.",
+        },
+    )
+
+    executor.execute(
+        StepRequest(
+            run_id="run-report",
+            step_id="step-search",
+            action_type="search_web",
+            instruction="runtime report sources",
+        ),
+        sandbox_root,
+    )
+    executor.execute(
+        StepRequest(
+            run_id="run-report",
+            step_id="step-fetch",
+            action_type="fetch_url",
+            instruction="open the best result",
+        ),
+        sandbox_root,
+    )
+
+    result = executor.execute(
+        StepRequest(
+            run_id="run-report",
+            step_id="step-report",
+            action_type="generate_report",
+            instruction=json.dumps(
+                {
+                    "path": "reports/runtime-brief.md",
+                    "title": "Runtime Brief",
+                    "sections": [
+                        {"heading": "Summary", "body": "Grounded summary for the runtime."}
+                    ],
+                }
+            ),
+        ),
+        sandbox_root,
+    )
+
+    assert result.metadata["file_path"] == "reports/runtime-brief.md"
+    assert result.metadata["artifact_kind"] == "report"
+    assert result.metadata["source_citation_count"] == 1
+    artifact_path = Path(result.artifacts[0]["sandbox_path"])
+    assert artifact_path.exists()
+    assert result.artifacts[0]["kind"] == "report"
+    report_body = artifact_path.read_text(encoding="utf-8")
+    assert "# Runtime Brief" in report_body
+    assert "Grounded summary for the runtime." in report_body
+    assert "https://docs.example.org/runtime" in report_body
+
+
+def test_local_executor_generate_chart_creates_html_artifact(tmp_path: Path) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+
+    result = executor.execute(
+        StepRequest(
+            run_id="run-chart",
+            step_id="step-chart",
+            action_type="generate_chart",
+            instruction=json.dumps(
+                {
+                    "path": "charts/runtime-latency.html",
+                    "chart_type": "bar",
+                    "title": "Latency by provider",
+                    "x_key": "provider",
+                    "y_key": "latency_ms",
+                    "data": [
+                        {"provider": "A", "latency_ms": 110},
+                        {"provider": "B", "latency_ms": 85},
+                    ],
+                    "sources": [
+                        {
+                            "url": "https://docs.example.org/metrics",
+                            "title": "Metrics",
+                            "snippet": "Latency measurements",
+                        }
+                    ],
+                }
+            ),
+        ),
+        sandbox_root,
+    )
+
+    assert result.metadata["file_path"] == "charts/runtime-latency.html"
+    assert result.metadata["artifact_kind"] == "chart"
+    assert result.metadata["data_points"] == 2
+    artifact_path = Path(result.artifacts[0]["sandbox_path"])
+    assert artifact_path.exists()
+    assert result.artifacts[0]["kind"] == "chart"
+    chart_body = artifact_path.read_text(encoding="utf-8")
+    assert "Latency by provider" in chart_body
+    assert "provider" in chart_body
+    assert "latency_ms" in chart_body
+    assert "docs.example.org/metrics" in chart_body
+
+
 def test_fetch_url_content_extracts_page_affordances(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -610,8 +731,9 @@ def _run_container_script_step(
     )
     if extra_env:
         env.update(extra_env)
+    script_path = _ensure_container_script(run_dir)
     subprocess.run(
-        [sys.executable, "-c", _container_script()],
+        [sys.executable, str(script_path)],
         check=True,
         capture_output=True,
         text=True,
@@ -1492,6 +1614,84 @@ urllib.request.urlopen = _fake_urlopen
     ]
     assert session["search_results"][0]["title"] == "Alpha docs"
     assert session["search_results"][1]["snippet"] == "Beta grounded snippet"
+
+
+def test_container_script_generate_report_creates_markdown_artifact(tmp_path: Path) -> None:
+    payload, session = _run_container_script_step(
+        tmp_path,
+        action_type="generate_report",
+        instruction=json.dumps(
+            {
+                "path": "reports/container-brief.md",
+                "title": "Container Brief",
+                "sections": [{"heading": "Summary", "body": "Grounded container summary."}],
+                "sources": [
+                    {
+                        "url": "https://docs.example.org/container",
+                        "title": "Container docs",
+                        "snippet": "Grounded container source",
+                    }
+                ],
+            }
+        ),
+        session={
+            "current_url": "https://docs.example.org/container",
+            "last_title": "Container docs",
+            "last_page_text": "Grounded container source text",
+            "last_page_affordances": {},
+            "search_results": [],
+            "draft_inputs": [],
+            "submitted": False,
+            "browser_storage_state_path": "",
+        },
+    )
+
+    assert payload["metadata"]["file_path"] == "reports/container-brief.md"
+    assert payload["metadata"]["artifact_kind"] == "report"
+    assert payload["artifacts"][0]["kind"] == "report"
+    artifact_path = Path(payload["artifacts"][0]["path"])
+    assert artifact_path.exists()
+    body = artifact_path.read_text(encoding="utf-8")
+    assert "# Container Brief" in body
+    assert "https://docs.example.org/container" in body
+    assert session["current_url"] == "https://docs.example.org/container"
+
+
+def test_container_script_generate_chart_creates_html_artifact(tmp_path: Path) -> None:
+    payload, _session = _run_container_script_step(
+        tmp_path,
+        action_type="generate_chart",
+        instruction=json.dumps(
+            {
+                "path": "charts/container-latency.html",
+                "chart_type": "bar",
+                "title": "Container latency",
+                "x_key": "provider",
+                "y_key": "latency_ms",
+                "data": [
+                    {"provider": "A", "latency_ms": 110},
+                    {"provider": "B", "latency_ms": 85},
+                ],
+                "sources": [
+                    {
+                        "url": "https://docs.example.org/metrics",
+                        "title": "Metrics",
+                        "snippet": "Latency measurements",
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert payload["metadata"]["file_path"] == "charts/container-latency.html"
+    assert payload["metadata"]["artifact_kind"] == "chart"
+    assert payload["artifacts"][0]["kind"] == "chart"
+    artifact_path = Path(payload["artifacts"][0]["path"])
+    assert artifact_path.exists()
+    body = artifact_path.read_text(encoding="utf-8")
+    assert "Container latency" in body
+    assert "provider" in body
+    assert "latency_ms" in body
 
 
 def test_container_script_inspect_returns_page_affordances(tmp_path: Path) -> None:

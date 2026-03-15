@@ -128,10 +128,14 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     allowed_actions = payload["constraints"]["allowed_actions"]
     assert "search_web" in allowed_actions
     assert "fetch_url" in allowed_actions
+    assert "generate_report" in allowed_actions
+    assert "generate_chart" in allowed_actions
     assert "page_affordances" in request_body["messages"][0]["content"]
     assert "command_failed" in request_body["messages"][0]["content"]
     assert "For edit_file use instruction payload" in request_body["messages"][0]["content"]
     assert "For execute_code use instruction payload" in request_body["messages"][0]["content"]
+    assert "For generate_report use instruction payload" in request_body["messages"][0]["content"]
+    assert "For generate_chart use instruction payload" in request_body["messages"][0]["content"]
     completed_payload = payload["completed_step"]
     assert payload["resolved_skills"][0]["name"] == "browser-agent"
     assert payload["resolved_skills"][0]["path"] == "/skills/browser-agent/SKILL.md"

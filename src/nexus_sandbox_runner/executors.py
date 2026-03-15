@@ -18,7 +18,9 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any, Protocol
 
-_ARTIFACT_ACTIONS: frozenset[str] = frozenset({"extract", "write", "export"})
+_ARTIFACT_ACTIONS: frozenset[str] = frozenset(
+    {"extract", "write", "export", "generate_report", "generate_chart"}
+)
 _DEFAULT_SEARCH_RESULTS = 5
 DEFAULT_DOCKER_IMAGE = (
     "python:3.13-slim@sha256:8bc60ca09afaa8ea0d6d1220bde073bacfedd66a4bf8129cbdc8ef0e16c8a952"
@@ -419,6 +421,7 @@ class DockerEphemeralExecutor:
         step_workspace: Path,
         result_file: Path,
     ) -> list[str]:
+        script_path = _ensure_container_script(run_dir)
         return [
             self.docker_bin,
             "run",
@@ -462,8 +465,7 @@ class DockerEphemeralExecutor:
             "/work",
             self.image,
             "python",
-            "-c",
-            _container_script(),
+            f"/run-data/{script_path.name}",
         ]
 
     def _docker_env(self) -> dict[str, str]:
@@ -768,6 +770,88 @@ def _execute_local_action(
         _append_history(session, action, instruction)
         return StepResult(output, citations, artifacts, metadata), session
 
+    if action == "generate_report":
+        payload = _parse_instruction_payload(instruction)
+        target = _resolve_workspace_path(
+            workspace_dir,
+            payload,
+            default_path=f"reports/{request.step_id}.md",
+            must_exist=False,
+            allow_directory=False,
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        title = str(payload.get("title") or _artifact_title_from_payload(payload, fallback="Grounded Report"))
+        sources = _artifact_sources(payload, session)
+        citations = _normalize_citations(sources)
+        report_body = _render_report_markdown(
+            title=title,
+            objective=str(payload.get("objective") or instruction),
+            sections=payload.get("sections", []),
+            sources=sources,
+            session=session,
+        )
+        target.write_text(report_body, encoding="utf-8")
+        metadata["file_path"] = _relative_workspace_path(target, workspace_dir)
+        metadata["bytes_written"] = len(report_body.encode("utf-8"))
+        metadata["artifact_kind"] = "report"
+        metadata["report_title"] = title
+        metadata["source_citation_count"] = len(citations)
+        artifacts.append(
+            _workspace_file_artifact(target, workspace_dir, request.run_id, kind_override="report")
+        )
+        output = (
+            f"[sandbox-artifact] Generated grounded report {metadata['file_path']} "
+            f"from {len(citations)} source(s)."
+        )
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
+    if action == "generate_chart":
+        payload = _parse_instruction_payload(instruction)
+        target = _resolve_workspace_path(
+            workspace_dir,
+            payload,
+            default_path=f"charts/{request.step_id}.html",
+            must_exist=False,
+            allow_directory=False,
+        )
+        data = _chart_rows_from_payload(payload)
+        if not data:
+            raise RuntimeError("No structured chart data provided for `generate_chart`.")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        title = str(payload.get("title") or _artifact_title_from_payload(payload, fallback="Generated Chart"))
+        chart_type = str(payload.get("chart_type") or "bar").strip().lower() or "bar"
+        x_key, y_key = _chart_axis_keys(payload, data)
+        sources = _artifact_sources(payload, session)
+        citations = _normalize_citations(sources)
+        chart_body = _render_chart_html(
+            title=title,
+            chart_type=chart_type,
+            data=data,
+            x_key=x_key,
+            y_key=y_key,
+            sources=sources,
+        )
+        target.write_text(chart_body, encoding="utf-8")
+        metadata["file_path"] = _relative_workspace_path(target, workspace_dir)
+        metadata["bytes_written"] = len(chart_body.encode("utf-8"))
+        metadata["artifact_kind"] = "chart"
+        metadata["chart_type"] = chart_type
+        metadata["chart_title"] = title
+        metadata["data_points"] = len(data)
+        metadata["x_key"] = x_key
+        metadata["y_key"] = y_key
+        metadata["source_citation_count"] = len(citations)
+        artifacts.append(
+            _workspace_file_artifact(target, workspace_dir, request.run_id, kind_override="chart")
+        )
+        output = (
+            f"[sandbox-artifact] Generated grounded chart {metadata['file_path']} "
+            f"with {len(data)} data point(s)."
+        )
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
     interactive_page: dict[str, str] | None = None
     if action in {"type", "click", "wait", "submit"}:
         interactive_page = _resolve_or_fetch_page(action, instruction, session, refresh=False)
@@ -900,11 +984,17 @@ def _list_workspace_files(target: Path, workspace_dir: Path) -> list[str]:
     return sorted(files)
 
 
-def _workspace_file_artifact(path: Path, workspace_dir: Path, run_id: str) -> dict[str, str]:
+def _workspace_file_artifact(
+    path: Path,
+    workspace_dir: Path,
+    run_id: str,
+    *,
+    kind_override: str | None = None,
+) -> dict[str, str]:
     resolved = path.resolve()
     rel_path = resolved.relative_to(workspace_dir.resolve()).as_posix()
     return {
-        "kind": _artifact_kind_for_path(resolved),
+        "kind": kind_override or _artifact_kind_for_path(resolved),
         "name": resolved.name,
         "rel_path": f"{run_id}/workspace/{rel_path}",
         "sandbox_path": str(resolved),
@@ -916,6 +1006,176 @@ def _artifact_kind_for_path(path: Path) -> str:
     if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
         return "image"
     return "text"
+
+
+def _artifact_title_from_payload(payload: dict[str, Any], *, fallback: str) -> str:
+    candidate = str(payload.get("raw") or payload.get("objective") or "").strip()
+    if not candidate:
+        return fallback
+    compact = re.sub(r"\s+", " ", candidate)
+    return compact[:80]
+
+
+def _artifact_sources(payload: dict[str, Any], session: dict[str, Any]) -> list[dict[str, str]]:
+    raw_sources = payload.get("sources")
+    if isinstance(raw_sources, list):
+        return _normalize_citations(raw_sources)
+    current_url = str(session.get("current_url") or "").strip()
+    current_title = str(session.get("page_title") or session.get("current_title") or "").strip()
+    current_excerpt = str(session.get("page_excerpt") or "").strip()
+    if current_url:
+        return _normalize_citations(
+            [{"url": current_url, "title": current_title or current_url, "snippet": current_excerpt}]
+        )
+    search_results = session.get("search_results")
+    if isinstance(search_results, list):
+        return _normalize_citations(search_results[:5])
+    return []
+
+
+def _render_report_markdown(
+    *,
+    title: str,
+    objective: str,
+    sections: Any,
+    sources: list[dict[str, str]],
+    session: dict[str, Any],
+) -> str:
+    lines = [f"# {title}", ""]
+    objective_text = str(objective).strip()
+    if objective_text and not objective_text.startswith("{"):
+        lines.extend(["## Objective", objective_text, ""])
+    rendered_sections = False
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            heading = str(section.get("heading") or section.get("title") or "").strip()
+            body = str(section.get("body") or section.get("content") or "").strip()
+            if not heading and not body:
+                continue
+            rendered_sections = True
+            if heading:
+                lines.append(f"## {heading}")
+            if body:
+                lines.append(body)
+            lines.append("")
+    if not rendered_sections:
+        summary = str(session.get("page_excerpt") or "").strip()
+        if summary:
+            lines.extend(["## Summary", summary, ""])
+    if sources:
+        lines.append("## Sources")
+        for source in sources:
+            url = str(source.get("url", "")).strip()
+            title_text = str(source.get("title", "")).strip() or url
+            snippet = str(source.get("snippet", "")).strip()
+            lines.append(f"- [{title_text}]({url})")
+            if snippet:
+                lines.append(f"  - {snippet}")
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _chart_rows_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_data = payload.get("data", payload.get("chart_data"))
+    if not isinstance(raw_data, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in raw_data:
+        if isinstance(item, dict):
+            rows.append(item)
+    return rows
+
+
+def _chart_axis_keys(payload: dict[str, Any], data: list[dict[str, Any]]) -> tuple[str, str]:
+    x_key = str(payload.get("x_key") or "").strip()
+    y_key = str(payload.get("y_key") or "").strip()
+    if x_key and y_key:
+        return x_key, y_key
+    sample = data[0] if data else {}
+    for key, value in sample.items():
+        if not x_key and not isinstance(value, (int, float)):
+            x_key = str(key)
+        if not y_key and isinstance(value, (int, float)):
+            y_key = str(key)
+    if not x_key:
+        x_key = next(iter(sample.keys()), "label")
+    if not y_key:
+        y_key = next(iter(sample.keys()), "value")
+    return x_key, y_key
+
+
+def _render_chart_html(
+    *,
+    title: str,
+    chart_type: str,
+    data: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    sources: list[dict[str, str]],
+) -> str:
+    max_value = max(
+        (
+            float(row.get(y_key, 0))
+            for row in data
+            if isinstance(row.get(y_key), (int, float))
+        ),
+        default=1.0,
+    )
+    rows_markup: list[str] = []
+    table_rows: list[str] = []
+    for row in data:
+        label = html.escape(str(row.get(x_key, "")))
+        raw_value = row.get(y_key, 0)
+        value = float(raw_value) if isinstance(raw_value, (int, float)) else 0.0
+        width = 0.0 if max_value <= 0 else (value / max_value) * 100.0
+        rows_markup.append(
+            "<div class=\"bar-row\">"
+            f"<div class=\"bar-label\">{label}</div>"
+            "<div class=\"bar-track\">"
+            f"<div class=\"bar-fill\" style=\"width:{width:.2f}%\"></div>"
+            "</div>"
+            f"<div class=\"bar-value\">{html.escape(str(raw_value))}</div>"
+            "</div>"
+        )
+        table_rows.append(
+            f"<tr><td>{label}</td><td>{html.escape(str(raw_value))}</td></tr>"
+        )
+    sources_markup = "".join(
+        (
+            "<li>"
+            f"<a href=\"{html.escape(str(source.get('url', '')))}\">"
+            f"{html.escape(str(source.get('title', '') or source.get('url', '')))}</a>"
+            f"<span>{html.escape(str(source.get('snippet', '')))}</span>"
+            "</li>"
+        )
+        for source in sources
+    )
+    return (
+        "<!doctype html>\n"
+        "<html><head><meta charset=\"utf-8\" />"
+        f"<title>{html.escape(title)}</title>"
+        "<style>"
+        "body{font-family:IBM Plex Sans,Arial,sans-serif;padding:32px;background:#f5f1e8;color:#17313b;}"
+        "h1{margin:0 0 8px;} .meta{color:#47606a;margin-bottom:24px;}"
+        ".chart{display:grid;gap:12px;margin:24px 0;}"
+        ".bar-row{display:grid;grid-template-columns:160px 1fr 80px;gap:12px;align-items:center;}"
+        ".bar-track{height:18px;background:#d7e5e2;border-radius:999px;overflow:hidden;}"
+        ".bar-fill{height:100%;background:#2a8c82;}"
+        "table{border-collapse:collapse;width:100%;margin-top:24px;}"
+        "th,td{padding:8px 10px;border-bottom:1px solid #c8d4d1;text-align:left;}"
+        "ul{padding-left:20px;} li span{display:block;color:#47606a;margin-top:4px;}"
+        "</style></head><body>"
+        f"<h1>{html.escape(title)}</h1>"
+        f"<p class=\"meta\">Type: {html.escape(chart_type)} | X: {html.escape(x_key)} | Y: {html.escape(y_key)}</p>"
+        f"<section class=\"chart\">{''.join(rows_markup)}</section>"
+        "<section><h2>Data</h2><table><thead>"
+        f"<tr><th>{html.escape(x_key)}</th><th>{html.escape(y_key)}</th></tr>"
+        f"</thead><tbody>{''.join(table_rows)}</tbody></table></section>"
+        f"<section><h2>Sources</h2><ul>{sources_markup}</ul></section>"
+        "</body></html>\n"
+    )
 
 
 def _snapshot_workspace(workspace_dir: Path) -> dict[str, tuple[int, int]]:
@@ -1221,6 +1481,15 @@ def _text_summary(text: str, limit: int) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _ensure_container_script(run_dir: Path) -> Path:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / "container_step.py"
+    content = _container_script()
+    if not path.exists() or path.read_text(encoding="utf-8") != content:
+        path.write_text(content, encoding="utf-8")
+    return path
 
 
 def _container_script() -> str:
@@ -1731,13 +2000,154 @@ def _container_script() -> str:
         def artifact_kind(path):
             return "image" if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"} else "text"
 
-        def workspace_artifact(path):
+        def workspace_artifact(path, kind_override=None):
             return {
-                "kind": artifact_kind(path),
+                "kind": kind_override or artifact_kind(path),
                 "name": path.name,
                 "path": str(path.resolve()),
                 "workspace": str(run_dir),
             }
+
+        def normalize_citations(items):
+            normalized = []
+            if not isinstance(items, list):
+                return normalized
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                normalized.append(
+                    {
+                        "url": str(item.get("url", "")),
+                        "title": str(item.get("title", "") or item.get("url", "")),
+                        "snippet": str(item.get("snippet", "")),
+                    }
+                )
+            return normalized
+
+        def artifact_sources(payload):
+            sources = normalize_citations(payload.get("sources"))
+            if sources:
+                return sources
+            current_url = str(session.get("current_url", "")).strip()
+            if not current_url:
+                return []
+            return normalize_citations(
+                [
+                    {
+                        "url": current_url,
+                        "title": str(session.get("last_title", "")).strip() or current_url,
+                        "snippet": summarize_text(session.get("last_page_text", ""), 220),
+                    }
+                ]
+            )
+
+        def render_report(title, objective, sections, sources):
+            lines = [f"# {title}", ""]
+            objective_text = str(objective or "").strip()
+            if objective_text and not objective_text.startswith("{"):
+                lines.extend(["## Objective", objective_text, ""])
+            rendered_sections = False
+            if isinstance(sections, list):
+                for section in sections:
+                    if not isinstance(section, dict):
+                        continue
+                    heading = str(section.get("heading") or section.get("title") or "").strip()
+                    body = str(section.get("body") or section.get("content") or "").strip()
+                    if not heading and not body:
+                        continue
+                    rendered_sections = True
+                    if heading:
+                        lines.append(f"## {heading}")
+                    if body:
+                        lines.append(body)
+                    lines.append("")
+            if not rendered_sections:
+                summary = summarize_text(session.get("last_page_text", ""), 320)
+                if summary:
+                    lines.extend(["## Summary", summary, ""])
+            if sources:
+                lines.append("## Sources")
+                for source in sources:
+                    lines.append(f"- [{source['title']}]({source['url']})")
+                    snippet = str(source.get("snippet", "")).strip()
+                    if snippet:
+                        lines.append(f"  - {snippet}")
+                lines.append("")
+            return "\\n".join(lines).strip() + "\\n"
+
+        def chart_rows(payload):
+            raw_data = payload.get("data", payload.get("chart_data"))
+            if not isinstance(raw_data, list):
+                return []
+            return [item for item in raw_data if isinstance(item, dict)]
+
+        def chart_axis_keys(payload, data):
+            x_key = str(payload.get("x_key", "")).strip()
+            y_key = str(payload.get("y_key", "")).strip()
+            if x_key and y_key:
+                return x_key, y_key
+            sample = data[0] if data else {}
+            for key, value in sample.items():
+                if not x_key and not isinstance(value, (int, float)):
+                    x_key = str(key)
+                if not y_key and isinstance(value, (int, float)):
+                    y_key = str(key)
+            return x_key or "label", y_key or "value"
+
+        def render_chart(title, chart_type, data, x_key, y_key, sources):
+            numeric_values = [
+                float(row.get(y_key, 0))
+                for row in data
+                if isinstance(row.get(y_key), (int, float))
+            ]
+            max_value = max(numeric_values) if numeric_values else 1.0
+            bar_rows = []
+            table_rows = []
+            for row in data:
+                label = html.escape(str(row.get(x_key, "")))
+                raw_value = row.get(y_key, 0)
+                value = float(raw_value) if isinstance(raw_value, (int, float)) else 0.0
+                width = 0.0 if max_value <= 0 else (value / max_value) * 100.0
+                bar_rows.append(
+                    "<div class=\\"bar-row\\">"
+                    f"<div class=\\"bar-label\\">{label}</div>"
+                    "<div class=\\"bar-track\\"><div class=\\"bar-fill\\" style=\\"width:"
+                    f"{width:.2f}%\\"></div></div>"
+                    f"<div class=\\"bar-value\\">{html.escape(str(raw_value))}</div></div>"
+                )
+                table_rows.append(
+                    f"<tr><td>{label}</td><td>{html.escape(str(raw_value))}</td></tr>"
+                )
+            sources_markup = "".join(
+                "<li>"
+                f"<a href=\\"{html.escape(str(source.get('url', '')))}\\">"
+                f"{html.escape(str(source.get('title', '') or source.get('url', '')))}</a>"
+                f"<span>{html.escape(str(source.get('snippet', '')))}</span>"
+                "</li>"
+                for source in sources
+            )
+            return (
+                "<!doctype html><html><head><meta charset=\\"utf-8\\" />"
+                f"<title>{html.escape(title)}</title>"
+                "<style>"
+                "body{font-family:IBM Plex Sans,Arial,sans-serif;padding:32px;background:#f5f1e8;color:#17313b;}"
+                ".chart{display:grid;gap:12px;margin:24px 0;}"
+                ".bar-row{display:grid;grid-template-columns:160px 1fr 80px;gap:12px;align-items:center;}"
+                ".bar-track{height:18px;background:#d7e5e2;border-radius:999px;overflow:hidden;}"
+                ".bar-fill{height:100%;background:#2a8c82;}"
+                "table{border-collapse:collapse;width:100%;margin-top:24px;}"
+                "th,td{padding:8px 10px;border-bottom:1px solid #c8d4d1;text-align:left;}"
+                "ul{padding-left:20px;} li span{display:block;color:#47606a;margin-top:4px;}"
+                "</style></head><body>"
+                f"<h1>{html.escape(title)}</h1>"
+                f"<p>Type: {html.escape(chart_type)} | X: {html.escape(x_key)} | Y: {html.escape(y_key)}</p>"
+                f"<section class=\\"chart\\">{''.join(bar_rows)}</section>"
+                "<section><h2>Data</h2><table><thead>"
+                f"<tr><th>{html.escape(x_key)}</th><th>{html.escape(y_key)}</th></tr>"
+                f"</thead><tbody>{''.join(table_rows)}</tbody></table></section>"
+                f"<section><h2>Sources</h2><ul>{sources_markup}</ul></section>"
+                "</body></html>"
+            )
 
         def stringify_command(command):
             if isinstance(command, list):
@@ -1825,6 +2235,50 @@ def _container_script() -> str:
                 detail = (proc.stderr or proc.stdout or "command returned non-zero exit status").strip()
                 raise RuntimeError(f"Sandbox code execution failed (exit={proc.returncode}): {detail[:500]}")
             output = (proc.stdout or "").strip() or (proc.stderr or "").strip() or "[sandbox-code] Command completed."
+        elif action == "generate_report":
+            target = resolve_workspace_path(payload, default_path=f"reports/{step_id}.md", must_exist=False, allow_directory=False)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            title = str(payload.get("title", "")).strip() or "Grounded Report"
+            sources = artifact_sources(payload)
+            citations = normalize_citations(sources)
+            report_body = render_report(
+                title,
+                payload.get("objective", instruction),
+                payload.get("sections", []),
+                sources,
+            )
+            target.write_text(report_body, encoding="utf-8")
+            metadata["file_path"] = relative_workspace_path(target)
+            metadata["bytes_written"] = len(report_body.encode("utf-8"))
+            metadata["artifact_kind"] = "report"
+            metadata["report_title"] = title
+            metadata["source_citation_count"] = len(citations)
+            artifacts.append(workspace_artifact(target, kind_override="report"))
+            output = f"[sandbox-artifact] Generated grounded report {metadata['file_path']} from {len(citations)} source(s)."
+        elif action == "generate_chart":
+            target = resolve_workspace_path(payload, default_path=f"charts/{step_id}.html", must_exist=False, allow_directory=False)
+            data = chart_rows(payload)
+            if not data:
+                raise RuntimeError("No structured chart data provided for `generate_chart`.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            title = str(payload.get("title", "")).strip() or "Generated Chart"
+            chart_type = str(payload.get("chart_type", "bar")).strip() or "bar"
+            x_key, y_key = chart_axis_keys(payload, data)
+            sources = artifact_sources(payload)
+            citations = normalize_citations(sources)
+            chart_body = render_chart(title, chart_type, data, x_key, y_key, sources)
+            target.write_text(chart_body, encoding="utf-8")
+            metadata["file_path"] = relative_workspace_path(target)
+            metadata["bytes_written"] = len(chart_body.encode("utf-8"))
+            metadata["artifact_kind"] = "chart"
+            metadata["chart_type"] = chart_type
+            metadata["chart_title"] = title
+            metadata["data_points"] = len(data)
+            metadata["x_key"] = x_key
+            metadata["y_key"] = y_key
+            metadata["source_citation_count"] = len(citations)
+            artifacts.append(workspace_artifact(target, kind_override="chart"))
+            output = f"[sandbox-artifact] Generated grounded chart {metadata['file_path']} with {len(data)} data point(s)."
         elif action in {"fetch_url", "navigate", "inspect", "scroll", "read", "extract"}:
             page_data = None
             target_url = resolve_target_url()
