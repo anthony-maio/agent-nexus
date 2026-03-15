@@ -2489,6 +2489,36 @@ def test_retry_failed_steps_reexecutes_run(tmp_path: Path) -> None:
     assert retried_run["steps"][1]["metadata"]["kernel_decision"] == "stop"
 
 
+def test_kernel_auto_retries_transient_step_failures(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        execution_adapter=FlakyExportExecutionAdapter(tmp_path),
+        settings_overrides={"APP_KERNEL_MAX_STEP_RETRIES": 1},
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Export a grounded report with transient failure recovery",
+            "mode": "manual",
+            "steps": [
+                {"action_type": "search_web", "instruction": "find source"},
+                {"action_type": "export", "instruction": "write final report"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "completed"
+    export_step = next(step for step in run["steps"] if step["action_type"] == "export")
+    assert export_step["status"] == "completed"
+    assert export_step["metadata"]["retry_count"] == 1
+    assert export_step["metadata"]["verification_result"] == "passed"
+
+
 def test_model_replanner_proposals_are_policy_checked_and_gated(tmp_path: Path) -> None:
     client = _client_with_planner(tmp_path, adaptive_planner=ModelSuggestionPlanner())
     headers = _auth_header(client)

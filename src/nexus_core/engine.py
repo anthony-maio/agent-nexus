@@ -130,6 +130,7 @@ class RunEngine:
         adaptive_planner: AdaptivePlanner | None = None,
         capability_resolver: CapabilityResolver | None = None,
         max_autonomous_steps: int = 24,
+        max_step_retries: int = 0,
     ) -> None:
         self.repo = repository
         self.execution = execution
@@ -142,6 +143,7 @@ class RunEngine:
             sandbox_artifacts_root.resolve() if sandbox_artifacts_root else None
         )
         self.max_autonomous_steps = max(int(max_autonomous_steps), 1)
+        self.max_step_retries = max(int(max_step_retries), 0)
         self.canonical_workspace.mkdir(parents=True, exist_ok=True)
 
     async def create_run(
@@ -514,6 +516,8 @@ class RunEngine:
 
             result = await self._execute_step(next_step)
             if result is None:
+                if await self._retry_failed_step_if_allowed(run_id, next_step["id"]):
+                    continue
                 await self._mark_run_failed(run_id, next_step["id"])
                 return
             if self._is_deferred_delegate_result(result):
@@ -811,6 +815,31 @@ class RunEngine:
             if step.get("started_at"):
                 executed_steps += 1
         return executed_steps >= self.max_autonomous_steps
+
+    async def _retry_failed_step_if_allowed(self, run_id: str, step_id: str) -> bool:
+        if self.max_step_retries <= 0:
+            return False
+        step = self.repo.get_step(step_id)
+        if step is None or step.get("status") != StepStatus.FAILED.value:
+            return False
+        metadata = step.get("metadata")
+        if not isinstance(metadata, dict) or metadata.get("retryable") is not True:
+            return False
+        retry_count = int(metadata.get("retry_count", 0) or 0)
+        if retry_count >= self.max_step_retries:
+            return False
+        if not self.repo.reset_step_for_retry(step_id):
+            return False
+        await self._publish(
+            run_id,
+            "step.retrying",
+            self._step_event_payload(
+                self.repo.get_step(step_id) or step,
+                step_id=step_id,
+                retry_count=retry_count + 1,
+            ),
+        )
+        return True
 
     @staticmethod
     def _annotate_skill_context(
