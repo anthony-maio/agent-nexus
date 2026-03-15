@@ -21,6 +21,7 @@ _RESEARCHER_ACTIONS: frozenset[str] = frozenset(
         "export",
         "generate_report",
         "generate_chart",
+        "generate_image",
     }
 )
 _OPERATOR_ACTIONS: frozenset[str] = frozenset(
@@ -41,6 +42,7 @@ _OPERATOR_ACTIONS: frozenset[str] = frozenset(
         "export",
         "generate_report",
         "generate_chart",
+        "generate_image",
     }
 )
 _DELEGATED_ROLE_ACTIONS: dict[str, frozenset[str]] = {
@@ -59,6 +61,7 @@ _HIGH_RISK_ACTIONS: frozenset[str] = frozenset(
         "export",
         "generate_report",
         "generate_chart",
+        "generate_image",
         "promote",
         "send",
         "purchase",

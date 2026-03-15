@@ -19,7 +19,7 @@ from textwrap import dedent
 from typing import Any, Protocol
 
 _ARTIFACT_ACTIONS: frozenset[str] = frozenset(
-    {"extract", "write", "export", "generate_report", "generate_chart"}
+    {"extract", "write", "export", "generate_report", "generate_chart", "generate_image"}
 )
 _DEFAULT_SEARCH_RESULTS = 5
 DEFAULT_DOCKER_IMAGE = (
@@ -852,6 +852,39 @@ def _execute_local_action(
         _append_history(session, action, instruction)
         return StepResult(output, citations, artifacts, metadata), session
 
+    if action == "generate_image":
+        payload = _parse_instruction_payload(instruction)
+        target = _resolve_workspace_path(
+            workspace_dir,
+            payload,
+            default_path=f"images/{request.step_id}.svg",
+            must_exist=False,
+            allow_directory=False,
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        title = str(payload.get("title") or _artifact_title_from_payload(payload, fallback="Generated Image"))
+        prompt = str(payload.get("prompt") or payload.get("objective") or instruction).strip()
+        sources = _artifact_sources(payload, session)
+        citations = _normalize_citations(sources)
+        image_body = _render_image_svg(title=title, prompt=prompt, sources=sources)
+        target.write_text(image_body, encoding="utf-8")
+        metadata["file_path"] = _relative_workspace_path(target, workspace_dir)
+        metadata["bytes_written"] = len(image_body.encode("utf-8"))
+        metadata["artifact_kind"] = "image"
+        metadata["image_title"] = title
+        metadata["image_prompt"] = prompt
+        metadata["image_provider"] = "builtin-svg"
+        metadata["source_citation_count"] = len(citations)
+        artifacts.append(
+            _workspace_file_artifact(target, workspace_dir, request.run_id, kind_override="image")
+        )
+        output = (
+            f"[sandbox-artifact] Generated grounded image {metadata['file_path']} "
+            f"from prompt and {len(citations)} source(s)."
+        )
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
     interactive_page: dict[str, str] | None = None
     if action in {"type", "click", "wait", "submit"}:
         interactive_page = _resolve_or_fetch_page(action, instruction, session, refresh=False)
@@ -1003,7 +1036,7 @@ def _workspace_file_artifact(
 
 
 def _artifact_kind_for_path(path: Path) -> str:
-    if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+    if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}:
         return "image"
     return "text"
 
@@ -1176,6 +1209,88 @@ def _render_chart_html(
         f"<section><h2>Sources</h2><ul>{sources_markup}</ul></section>"
         "</body></html>\n"
     )
+
+
+def _render_image_svg(
+    *,
+    title: str,
+    prompt: str,
+    sources: list[dict[str, str]],
+) -> str:
+    prompt_lines = _wrap_svg_text(prompt, width=44, limit=4)
+    source_lines = [
+        str(source.get("title") or source.get("url") or "").strip()
+        for source in sources[:2]
+        if str(source.get("title") or source.get("url") or "").strip()
+    ]
+    escaped_title = html.escape(title)
+    prompt_markup = "".join(
+        f'<text x="72" y="{240 + (index * 34)}" class="prompt">{html.escape(line)}</text>'
+        for index, line in enumerate(prompt_lines)
+    )
+    source_markup = "".join(
+        f'<text x="72" y="{470 + (index * 24)}" class="source">{html.escape(line)}</text>'
+        for index, line in enumerate(source_lines)
+    )
+    source_heading = (
+        '<text x="72" y="438" class="eyebrow">Grounded by sources</text>' if source_lines else ""
+    )
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" '
+        f'aria-label="{escaped_title}">'
+        "<defs>"
+        '<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">'
+        '<stop offset="0%" stop-color="#f6efe2" />'
+        '<stop offset="100%" stop-color="#d2ebe6" />'
+        "</linearGradient>"
+        '<linearGradient id="card" x1="0%" y1="0%" x2="100%" y2="100%">'
+        '<stop offset="0%" stop-color="#17313b" stop-opacity="0.96" />'
+        '<stop offset="100%" stop-color="#25505b" stop-opacity="0.92" />'
+        "</linearGradient>"
+        "</defs>"
+        '<rect width="1200" height="630" fill="url(#bg)" />'
+        '<circle cx="1020" cy="120" r="180" fill="#90c9bc" fill-opacity="0.35" />'
+        '<circle cx="160" cy="520" r="220" fill="#f0c87c" fill-opacity="0.25" />'
+        '<rect x="48" y="48" width="1104" height="534" rx="36" fill="url(#card)" />'
+        '<style>'
+        ".eyebrow{font:600 18px IBM Plex Sans,Arial,sans-serif;letter-spacing:0.12em;text-transform:uppercase;fill:#90c9bc;}"
+        ".title{font:700 54px IBM Plex Sans,Arial,sans-serif;fill:#f6efe2;}"
+        ".prompt{font:400 28px IBM Plex Sans,Arial,sans-serif;fill:#d9ece7;}"
+        ".source{font:400 18px IBM Plex Sans,Arial,sans-serif;fill:#bdd7d0;}"
+        "</style>"
+        '<text x="72" y="110" class="eyebrow">Generated image artifact</text>'
+        f'<text x="72" y="182" class="title">{escaped_title}</text>'
+        f"{prompt_markup}"
+        f"{source_heading}"
+        f"{source_markup}"
+        '<path d="M860 176c74 0 134 60 134 134s-60 134-134 134-134-60-134-134 60-134 134-134Zm0 52c-45 0-82 37-82 82s37 82 82 82 82-37 82-82-37-82-82-82Z" fill="#90c9bc" fill-opacity="0.18"/>'
+        '<path d="M820 330c24-60 72-106 142-136 43 33 72 78 88 136-54-22-101-20-142 8-29 19-58 16-88-8Z" fill="#f0c87c" fill-opacity="0.82"/>'
+        "</svg>\n"
+    )
+
+
+def _wrap_svg_text(text: str, *, width: int, limit: int) -> list[str]:
+    words = str(text or "").split()
+    if not words:
+        return ["No prompt provided."]
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and len(candidate) > width:
+            lines.append(current)
+            current = word
+            if len(lines) >= limit:
+                break
+            continue
+        current = candidate
+    if len(lines) < limit and current:
+        lines.append(current)
+    if len(lines) > limit:
+        lines = lines[:limit]
+    if len(lines) == limit and sum(len(line.split()) for line in lines) < len(words):
+        lines[-1] = lines[-1][: max(0, width - 1)].rstrip() + "…"
+    return lines
 
 
 def _snapshot_workspace(workspace_dir: Path) -> dict[str, tuple[int, int]]:
@@ -1998,7 +2113,7 @@ def _container_script() -> str:
             return sorted(path for path, state in after.items() if before.get(path) != state)
 
         def artifact_kind(path):
-            return "image" if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"} else "text"
+            return "image" if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"} else "text"
 
         def workspace_artifact(path, kind_override=None):
             return {
@@ -2149,6 +2264,80 @@ def _container_script() -> str:
                 "</body></html>"
             )
 
+        def wrap_svg_text(text, width=44, limit=4):
+            words = str(text or "").split()
+            if not words:
+                return ["No prompt provided."]
+            lines = []
+            current = ""
+            used_words = 0
+            for word in words:
+                candidate = f"{current} {word}".strip()
+                if current and len(candidate) > width:
+                    lines.append(current)
+                    current = word
+                    if len(lines) >= limit:
+                        break
+                    continue
+                current = candidate
+                used_words += 1
+            if len(lines) < limit and current:
+                lines.append(current)
+            if len(lines) == limit and used_words < len(words):
+                lines[-1] = lines[-1][: max(0, width - 1)].rstrip() + "…"
+            return lines
+
+        def render_image(title, prompt, sources):
+            prompt_lines = wrap_svg_text(prompt, width=44, limit=4)
+            source_lines = [
+                str(source.get("title") or source.get("url") or "").strip()
+                for source in sources[:2]
+                if str(source.get("title") or source.get("url") or "").strip()
+            ]
+            prompt_markup = "".join(
+                f'<text x="72" y="{240 + (index * 34)}" class="prompt">{html.escape(line)}</text>'
+                for index, line in enumerate(prompt_lines)
+            )
+            source_markup = "".join(
+                f'<text x="72" y="{470 + (index * 24)}" class="source">{html.escape(line)}</text>'
+                for index, line in enumerate(source_lines)
+            )
+            source_heading = (
+                '<text x="72" y="438" class="eyebrow">Grounded by sources</text>' if source_lines else ""
+            )
+            return (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" '
+                f'aria-label="{html.escape(title)}">'
+                "<defs>"
+                '<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">'
+                '<stop offset="0%" stop-color="#f6efe2" />'
+                '<stop offset="100%" stop-color="#d2ebe6" />'
+                "</linearGradient>"
+                '<linearGradient id="card" x1="0%" y1="0%" x2="100%" y2="100%">'
+                '<stop offset="0%" stop-color="#17313b" stop-opacity="0.96" />'
+                '<stop offset="100%" stop-color="#25505b" stop-opacity="0.92" />'
+                "</linearGradient>"
+                "</defs>"
+                '<rect width="1200" height="630" fill="url(#bg)" />'
+                '<circle cx="1020" cy="120" r="180" fill="#90c9bc" fill-opacity="0.35" />'
+                '<circle cx="160" cy="520" r="220" fill="#f0c87c" fill-opacity="0.25" />'
+                '<rect x="48" y="48" width="1104" height="534" rx="36" fill="url(#card)" />'
+                '<style>'
+                ".eyebrow{font:600 18px IBM Plex Sans,Arial,sans-serif;letter-spacing:0.12em;text-transform:uppercase;fill:#90c9bc;}"
+                ".title{font:700 54px IBM Plex Sans,Arial,sans-serif;fill:#f6efe2;}"
+                ".prompt{font:400 28px IBM Plex Sans,Arial,sans-serif;fill:#d9ece7;}"
+                ".source{font:400 18px IBM Plex Sans,Arial,sans-serif;fill:#bdd7d0;}"
+                "</style>"
+                '<text x="72" y="110" class="eyebrow">Generated image artifact</text>'
+                f'<text x="72" y="182" class="title">{html.escape(title)}</text>'
+                f"{prompt_markup}"
+                f"{source_heading}"
+                f"{source_markup}"
+                '<path d="M860 176c74 0 134 60 134 134s-60 134-134 134-134-60-134-134 60-134 134-134Zm0 52c-45 0-82 37-82 82s37 82 82 82 82-37 82-82-37-82-82-82Z" fill="#90c9bc" fill-opacity="0.18"/>'
+                '<path d="M820 330c24-60 72-106 142-136 43 33 72 78 88 136-54-22-101-20-142 8-29 19-58 16-88-8Z" fill="#f0c87c" fill-opacity="0.82"/>'
+                "</svg>\\n"
+            )
+
         def stringify_command(command):
             if isinstance(command, list):
                 return " ".join(str(part) for part in command)
@@ -2279,6 +2468,24 @@ def _container_script() -> str:
             metadata["source_citation_count"] = len(citations)
             artifacts.append(workspace_artifact(target, kind_override="chart"))
             output = f"[sandbox-artifact] Generated grounded chart {metadata['file_path']} with {len(data)} data point(s)."
+        elif action == "generate_image":
+            target = resolve_workspace_path(payload, default_path=f"images/{step_id}.svg", must_exist=False, allow_directory=False)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            title = str(payload.get("title", "")).strip() or "Generated Image"
+            prompt = str(payload.get("prompt") or payload.get("objective") or instruction).strip()
+            sources = artifact_sources(payload)
+            citations = normalize_citations(sources)
+            image_body = render_image(title, prompt, sources)
+            target.write_text(image_body, encoding="utf-8")
+            metadata["file_path"] = relative_workspace_path(target)
+            metadata["bytes_written"] = len(image_body.encode("utf-8"))
+            metadata["artifact_kind"] = "image"
+            metadata["image_title"] = title
+            metadata["image_prompt"] = prompt
+            metadata["image_provider"] = "builtin-svg"
+            metadata["source_citation_count"] = len(citations)
+            artifacts.append(workspace_artifact(target, kind_override="image"))
+            output = f"[sandbox-artifact] Generated grounded image {metadata['file_path']} from prompt and {len(citations)} source(s)."
         elif action in {"fetch_url", "navigate", "inspect", "scroll", "read", "extract"}:
             page_data = None
             target_url = resolve_target_url()

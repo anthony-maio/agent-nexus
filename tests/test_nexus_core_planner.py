@@ -232,6 +232,28 @@ def test_plan_follow_up_steps_extract_for_chart_objective_prefers_generate_chart
     assert "Latency by provider" in steps[0].instruction
 
 
+def test_plan_follow_up_steps_extract_for_image_objective_prefers_generate_image() -> None:
+    steps = plan_follow_up_steps(
+        objective="Research stablecoin settlement and generate a hero image for the findings",
+        completed_step=_step(2, "extract"),
+        result=StepExecutionResult(
+            output_text="grounded evidence gathered",
+            citations=[
+                CitationRecord(
+                    url="https://docs.example.org/settlement",
+                    title="Settlement docs",
+                    snippet="Settlement workflow",
+                )
+            ],
+            metadata={"current_url": "https://docs.example.org/settlement"},
+        ),
+        existing_steps=[_step(0, "search_web"), _step(1, "fetch_url"), _step(2, "extract")],
+    )
+
+    assert [step.action_type for step in steps] == ["generate_image"]
+    assert "images/" in steps[0].instruction
+
+
 @pytest.mark.asyncio
 async def test_rule_adaptive_planner_initial_bootstrap_returns_single_seed_step() -> None:
     planner = RuleAdaptivePlanner()

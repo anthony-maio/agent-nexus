@@ -87,6 +87,15 @@ _CHART_HINTS: tuple[str, ...] = (
     "visualise",
     "dashboard",
 )
+_IMAGE_HINTS: tuple[str, ...] = (
+    "image",
+    "hero image",
+    "illustration",
+    "graphic",
+    "poster",
+    "cover art",
+    "visual",
+)
 _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
@@ -109,6 +118,7 @@ _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
         "export",
         "generate_report",
         "generate_chart",
+        "generate_image",
         "submit",
     }
 )
@@ -438,6 +448,17 @@ def plan_follow_up_steps(
                         instruction=json.dumps(chart_payload),
                     )
                 ]
+        if _wants_image_artifact(objective):
+            if _has_action_after(existing_steps, step_index, "generate_image") or _has_action_after(
+                existing_steps, step_index, "export"
+            ):
+                return []
+            return [
+                StepDefinition(
+                    action_type="generate_image",
+                    instruction=json.dumps(_image_instruction_payload(objective, result)),
+                )
+            ]
         if _wants_report_artifact(objective) and _supports_explicit_report(
             existing_steps, step_index, result
         ):
@@ -789,6 +810,11 @@ def _wants_chart_artifact(objective: str) -> bool:
     return any(hint in lowered for hint in _CHART_HINTS)
 
 
+def _wants_image_artifact(objective: str) -> bool:
+    lowered = objective.lower()
+    return any(hint in lowered for hint in _IMAGE_HINTS)
+
+
 def _extract_url(objective: str) -> str:
     match = _URL_RE.search(objective)
     return match.group(0) if match else ""
@@ -964,6 +990,25 @@ def _chart_instruction_payload(
         "x_key": x_key,
         "y_key": y_key,
         "data": data[:12],
+    }
+    if result.citations:
+        payload["sources"] = [
+            {"url": citation.url, "title": citation.title, "snippet": citation.snippet}
+            for citation in result.citations[:5]
+        ]
+    return payload
+
+
+def _image_instruction_payload(
+    objective: str,
+    result: StepExecutionResult,
+) -> dict[str, Any]:
+    slug = _artifact_slug(objective, fallback="image")
+    payload: dict[str, Any] = {
+        "path": f"images/{slug}.svg",
+        "title": _artifact_title(objective, fallback="Generated Image"),
+        "prompt": objective,
+        "objective": objective,
     }
     if result.citations:
         payload["sources"] = [

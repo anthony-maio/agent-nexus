@@ -136,6 +136,7 @@ class ChatCompletionsAdaptivePlanner:
                     "export",
                     "generate_report",
                     "generate_chart",
+                    "generate_image",
                 ],
                 "max_steps": step_budget,
             },
@@ -154,6 +155,7 @@ class ChatCompletionsAdaptivePlanner:
                 'For execute_code use instruction payload {"command":["cmd","arg"]}. '
                 'For generate_report use instruction payload {"path":"reports/...md","title":"...","sources":[...]}. '
                 'For generate_chart use instruction payload {"path":"charts/...html","chart_type":"bar","title":"...","x_key":"...","y_key":"...","data":[...]}. '
+                'For generate_image use instruction payload {"path":"images/...svg","title":"...","prompt":"...","sources":[...]}. '
                 "When metadata includes page_affordances, use those grounded inputs, buttons, and links instead of generic UI guesses. "
                 "When metadata includes command_failed or a non-zero exit_code, treat that as diagnostic evidence and inspect or edit the referenced code path instead of repeating the same command blindly."
             ),

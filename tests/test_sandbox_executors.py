@@ -472,6 +472,46 @@ def test_local_executor_generate_chart_creates_html_artifact(tmp_path: Path) -> 
     assert "docs.example.org/metrics" in chart_body
 
 
+def test_local_executor_generate_image_creates_svg_artifact(tmp_path: Path) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+
+    result = executor.execute(
+        StepRequest(
+            run_id="run-image",
+            step_id="step-image",
+            action_type="generate_image",
+            instruction=json.dumps(
+                {
+                    "path": "images/payment-flow.svg",
+                    "title": "Payment Flow Hero",
+                    "prompt": "Create a modern fintech hero image showing an automated payment flow.",
+                    "sources": [
+                        {
+                            "url": "https://docs.example.org/payments",
+                            "title": "Payments docs",
+                            "snippet": "Payment lifecycle",
+                        }
+                    ],
+                }
+            ),
+        ),
+        sandbox_root,
+    )
+
+    assert result.metadata["file_path"] == "images/payment-flow.svg"
+    assert result.metadata["artifact_kind"] == "image"
+    assert result.metadata["image_prompt"] == "Create a modern fintech hero image showing an automated payment flow."
+    assert result.metadata["image_provider"] == "builtin-svg"
+    artifact_path = Path(result.artifacts[0]["sandbox_path"])
+    assert artifact_path.exists()
+    assert result.artifacts[0]["kind"] == "image"
+    image_body = artifact_path.read_text(encoding="utf-8")
+    assert "<svg" in image_body
+    assert "Payment Flow Hero" in image_body
+    assert "automated payment flow" in image_body
+
+
 def test_fetch_url_content_extracts_page_affordances(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1692,6 +1732,37 @@ def test_container_script_generate_chart_creates_html_artifact(tmp_path: Path) -
     assert "Container latency" in body
     assert "provider" in body
     assert "latency_ms" in body
+
+
+def test_container_script_generate_image_creates_svg_artifact(tmp_path: Path) -> None:
+    payload, _session = _run_container_script_step(
+        tmp_path,
+        action_type="generate_image",
+        instruction=json.dumps(
+            {
+                "path": "images/settlement.svg",
+                "title": "Settlement Poster",
+                "prompt": "Generate a visual poster for same-day settlement automation.",
+                "sources": [
+                    {
+                        "url": "https://docs.example.org/settlement",
+                        "title": "Settlement guide",
+                        "snippet": "Same-day settlement workflow",
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert payload["metadata"]["file_path"] == "images/settlement.svg"
+    assert payload["metadata"]["artifact_kind"] == "image"
+    assert payload["metadata"]["image_provider"] == "builtin-svg"
+    assert payload["artifacts"][0]["kind"] == "image"
+    artifact_path = Path(payload["artifacts"][0]["path"])
+    assert artifact_path.exists()
+    body = artifact_path.read_text(encoding="utf-8")
+    assert "<svg" in body
+    assert "Settlement Poster" in body
 
 
 def test_container_script_inspect_returns_page_affordances(tmp_path: Path) -> None:
