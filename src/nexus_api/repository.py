@@ -474,6 +474,16 @@ class SqlRunRepository:
                 if isinstance(metadata, dict)
                 else ""
             )
+            skill_source = (
+                str(metadata.get("skill_source", "")).strip()
+                if isinstance(metadata, dict)
+                else ""
+            )
+            skill_names = (
+                [str(name) for name in metadata.get("skill_names", []) if str(name).strip()]
+                if isinstance(metadata, dict) and isinstance(metadata.get("skill_names"), list)
+                else []
+            )
             events.append(
                 {
                     "type": "planner.decision",
@@ -484,6 +494,8 @@ class SqlRunRepository:
                     "planner_source": planner_source,
                     "planner_phase": planner_phase,
                     "planner_fallback_reason": planner_fallback_reason,
+                    "skill_source": skill_source,
+                    "skill_names": skill_names,
                 }
             )
             events.append(
@@ -498,6 +510,8 @@ class SqlRunRepository:
                     "planner_source": planner_source,
                     "planner_phase": planner_phase,
                     "planner_fallback_reason": planner_fallback_reason,
+                    "skill_source": skill_source,
+                    "skill_names": skill_names,
                 }
             )
         for approval in self.list_approvals(run_id):

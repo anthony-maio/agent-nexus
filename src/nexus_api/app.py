@@ -113,6 +113,14 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/skills")
+    def list_skills(
+        user: dict[str, Any] = Depends(current_user),
+    ) -> dict[str, Any]:
+        _ = user
+        items = [manifest.to_dict() for manifest in ctx.skill_registry.list_manifests()]
+        return {"items": items, "total": len(items)}
+
     @app.get("/bootstrap/status", response_model=BootstrapStatusResponse)
     def get_bootstrap_status() -> BootstrapStatusResponse:
         return bootstrap_status(ctx.settings)
@@ -176,6 +184,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
+            capability_resolver=ctx.capability_resolver,
         )
         run = await engine.create_run(
             objective=request.objective,
@@ -273,6 +282,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
+            capability_resolver=ctx.capability_resolver,
         )
         run = await engine.decide_approval(
             run_id=run_id,
@@ -299,6 +309,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
+            capability_resolver=ctx.capability_resolver,
         )
         return await engine.resume_run(run_id=run_id)
 
@@ -318,6 +329,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
+            capability_resolver=ctx.capability_resolver,
         )
         return await engine.retry_run(run_id=run_id)
 
@@ -344,6 +356,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             canonical_workspace=ctx.settings.canonical_workspace_path,
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
+            capability_resolver=ctx.capability_resolver,
         )
         return await engine.promote_artifact(
             run_id=run_id,

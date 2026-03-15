@@ -28,6 +28,7 @@ class ChatCompletionsAdaptivePlanner:
         timeout_sec: float = 12.0,
         max_steps: int = 4,
         provider_name: str = "chat_completions",
+        route_label: str = "",
     ) -> None:
         self.api_key = api_key.strip()
         self.model = model.strip()
@@ -35,6 +36,7 @@ class ChatCompletionsAdaptivePlanner:
         self.timeout_sec = timeout_sec
         self.max_steps = max(1, min(max_steps, 8))
         self.provider_name = provider_name.strip() or "chat_completions"
+        self.route_label = route_label.strip() or f"{self.provider_name}:{self.model}".strip(":")
 
     async def plan_next_steps(
         self,
@@ -43,6 +45,7 @@ class ChatCompletionsAdaptivePlanner:
         existing_steps: list[dict[str, Any]],
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         if not self.model:
             return []
@@ -67,6 +70,8 @@ class ChatCompletionsAdaptivePlanner:
                     "max_steps": step_budget,
                 },
             }
+            if skill_context:
+                payload["resolved_skills"] = skill_context
             parsed = await self._request_plan(
                 prompt=(
                     "Return strict JSON with shape "
@@ -74,13 +79,17 @@ class ChatCompletionsAdaptivePlanner:
                     "Plan exactly one grounded bootstrap tool call. "
                     "Use only low-risk starting actions that gather context or open the correct page/file. "
                     "Prefer workspace read tools when the objective references local files. "
+                    "When resolved_skills are present, follow their guidance before improvising a toolchain. "
                     'For list_files/read_file use instruction payload {"path":"..."} as a JSON string or JSON object. '
                     "No prose."
                 ),
                 payload=payload,
             )
             return annotate_planner_steps(
-                self._step_definitions_from_payload(parsed, limit=step_budget),
+                _annotate_model_route(
+                    self._step_definitions_from_payload(parsed, limit=step_budget),
+                    self.route_label,
+                ),
                 planner_source="model",
                 planner_phase="initial",
             )
@@ -129,11 +138,14 @@ class ChatCompletionsAdaptivePlanner:
                 "max_steps": step_budget,
             },
         }
+        if skill_context:
+            payload["resolved_skills"] = skill_context
         parsed = await self._request_plan(
             prompt=(
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
                 "No prose. Return exactly one next step. Prefer workspace and code tools when result metadata references files. "
+                "When resolved_skills are present, use that guidance before inventing a new procedure. "
                 'For list_files/read_file use instruction payload {"path":"..."}. '
                 'For write_file use instruction payload {"path":"...","content":"..."}. '
                 'For edit_file use instruction payload {"path":"...","old":"...","new":"..."} or {"path":"...","content":"..."}. '
@@ -144,7 +156,10 @@ class ChatCompletionsAdaptivePlanner:
             payload=payload,
         )
         return annotate_planner_steps(
-            self._step_definitions_from_payload(parsed, limit=step_budget),
+            _annotate_model_route(
+                self._step_definitions_from_payload(parsed, limit=step_budget),
+                self.route_label,
+            ),
             planner_source="model",
             planner_phase="follow_up",
         )
@@ -153,11 +168,13 @@ class ChatCompletionsAdaptivePlanner:
         self,
         objective: str,
         mode: RunMode,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
+            skill_context=skill_context,
         )
 
     async def propose_follow_up(
@@ -166,6 +183,7 @@ class ChatCompletionsAdaptivePlanner:
         completed_step: dict[str, Any],
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -173,6 +191,7 @@ class ChatCompletionsAdaptivePlanner:
             existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
+            skill_context=skill_context,
         )
 
     async def _request_plan(
@@ -244,6 +263,7 @@ class OpenRouterAdaptivePlanner(ChatCompletionsAdaptivePlanner):
         base_url: str = "https://openrouter.ai/api/v1",
         timeout_sec: float = 12.0,
         max_steps: int = 4,
+        route_label: str = "",
     ) -> None:
         super().__init__(
             api_key=api_key,
@@ -252,6 +272,7 @@ class OpenRouterAdaptivePlanner(ChatCompletionsAdaptivePlanner):
             timeout_sec=timeout_sec,
             max_steps=max_steps,
             provider_name="openrouter",
+            route_label=route_label,
         )
 
 
@@ -268,6 +289,7 @@ class RuleFallbackAdaptivePlanner:
         existing_steps: list[dict[str, Any]],
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await request_next_steps(
             self.planner,
@@ -276,17 +298,20 @@ class RuleFallbackAdaptivePlanner:
             existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
+            skill_context=skill_context,
         )
 
     async def plan_initial_steps(
         self,
         objective: str,
         mode: RunMode,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
+            skill_context=skill_context,
         )
 
     async def propose_follow_up(
@@ -295,6 +320,7 @@ class RuleFallbackAdaptivePlanner:
         completed_step: dict[str, Any],
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -302,6 +328,7 @@ class RuleFallbackAdaptivePlanner:
             existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
+            skill_context=skill_context,
         )
 
 
@@ -323,6 +350,23 @@ def _parse_model_json(content: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _annotate_model_route(steps: list[StepDefinition], route_label: str) -> list[StepDefinition]:
+    if not route_label:
+        return steps
+    annotated: list[StepDefinition] = []
+    for step in steps:
+        metadata = dict(step.metadata)
+        metadata["model_route"] = route_label
+        annotated.append(
+            StepDefinition(
+                action_type=step.action_type,
+                instruction=step.instruction,
+                metadata=metadata,
+            )
+        )
+    return annotated
 
 
 def _stringify_step_instruction(value: Any) -> str:

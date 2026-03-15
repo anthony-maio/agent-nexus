@@ -16,10 +16,12 @@ from .models import (
     StepStatus,
 )
 from .policy import is_high_risk_action, risk_tier_for_action
+from .skills import CapabilityResolver, SkillManifest, SkillRegistry
 
 __all__ = [
     "ApprovalDecision",
     "ArtifactRecord",
+    "CapabilityResolver",
     "CitationRecord",
     "ExecutionAdapter",
     "InteractionAdapter",
@@ -32,6 +34,8 @@ __all__ = [
     "StepDefinition",
     "StepExecutionResult",
     "StepStatus",
+    "SkillManifest",
+    "SkillRegistry",
     "is_high_risk_action",
     "risk_tier_for_action",
 ]

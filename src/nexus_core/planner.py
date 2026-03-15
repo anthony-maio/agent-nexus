@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -449,6 +450,7 @@ class AdaptivePlanner(Protocol):
         existing_steps: list[dict[str, Any]],
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         """Return the next steps for either bootstrap or follow-up planning."""
 
@@ -456,6 +458,7 @@ class AdaptivePlanner(Protocol):
         self,
         objective: str,
         mode: RunMode,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         """Return the initial bootstrap steps for a run."""
 
@@ -465,6 +468,7 @@ class AdaptivePlanner(Protocol):
         completed_step: dict[str, Any],
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         """Return proposed follow-up steps for current run context."""
 
@@ -477,25 +481,49 @@ async def request_next_steps(
     existing_steps: list[dict[str, Any]],
     completed_step: dict[str, Any] | None = None,
     result: StepExecutionResult | None = None,
+    skill_context: list[dict[str, str]] | None = None,
 ) -> list[StepDefinition]:
     """Dispatch to the planner's shared next-step contract when available."""
 
     if hasattr(planner, "plan_next_steps"):
-        return await planner.plan_next_steps(
+        return await _call_planner_method(
+            planner.plan_next_steps,
             objective=objective,
             mode=mode,
             existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
+            skill_context=skill_context,
         )
     if completed_step is None or result is None:
-        return await planner.plan_initial_steps(objective=objective, mode=mode)
-    return await planner.propose_follow_up(
+        return await _call_planner_method(
+            planner.plan_initial_steps,
+            objective=objective,
+            mode=mode,
+            skill_context=skill_context,
+        )
+    return await _call_planner_method(
+        planner.propose_follow_up,
         objective=objective,
         completed_step=completed_step,
         result=result,
         existing_steps=existing_steps,
+        skill_context=skill_context,
     )
+
+
+async def _call_planner_method(method: Any, **kwargs: Any) -> list[StepDefinition]:
+    signature = inspect.signature(method)
+    accepts_var_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    if accepts_var_kwargs:
+        return await method(**kwargs)
+    filtered_kwargs = {
+        key: value for key, value in kwargs.items() if key in signature.parameters
+    }
+    return await method(**filtered_kwargs)
 
 
 class RuleAdaptivePlanner:
@@ -506,8 +534,9 @@ class RuleAdaptivePlanner:
         existing_steps: list[dict[str, Any]],
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
-        _ = mode
+        _ = mode, skill_context
         if completed_step is None or result is None:
             return annotate_planner_steps(
                 plan_steps_for_objective(objective),
@@ -529,11 +558,13 @@ class RuleAdaptivePlanner:
         self,
         objective: str,
         mode: RunMode,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
+            skill_context=skill_context,
         )
 
     async def propose_follow_up(
@@ -542,6 +573,7 @@ class RuleAdaptivePlanner:
         completed_step: dict[str, Any],
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -549,6 +581,7 @@ class RuleAdaptivePlanner:
             existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
+            skill_context=skill_context,
         )
 
 
@@ -563,6 +596,7 @@ class CompositeAdaptivePlanner:
         existing_steps: list[dict[str, Any]],
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         fallback_reason = ""
         for planner in self.planners:
@@ -574,6 +608,7 @@ class CompositeAdaptivePlanner:
                     existing_steps=existing_steps,
                     completed_step=completed_step,
                     result=result,
+                    skill_context=skill_context,
                 )
             except Exception as exc:
                 log.warning("Adaptive planner failed (%s): %s", type(planner).__name__, exc)
@@ -593,11 +628,13 @@ class CompositeAdaptivePlanner:
         self,
         objective: str,
         mode: RunMode,
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
+            skill_context=skill_context,
         )
 
     async def propose_follow_up(
@@ -606,6 +643,7 @@ class CompositeAdaptivePlanner:
         completed_step: dict[str, Any],
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
+        skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -613,6 +651,7 @@ class CompositeAdaptivePlanner:
             existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
+            skill_context=skill_context,
         )
 
 

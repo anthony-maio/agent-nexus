@@ -271,6 +271,32 @@ class MultiStepInitialPlanner:
         )
 
 
+class SkillAwarePlanner:
+    def __init__(self) -> None:
+        self.calls: list[list[dict[str, str]]] = []
+
+    async def plan_next_steps(
+        self,
+        objective: str,
+        mode: object,
+        existing_steps: list[dict[str, object]],
+        completed_step: dict[str, object] | None = None,
+        result: StepExecutionResult | None = None,
+        skill_context: list[dict[str, str]] | None = None,
+    ) -> list[StepDefinition]:
+        _ = objective, mode, existing_steps, completed_step, result
+        self.calls.append(skill_context or [])
+        if completed_step is not None or result is not None:
+            return []
+        return [
+            StepDefinition(
+                action_type="search_web",
+                instruction="Use the resolved skill guidance before acting.",
+                metadata={"planner_source": "model", "planner_phase": "initial"},
+            )
+        ]
+
+
 class UnifiedNextStepPlanner:
     def __init__(self) -> None:
         self.rule = RuleAdaptivePlanner()
@@ -454,16 +480,44 @@ def _build_test_context(settings: ApiSettings):
         api_service.run_migrations = original_run_migrations
 
 
-def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = None) -> TestClient:
-    settings = ApiSettings(
-        APP_DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}",
-        APP_CANONICAL_WORKSPACE=str(tmp_path / "workspace"),
-        APP_SANDBOX_ARTIFACT_ROOT=str(tmp_path / "sandbox"),
-        APP_ADMIN_USERNAME="admin",
-        APP_ADMIN_PASSWORD="secret",
-        APP_SESSION_TTL_HOURS=24,
-        APP_ENABLE_MODEL_REPLANNER=False,
+def _write_skill(root: Path, folder: str, *, name: str, description: str) -> Path:
+    skill_dir = root / folder
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "\n".join(
+            [
+                "---",
+                f"name: {name}",
+                f'description: "{description}"',
+                "---",
+                "",
+                f"# {name}",
+                "",
+                description,
+            ]
+        ),
+        encoding="utf-8",
     )
+    return skill_dir / "SKILL.md"
+
+
+def _client(
+    tmp_path: Path,
+    execution_adapter: FakeExecutionAdapter | None = None,
+    settings_overrides: dict[str, object] | None = None,
+) -> TestClient:
+    settings_payload: dict[str, object] = {
+        "APP_DATABASE_URL": f"sqlite:///{tmp_path / 'app.db'}",
+        "APP_CANONICAL_WORKSPACE": str(tmp_path / "workspace"),
+        "APP_SANDBOX_ARTIFACT_ROOT": str(tmp_path / "sandbox"),
+        "APP_ADMIN_USERNAME": "admin",
+        "APP_ADMIN_PASSWORD": "secret",
+        "APP_SESSION_TTL_HOURS": 24,
+        "APP_ENABLE_MODEL_REPLANNER": False,
+    }
+    if settings_overrides:
+        settings_payload.update(settings_overrides)
+    settings = ApiSettings(**settings_payload)
     ctx = _build_test_context(settings)
     ctx.execution_adapter = execution_adapter or FakeExecutionAdapter(tmp_path)
     return TestClient(create_app(ctx))
@@ -473,16 +527,20 @@ def _client_with_planner(
     tmp_path: Path,
     adaptive_planner: object,
     execution_adapter: FakeExecutionAdapter | None = None,
+    settings_overrides: dict[str, object] | None = None,
 ) -> TestClient:
-    settings = ApiSettings(
-        APP_DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}",
-        APP_CANONICAL_WORKSPACE=str(tmp_path / "workspace"),
-        APP_SANDBOX_ARTIFACT_ROOT=str(tmp_path / "sandbox"),
-        APP_ADMIN_USERNAME="admin",
-        APP_ADMIN_PASSWORD="secret",
-        APP_SESSION_TTL_HOURS=24,
-        APP_ENABLE_MODEL_REPLANNER=False,
-    )
+    settings_payload: dict[str, object] = {
+        "APP_DATABASE_URL": f"sqlite:///{tmp_path / 'app.db'}",
+        "APP_CANONICAL_WORKSPACE": str(tmp_path / "workspace"),
+        "APP_SANDBOX_ARTIFACT_ROOT": str(tmp_path / "sandbox"),
+        "APP_ADMIN_USERNAME": "admin",
+        "APP_ADMIN_PASSWORD": "secret",
+        "APP_SESSION_TTL_HOURS": 24,
+        "APP_ENABLE_MODEL_REPLANNER": False,
+    }
+    if settings_overrides:
+        settings_payload.update(settings_overrides)
+    settings = ApiSettings(**settings_payload)
     ctx = _build_test_context(settings)
     ctx.execution_adapter = execution_adapter or FakeExecutionAdapter(tmp_path)
     ctx.adaptive_planner = adaptive_planner
@@ -520,6 +578,60 @@ def test_client_helpers_reuse_migrated_template_database(
     second_client.close()
 
     assert len(migration_calls) == 1
+
+
+def test_list_skills_returns_discovered_runtime_skill_manifests(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    client = _client(
+        tmp_path,
+        settings_overrides={"APP_SKILL_PATHS": str(skill_root)},
+    )
+    headers = _auth_header(client)
+
+    response = client.get("/skills", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["name"] == "chart-maker"
+    assert payload["items"][0]["description"] == "Generate charts from tabular data."
+
+
+def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    planner = SkillAwarePlanner()
+    client = _client_with_planner(
+        tmp_path,
+        adaptive_planner=planner,
+        settings_overrides={"APP_SKILL_PATHS": str(skill_root)},
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Generate a chart from CSV sales data and summarize it",
+            "mode": "supervised",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    assert planner.calls[0][0]["name"] == "chart-maker"
+    assert run["steps"][0]["metadata"]["skill_source"] == "capability_resolver"
+    assert run["steps"][0]["metadata"]["skill_names"] == ["chart-maker"]
 
 
 def test_run_lifecycle_with_approval_and_promotion(tmp_path: Path) -> None:

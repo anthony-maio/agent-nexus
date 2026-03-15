@@ -7,6 +7,8 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from nexus_core.skills import default_skill_roots_from_env
+
 
 class ApiSettings(BaseSettings):
     """Settings for app-first backend services."""
@@ -37,6 +39,10 @@ class ApiSettings(BaseSettings):
     APP_MODEL_REPLANNER_API_KEY: str = Field(default="")
     APP_MODEL_REPLANNER_BASE_URL: str = Field(default="")
     APP_MODEL_REPLANNER_MODEL: str = Field(default="")
+    APP_MODEL_ROUTER_CONFIG: str = Field(default="")
+    APP_ENABLE_SKILL_RESOLVER: bool = Field(default=True)
+    APP_SKILL_PATHS: str = Field(default="")
+    APP_SKILL_MAX_MATCHES: int = Field(default=3)
     OPENROUTER_API_KEY: str = Field(default="")
     OPENROUTER_BASE_URL: str = Field(default="https://openrouter.ai/api/v1")
     OPENROUTER_MODEL: str = Field(default="openai/gpt-4.1-mini")
@@ -57,3 +63,7 @@ class ApiSettings(BaseSettings):
     @property
     def config_path(self) -> Path:
         return Path(self.APP_CONFIG_PATH).resolve()
+
+    @property
+    def skill_paths(self) -> list[Path]:
+        return default_skill_roots_from_env(self.APP_SKILL_PATHS)

@@ -85,6 +85,21 @@ function formatPlannerFallbackSentence(reason) {
   return `Fallback: ${reason.replaceAll("_", "-")}.`;
 }
 
+function formatSkillSentence(source, skillNames) {
+  const names = Array.isArray(skillNames)
+    ? skillNames
+        .map((name) => (typeof name === "string" ? name.trim() : ""))
+        .filter(Boolean)
+    : [];
+  if (!names.length) {
+    return "";
+  }
+  if (typeof source === "string" && source) {
+    return `Using ${names.join(", ")} via ${source.replaceAll("_", "-")}.`;
+  }
+  return `Using ${names.join(", ")}.`;
+}
+
 function buildTranscriptDetails(step) {
   const metadata = step?.metadata && typeof step.metadata === "object" ? step.metadata : {};
   const payload = parseInstructionPayload(step?.instruction);
@@ -131,6 +146,9 @@ function buildTranscriptDetails(step) {
   const planner = formatPlannerBadge(metadata.planner_source, metadata.planner_phase);
   if (planner) {
     details.push({ label: "Planner", value: planner });
+  }
+  if (Array.isArray(metadata.skill_names) && metadata.skill_names.length) {
+    details.push({ label: "Skills", value: metadata.skill_names.join(", ") });
   }
 
   return details;
@@ -184,12 +202,14 @@ function summarizeTimelineEvent(event) {
   ]
     .filter(Boolean)
     .join(" ");
+  const skillDetail = formatSkillSentence(event?.skill_source, event?.skill_names);
   if (type === "planner.decision") {
     return {
       label: "Planner decision",
       tone: "info",
       detail: instruction || "Planner selected the next step.",
-      plannerDetail
+      plannerDetail,
+      skillDetail
     };
   }
   if (type === "delegate.started") {
@@ -200,7 +220,8 @@ function summarizeTimelineEvent(event) {
       label: "Delegation started",
       tone: "info",
       detail: `Delegated ${role} started ${objective}.`,
-      plannerDetail
+      plannerDetail,
+      skillDetail
     };
   }
   if (type === "delegate.completed") {
@@ -209,7 +230,8 @@ function summarizeTimelineEvent(event) {
       label: "Delegation completed",
       tone: "success",
       detail: summary || "Delegated run completed.",
-      plannerDetail
+      plannerDetail,
+      skillDetail
     };
   }
   if (type === "delegate.failed") {
@@ -218,7 +240,8 @@ function summarizeTimelineEvent(event) {
       label: "Delegation failed",
       tone: "danger",
       detail: summary || "Delegated run failed.",
-      plannerDetail
+      plannerDetail,
+      skillDetail
     };
   }
   if (type === "approval.recorded") {
@@ -228,7 +251,8 @@ function summarizeTimelineEvent(event) {
       label: `Approval ${decision}`,
       tone: decision === "reject" ? "danger" : "success",
       detail: reason || "Approval decision recorded.",
-      plannerDetail
+      plannerDetail,
+      skillDetail
     };
   }
   if (type === "artifact.promoted") {
@@ -237,7 +261,8 @@ function summarizeTimelineEvent(event) {
       label: "Artifact promoted",
       tone: "success",
       detail: target || "Artifact moved to a promoted destination.",
-      plannerDetail
+      plannerDetail,
+      skillDetail
     };
   }
   if (type.startsWith("step.")) {
@@ -262,14 +287,16 @@ function summarizeTimelineEvent(event) {
       label: labels[status] || type,
       tone: tones[status] || "muted",
       detail: instruction || "Step updated.",
-      plannerDetail
+      plannerDetail,
+      skillDetail
     };
   }
   return {
     label: type || "Event",
     tone: "muted",
     detail: instruction || "Runtime event recorded.",
-    plannerDetail
+    plannerDetail,
+    skillDetail
   };
 }
 
@@ -285,6 +312,7 @@ function TranscriptEvent({ event }) {
       </div>
       <p>{summary.detail}</p>
       {summary.plannerDetail ? <p className="transcript-event-planner">{summary.plannerDetail}</p> : null}
+      {summary.skillDetail ? <p className="transcript-event-planner">{summary.skillDetail}</p> : null}
       {event?.action_type ? (
         <p className="transcript-event-action">{`Tool ${event.action_type}`}</p>
       ) : null}
@@ -1184,6 +1212,7 @@ function App() {
                     </div>
                     <p className="timeline-detail">{summary.detail}</p>
                     {summary.plannerDetail ? <p className="timeline-detail">{summary.plannerDetail}</p> : null}
+                    {summary.skillDetail ? <p className="timeline-detail">{summary.skillDetail}</p> : null}
                   </li>
                 );
               })}

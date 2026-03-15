@@ -42,6 +42,7 @@ from nexus_core.policy import (
     delegated_workspace_path_allowed,
     is_high_risk_action,
 )
+from nexus_core.skills import CapabilityResolver, SkillManifest, serialize_skill_context
 
 log = logging.getLogger(__name__)
 
@@ -125,12 +126,14 @@ class RunEngine:
         canonical_workspace: Path,
         sandbox_artifacts_root: Path | None = None,
         adaptive_planner: AdaptivePlanner | None = None,
+        capability_resolver: CapabilityResolver | None = None,
     ) -> None:
         self.repo = repository
         self.execution = execution
         self.interaction = interaction
         self.events = events
         self.adaptive_planner = adaptive_planner or RuleAdaptivePlanner()
+        self.capability_resolver = capability_resolver
         self.canonical_workspace = canonical_workspace
         self.sandbox_artifacts_root = (
             sandbox_artifacts_root.resolve() if sandbox_artifacts_root else None
@@ -171,6 +174,8 @@ class RunEngine:
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
     ) -> list[StepDefinition]:
+        resolved_skills = self._resolved_skills_for_objective(objective)
+        skill_context = serialize_skill_context(resolved_skills)
         proposed = await request_next_steps(
             self.adaptive_planner,
             objective=objective,
@@ -178,28 +183,32 @@ class RunEngine:
             existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
+            skill_context=skill_context,
         )
         if completed_step is None or result is None:
             planned = apply_initial_plan_policy(proposed, mode=mode)
             if planned:
-                return planned
+                return self._annotate_skill_context(planned, resolved_skills)
             fallback_reason = "policy_rejected" if proposed else "no_steps"
-            return annotate_planner_fallback(
-                annotate_planner_steps(
-                    plan_steps_for_objective(objective),
-                    planner_source="rule",
-                    planner_phase="initial",
+            return self._annotate_skill_context(
+                annotate_planner_fallback(
+                    annotate_planner_steps(
+                        plan_steps_for_objective(objective),
+                        planner_source="rule",
+                        planner_phase="initial",
+                    ),
+                    fallback_reason=fallback_reason,
                 ),
-                fallback_reason=fallback_reason,
+                resolved_skills,
             )
         planned = apply_follow_up_policy(
             proposed,
             mode=mode,
         )
         if planned:
-            return planned
+            return self._annotate_skill_context(planned, resolved_skills)
         fallback_reason = "policy_rejected" if proposed else "no_steps"
-        return apply_follow_up_policy(
+        fallback_steps = apply_follow_up_policy(
             annotate_planner_fallback(
                 annotate_planner_steps(
                     plan_follow_up_steps(
@@ -215,6 +224,7 @@ class RunEngine:
             ),
             mode=mode,
         )
+        return self._annotate_skill_context(fallback_steps, resolved_skills)
 
     async def decide_approval(
         self,
@@ -681,8 +691,50 @@ class RunEngine:
                 payload["planner_phase"] = planner_phase
             if planner_fallback_reason:
                 payload["planner_fallback_reason"] = planner_fallback_reason
+            skill_source = str(metadata.get("skill_source", "")).strip()
+            skill_names = metadata.get("skill_names")
+            if skill_source:
+                payload["skill_source"] = skill_source
+            if isinstance(skill_names, list) and skill_names:
+                payload["skill_names"] = [str(name) for name in skill_names]
         payload.update(extra)
         return payload
+
+    def _resolved_skills_for_objective(self, objective: str) -> list[SkillManifest]:
+        if self.capability_resolver is None:
+            return []
+        return self.capability_resolver.resolve(objective)
+
+    @staticmethod
+    def _annotate_skill_context(
+        steps: list[StepDefinition],
+        resolved_skills: list[SkillManifest],
+    ) -> list[StepDefinition]:
+        if not resolved_skills:
+            return steps
+        skill_names = [skill.name for skill in resolved_skills]
+        resolved_payload = [
+            {
+                "name": skill.name,
+                "description": skill.description,
+                "path": skill.path,
+            }
+            for skill in resolved_skills
+        ]
+        annotated: list[StepDefinition] = []
+        for step in steps:
+            metadata = dict(step.metadata)
+            metadata["skill_source"] = "capability_resolver"
+            metadata["skill_names"] = skill_names
+            metadata["resolved_skills"] = resolved_payload
+            annotated.append(
+                StepDefinition(
+                    action_type=step.action_type,
+                    instruction=step.instruction,
+                    metadata=metadata,
+                )
+            )
+        return annotated
 
     @staticmethod
     def _parse_delegate_payload(instruction: str) -> DelegationStepPayload:

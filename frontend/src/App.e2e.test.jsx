@@ -90,7 +90,9 @@ function createRunState() {
             file_path: "notes/brief.txt",
             bytes_read: 11,
             planner_source: "rule",
-            planner_phase: "initial"
+            planner_phase: "initial",
+            skill_source: "capability_resolver",
+            skill_names: ["chart-maker"]
           }
         },
         {
@@ -252,7 +254,9 @@ function createRunState() {
           action_type: "write_file",
           instruction: "{\"path\":\"reports/summary.md\",\"content\":\"delegated summary\"}",
           planner_source: "model",
-          planner_phase: "follow_up"
+          planner_phase: "follow_up",
+          skill_source: "capability_resolver",
+          skill_names: ["report-writer"]
         },
         {
           type: "delegate.started",
@@ -268,7 +272,9 @@ function createRunState() {
           action_type: "write_file",
           instruction: "{\"path\":\"reports/summary.md\",\"content\":\"delegated summary\"}",
           planner_source: "model",
-          planner_phase: "follow_up"
+          planner_phase: "follow_up",
+          skill_source: "capability_resolver",
+          skill_names: ["report-writer"]
         }
       ]
     },
@@ -513,6 +519,7 @@ describe("App run inbox e2e", () => {
     expect(screen.getByText("reports/generated.txt")).toBeInTheDocument();
     expect(screen.getByText("updated")).toBeInTheDocument();
     expect(screen.getByText("rule initial")).toBeInTheDocument();
+    expect(screen.getByText("chart-maker")).toBeInTheDocument();
     expect(screen.getByText("button:has-text(\"Continue\")")).toBeInTheDocument();
     expect(screen.getByText("Delegated researcher")).toBeInTheDocument();
     expect(screen.getByText("Collected 3 relevant docs")).toBeInTheDocument();
@@ -561,6 +568,9 @@ describe("App run inbox e2e", () => {
     expect(transcriptScope.getAllByText("Runtime event").length).toBeGreaterThan(0);
     expect(transcriptScope.getByText("Approval needed")).toBeInTheDocument();
     expect(transcriptScope.getAllByText("Planned by model (follow-up).").length).toBeGreaterThan(0);
+    expect(
+      transcriptScope.getAllByText("Using report-writer via capability-resolver.").length
+    ).toBeGreaterThan(0);
     fireEvent.click(transcriptScope.getByRole("button", { name: "Approve" }));
 
     await waitFor(() => {
@@ -610,6 +620,7 @@ describe("App run inbox e2e", () => {
     expect(timeline.getByText("Delegation started")).toBeInTheDocument();
     expect(timeline.getByText("Awaiting approval")).toBeInTheDocument();
     expect(timeline.getAllByText("Planned by model (follow-up).").length).toBeGreaterThan(0);
+    expect(timeline.getAllByText("Using report-writer via capability-resolver.").length).toBeGreaterThan(0);
   });
 
   it("reconnects stream after websocket close", async () => {

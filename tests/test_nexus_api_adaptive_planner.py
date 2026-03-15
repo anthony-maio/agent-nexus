@@ -11,6 +11,7 @@ from nexus_api.adaptive_planner import ChatCompletionsAdaptivePlanner, OpenRoute
 from nexus_api.config import ApiSettings
 from nexus_api.service import build_model_adaptive_planner
 from nexus_core.models import CitationRecord, RunMode, StepExecutionResult
+from nexus_core.planner import CompositeAdaptivePlanner
 
 
 class _FakeResponse:
@@ -111,6 +112,13 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
             },
         ),
         existing_steps=[{"action_type": "search_web", "status": "completed"}],
+        skill_context=[
+            {
+                "name": "browser-agent",
+                "description": "Navigate websites and fill forms.",
+                "path": "/skills/browser-agent/SKILL.md",
+            }
+        ],
     )
 
     assert steps
@@ -125,6 +133,8 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     assert "For edit_file use instruction payload" in request_body["messages"][0]["content"]
     assert "For execute_code use instruction payload" in request_body["messages"][0]["content"]
     completed_payload = payload["completed_step"]
+    assert payload["resolved_skills"][0]["name"] == "browser-agent"
+    assert payload["resolved_skills"][0]["path"] == "/skills/browser-agent/SKILL.md"
     assert completed_payload["citations"][0]["url"] == "https://docs.example.org/start"
     assert completed_payload["metadata"]["current_url"] == "https://docs.example.org/start"
     assert completed_payload["metadata"]["command_failed"] is True
@@ -539,6 +549,7 @@ async def test_chat_completions_planner_supports_local_endpoint_without_auth(
     assert "Authorization" not in captured["headers"]
     payload = jsonlib.loads(captured["request_body"]["messages"][1]["content"])
     assert payload["constraints"]["max_steps"] == 1
+    assert steps[0].metadata["model_route"] == "local:local-qwen"
 
 
 def test_build_model_adaptive_planner_supports_openai_compatible_local_settings() -> None:
@@ -572,3 +583,41 @@ def test_build_model_adaptive_planner_preserves_openrouter_defaults() -> None:
     assert isinstance(planner, OpenRouterAdaptivePlanner)
     assert planner.base_url == "https://openrouter.ai/api/v1"
     assert planner.model == "openai/gpt-4.1-mini"
+
+
+def test_build_model_adaptive_planner_supports_routed_model_profiles() -> None:
+    settings = ApiSettings(
+        APP_DATABASE_URL="sqlite:///./data/app/test.db",
+        APP_MODEL_ROUTER_CONFIG=jsonlib.dumps(
+            {
+                "profiles": [
+                    {
+                        "name": "planning-openrouter",
+                        "role": "planning",
+                        "provider": "openrouter",
+                        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+                        "api_key": "router-key",
+                    },
+                    {
+                        "name": "planning-local",
+                        "role": "planning",
+                        "provider": "openai_compatible",
+                        "model": "local-qwen",
+                        "base_url": "http://localhost:11434/v1",
+                    },
+                ]
+            }
+        ),
+        OPENROUTER_API_KEY="fallback-key",
+    )
+
+    planner = build_model_adaptive_planner(settings)
+
+    assert isinstance(planner, CompositeAdaptivePlanner)
+    assert len(planner.planners) == 2
+    assert isinstance(planner.planners[0], OpenRouterAdaptivePlanner)
+    assert planner.planners[0].model == "nvidia/nemotron-3-super-120b-a12b:free"
+    assert planner.planners[0].route_label == "planning-openrouter"
+    assert isinstance(planner.planners[1], ChatCompletionsAdaptivePlanner)
+    assert planner.planners[1].base_url == "http://localhost:11434/v1"
+    assert planner.planners[1].route_label == "planning-local"
