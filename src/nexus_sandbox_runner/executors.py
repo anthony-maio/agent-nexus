@@ -612,6 +612,26 @@ def _execute_local_action(
         _append_history(session, action, instruction)
         return StepResult(output, _normalize_citations(results), artifacts, metadata), session
 
+    if action == "call_api":
+        payload = _parse_instruction_payload(instruction)
+        api_result = _call_api(payload, instruction=instruction)
+        citations = [_citation_from_api_result(api_result)]
+        metadata.update(
+            {
+                "api_url": api_result["url"],
+                "method": api_result["method"],
+                "status_code": api_result["status_code"],
+                "response_kind": api_result["response_kind"],
+                "response_excerpt": api_result["excerpt"],
+            }
+        )
+        session["current_url"] = api_result["url"]
+        session["page_title"] = f"API {api_result['method']} {api_result['url']}"
+        session["page_excerpt"] = api_result["excerpt"]
+        output = api_result["body"]
+        _append_history(session, action, instruction)
+        return StepResult(output, citations, artifacts, metadata), session
+
     if action in {"fetch_url", "navigate", "inspect", "scroll", "read"}:
         page = _resolve_or_fetch_page(
             action,
@@ -1039,6 +1059,104 @@ def _artifact_kind_for_path(path: Path) -> str:
     if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}:
         return "image"
     return "text"
+
+
+def _call_api(payload: dict[str, Any], *, instruction: str) -> dict[str, Any]:
+    url = str(payload.get("url") or _first_url(instruction)).strip()
+    if not url:
+        raise RuntimeError("`call_api` requires a target URL.")
+    method = str(payload.get("method") or "GET").strip().upper() or "GET"
+    headers = {
+        str(key): str(value)
+        for key, value in (payload.get("headers") or {}).items()
+        if isinstance(key, str)
+    } if isinstance(payload.get("headers"), dict) else {}
+    params = payload.get("params")
+    if isinstance(params, dict) and params:
+        url = _append_query_params(url, params)
+    json_payload = payload.get("json")
+    raw_body = payload.get("body")
+    data: bytes | None = None
+    if json_payload is not None:
+        headers.setdefault("Content-Type", "application/json")
+        data = json.dumps(json_payload).encode("utf-8")
+    elif isinstance(raw_body, str):
+        data = raw_body.encode("utf-8")
+    stubbed = _stub_api_response(url, method=method, data=data)
+    if stubbed is not None:
+        return stubbed
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        raw = response.read(512_000)
+        charset = response.headers.get_content_charset() or "utf-8"
+        body = raw.decode(charset, errors="replace")
+        content_type = response.headers.get("Content-Type", "")
+        return _normalize_api_response(
+            url=str(response.geturl() or url),
+            method=method,
+            status_code=int(getattr(response, "status", 200) or 200),
+            body=body,
+            content_type=content_type,
+        )
+
+
+def _append_query_params(url: str, params: dict[str, Any]) -> str:
+    parsed = urllib.parse.urlparse(url)
+    existing = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    additions = [(str(key), str(value)) for key, value in params.items()]
+    query = urllib.parse.urlencode(existing + additions)
+    return urllib.parse.urlunparse(parsed._replace(query=query))
+
+
+def _stub_api_response(url: str, *, method: str, data: bytes | None) -> dict[str, Any] | None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc != "api.example.org":
+        return None
+    body = json.dumps(
+        {
+            "id": "payment_123",
+            "status": "confirmed",
+            "method": method,
+            "path": parsed.path,
+            "has_body": bool(data),
+        },
+        indent=2,
+    )
+    return _normalize_api_response(
+        url=url,
+        method=method,
+        status_code=200,
+        body=body,
+        content_type="application/json",
+    )
+
+
+def _normalize_api_response(
+    *,
+    url: str,
+    method: str,
+    status_code: int,
+    body: str,
+    content_type: str,
+) -> dict[str, Any]:
+    response_kind = "json" if "json" in content_type.lower() else "text"
+    excerpt = _text_summary(body, 220) if body else f"{method} {url}"
+    return {
+        "url": url,
+        "method": method,
+        "status_code": status_code,
+        "body": body,
+        "response_kind": response_kind,
+        "excerpt": excerpt,
+    }
+
+
+def _citation_from_api_result(api_result: dict[str, Any]) -> dict[str, str]:
+    return {
+        "url": str(api_result.get("url", "")),
+        "title": f"API {api_result.get('method', 'GET')} {api_result.get('status_code', 200)}",
+        "snippet": str(api_result.get("excerpt", "")),
+    }
 
 
 def _artifact_title_from_payload(payload: dict[str, Any], *, fallback: str) -> str:
@@ -1848,6 +1966,78 @@ def _container_script() -> str:
                     break
             return results
 
+        def append_query_params(url, params):
+            parsed = urllib.parse.urlparse(url)
+            existing = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            additions = [(str(key), str(value)) for key, value in params.items()]
+            query = urllib.parse.urlencode(existing + additions)
+            return urllib.parse.urlunparse(parsed._replace(query=query))
+
+        def normalize_api_response(url, method, status_code, body, content_type):
+            response_kind = "json" if "json" in str(content_type or "").lower() else "text"
+            excerpt = summarize_text(body, 220) or f"{method} {url}"
+            return {
+                "url": url,
+                "method": method,
+                "status_code": int(status_code),
+                "body": body,
+                "response_kind": response_kind,
+                "excerpt": excerpt,
+            }
+
+        def stub_api_response(url, method, data):
+            parsed = urllib.parse.urlparse(url)
+            if parsed.netloc != "api.example.org":
+                return None
+            body = json.dumps(
+                {
+                    "id": "payment_123",
+                    "status": "confirmed",
+                    "method": method,
+                    "path": parsed.path,
+                    "has_body": bool(data),
+                },
+                indent=2,
+            )
+            return normalize_api_response(url, method, 200, body, "application/json")
+
+        def call_api(payload):
+            url = str(payload.get("url") or first_url(instruction)).strip()
+            if not url:
+                raise RuntimeError("`call_api` requires a target URL.")
+            method = str(payload.get("method") or "GET").strip().upper() or "GET"
+            headers = {
+                str(key): str(value)
+                for key, value in (payload.get("headers") or {}).items()
+                if isinstance(key, str)
+            } if isinstance(payload.get("headers"), dict) else {}
+            params = payload.get("params")
+            if isinstance(params, dict) and params:
+                url = append_query_params(url, params)
+            json_payload = payload.get("json")
+            raw_body = payload.get("body")
+            data = None
+            if json_payload is not None:
+                headers.setdefault("Content-Type", "application/json")
+                data = json.dumps(json_payload).encode("utf-8")
+            elif isinstance(raw_body, str):
+                data = raw_body.encode("utf-8")
+            stubbed = stub_api_response(url, method, data)
+            if stubbed is not None:
+                return stubbed
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=15) as response:
+                raw = response.read(512000)
+                charset = response.headers.get_content_charset() or "utf-8"
+                body = raw.decode(charset, errors="replace")
+                return normalize_api_response(
+                    str(response.geturl() or url),
+                    method,
+                    int(getattr(response, "status", 200) or 200),
+                    body,
+                    response.headers.get("Content-Type", ""),
+                )
+
         def page_from_session():
             current_url = str(session.get("current_url", "")).strip()
             if not current_url:
@@ -2356,6 +2546,24 @@ def _container_script() -> str:
             metadata["search_results"] = citations
             metadata["top_url"] = citations[0]["url"] if citations else ""
             output = f"[sandbox-search] Found {len(citations)} result(s) for: {instruction}"
+        elif action == "call_api":
+            api_result = call_api(payload)
+            citations = [
+                {
+                    "url": api_result["url"],
+                    "title": f"API {api_result['method']} {api_result['status_code']}",
+                    "snippet": api_result["excerpt"],
+                }
+            ]
+            metadata["api_url"] = api_result["url"]
+            metadata["method"] = api_result["method"]
+            metadata["status_code"] = api_result["status_code"]
+            metadata["response_kind"] = api_result["response_kind"]
+            metadata["response_excerpt"] = api_result["excerpt"]
+            session["current_url"] = api_result["url"]
+            session["last_title"] = f"API {api_result['method']} {api_result['url']}"
+            session["last_page_text"] = api_result["body"]
+            output = api_result["body"]
         elif action == "list_files":
             target = resolve_workspace_path(payload, default_path=".", allow_directory=True)
             target.mkdir(parents=True, exist_ok=True)

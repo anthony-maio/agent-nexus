@@ -40,6 +40,15 @@ _WORKFLOW_HINTS: tuple[str, ...] = (
     "buy",
     "form",
 )
+_API_HINTS: tuple[str, ...] = (
+    "api",
+    "endpoint",
+    "json response",
+    "rest",
+    "graphql",
+    "webhook",
+    "http request",
+)
 _CODE_ACTION_HINTS: tuple[str, ...] = (
     "implement",
     "fix",
@@ -100,6 +109,7 @@ _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
         "fetch_url",
+        "call_api",
         "list_files",
         "read_file",
         "write_file",
@@ -126,6 +136,7 @@ _ALLOWED_INITIAL_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
         "fetch_url",
+        "call_api",
         "navigate",
         "inspect",
         "read",
@@ -320,7 +331,7 @@ def plan_follow_up_steps(
             )
         ]
 
-    if action in {"fetch_url", "navigate"}:
+    if action in {"fetch_url", "navigate", "call_api"}:
         next_action = "inspect" if _looks_like_workflow(objective) else "extract"
         if _has_action_after(existing_steps, step_index, next_action):
             return []
@@ -810,6 +821,11 @@ def _wants_chart_artifact(objective: str) -> bool:
     return any(hint in lowered for hint in _CHART_HINTS)
 
 
+def _looks_like_api_objective(objective: str) -> bool:
+    lowered = objective.lower()
+    return bool(_extract_url(objective)) and any(hint in lowered for hint in _API_HINTS)
+
+
 def _wants_image_artifact(objective: str) -> bool:
     lowered = objective.lower()
     return any(hint in lowered for hint in _IMAGE_HINTS)
@@ -825,6 +841,16 @@ def _navigation_instruction(objective: str) -> str:
     if url:
         return f"Open a browser session and navigate directly to {url}. Objective: {objective}"
     return f"Open a browser session and locate the best starting pages for: {objective}"
+
+
+def _api_instruction(objective: str) -> str:
+    payload: dict[str, Any] = {
+        "url": _extract_url(objective),
+        "method": "GET",
+    }
+    if "json" in objective.lower():
+        payload["headers"] = {"Accept": "application/json"}
+    return json.dumps(payload)
 
 
 def _workspace_path_from_objective(objective: str) -> str:
@@ -843,6 +869,13 @@ def _workspace_listing_instruction(path: str = ".") -> str:
 
 
 def _research_bootstrap_steps(objective: str) -> list[StepDefinition]:
+    if _looks_like_api_objective(objective):
+        return [
+            StepDefinition(
+                action_type="call_api",
+                instruction=_api_instruction(objective),
+            ),
+        ]
     return [
         StepDefinition(
             action_type="search_web",

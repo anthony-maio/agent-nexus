@@ -52,6 +52,26 @@ def test_execute_code_arbitrary_commands_remain_high_risk() -> None:
     assert is_high_risk_action("execute_code", instruction)
 
 
+def test_call_api_get_requests_are_low_risk() -> None:
+    instruction = json.dumps({"url": "https://api.example.org/v1/payments", "method": "GET"})
+
+    assert risk_tier_for_action("call_api", instruction) == RiskTier.LOW
+    assert not is_high_risk_action("call_api", instruction)
+
+
+def test_call_api_mutating_requests_are_high_risk() -> None:
+    instruction = json.dumps(
+        {
+            "url": "https://api.example.org/v1/payments",
+            "method": "POST",
+            "json": {"amount": 42},
+        }
+    )
+
+    assert risk_tier_for_action("call_api", instruction) == RiskTier.HIGH
+    assert is_high_risk_action("call_api", instruction)
+
+
 def test_delegate_risk_depends_on_child_plan() -> None:
     safe_delegate = json.dumps(
         {

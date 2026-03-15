@@ -282,6 +282,36 @@ def test_plan_steps_for_code_objective_bootstraps_workspace_discovery() -> None:
     assert steps[0].instruction == '{"path": "."}'
 
 
+def test_plan_steps_for_api_objective_bootstraps_call_api() -> None:
+    steps = plan_steps_for_objective(
+        "Call the Circle sandbox API endpoint at https://api.example.org/v1/payments and inspect the JSON response"
+    )
+
+    assert [step.action_type for step in steps] == ["call_api"]
+    assert "api.example.org/v1/payments" in steps[0].instruction
+
+
+def test_plan_follow_up_steps_call_api_advances_to_extract() -> None:
+    steps = plan_follow_up_steps(
+        objective="Call the Circle sandbox API endpoint at https://api.example.org/v1/payments and inspect the JSON response",
+        completed_step=_step(0, "call_api"),
+        result=StepExecutionResult(
+            output_text='{"id":"payment_123","status":"confirmed"}',
+            citations=[
+                CitationRecord(
+                    url="https://api.example.org/v1/payments",
+                    title="API GET 200",
+                    snippet="payment_123 confirmed",
+                )
+            ],
+            metadata={"response_kind": "json", "status_code": 200},
+        ),
+        existing_steps=[_step(0, "call_api")],
+    )
+
+    assert [step.action_type for step in steps] == ["extract"]
+
+
 def test_plan_follow_up_steps_code_list_files_prefers_source_file_over_tests() -> None:
     steps = plan_follow_up_steps(
         objective="Implement the payment retry backoff fix in the repo and update tests",

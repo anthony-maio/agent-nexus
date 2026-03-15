@@ -904,6 +904,36 @@ def test_default_research_run_bootstraps_autonomous_tool_loop(tmp_path: Path) ->
     assert first_step_event["planner_phase"] == "initial"
 
 
+def test_default_api_run_bootstraps_call_api_tool_loop(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Call the Circle sandbox API endpoint at https://api.example.org/v1/payments and inspect the JSON response",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "call_api",
+        "extract",
+        "export",
+    ]
+    assert [step["status"] for step in run["steps"]] == [
+        "completed",
+        "completed",
+        "pending_approval",
+    ]
+    assert run["steps"][0]["metadata"]["planner_source"] == "rule"
+    assert run["steps"][0]["metadata"]["planner_phase"] == "initial"
+    assert run["steps"][0]["output_text"]
+
+
 def test_default_research_run_timeline_includes_planner_decision_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

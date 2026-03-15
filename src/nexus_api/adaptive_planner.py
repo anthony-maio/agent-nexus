@@ -56,6 +56,7 @@ class ChatCompletionsAdaptivePlanner:
             allowed_actions = [
                 "search_web",
                 "fetch_url",
+                "call_api",
                 "navigate",
                 "inspect",
                 "read",
@@ -117,6 +118,7 @@ class ChatCompletionsAdaptivePlanner:
                 "allowed_actions": [
                     "search_web",
                     "fetch_url",
+                    "call_api",
                     "list_files",
                     "read_file",
                     "write_file",
@@ -153,6 +155,7 @@ class ChatCompletionsAdaptivePlanner:
                 'For write_file use instruction payload {"path":"...","content":"..."}. '
                 'For edit_file use instruction payload {"path":"...","old":"...","new":"..."} or {"path":"...","content":"..."}. '
                 'For execute_code use instruction payload {"command":["cmd","arg"]}. '
+                'For call_api use instruction payload {"url":"https://...","method":"GET","headers":{"Accept":"application/json"}}. '
                 'For generate_report use instruction payload {"path":"reports/...md","title":"...","sources":[...]}. '
                 'For generate_chart use instruction payload {"path":"charts/...html","chart_type":"bar","title":"...","x_key":"...","y_key":"...","data":[...]}. '
                 'For generate_image use instruction payload {"path":"images/...svg","title":"...","prompt":"...","sources":[...]}. '

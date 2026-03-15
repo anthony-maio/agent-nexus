@@ -128,6 +128,7 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     allowed_actions = payload["constraints"]["allowed_actions"]
     assert "search_web" in allowed_actions
     assert "fetch_url" in allowed_actions
+    assert "call_api" in allowed_actions
     assert "generate_report" in allowed_actions
     assert "generate_chart" in allowed_actions
     assert "generate_image" in allowed_actions
@@ -135,6 +136,7 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     assert "command_failed" in request_body["messages"][0]["content"]
     assert "For edit_file use instruction payload" in request_body["messages"][0]["content"]
     assert "For execute_code use instruction payload" in request_body["messages"][0]["content"]
+    assert "For call_api use instruction payload" in request_body["messages"][0]["content"]
     assert "For generate_report use instruction payload" in request_body["messages"][0]["content"]
     assert "For generate_chart use instruction payload" in request_body["messages"][0]["content"]
     assert "For generate_image use instruction payload" in request_body["messages"][0]["content"]
@@ -210,6 +212,7 @@ async def test_openrouter_plan_initial_steps_uses_single_step_budget(
     assert payload["constraints"]["allowed_actions"] == [
         "search_web",
         "fetch_url",
+        "call_api",
         "navigate",
         "inspect",
         "read",

@@ -351,6 +351,34 @@ def test_local_executor_low_risk_test_command_returns_failed_observation(tmp_pat
     assert result.metadata["failure_mode"] == "observation"
 
 
+def test_local_executor_call_api_returns_grounded_json(tmp_path: Path) -> None:
+    executor = LocalEphemeralExecutor()
+    sandbox_root = tmp_path / "sandbox"
+
+    result = executor.execute(
+        StepRequest(
+            run_id="run-api",
+            step_id="step-api",
+            action_type="call_api",
+            instruction=json.dumps(
+                {
+                    "url": "https://api.example.org/v1/payments",
+                    "method": "GET",
+                    "headers": {"Accept": "application/json"},
+                }
+            ),
+        ),
+        sandbox_root,
+    )
+
+    assert result.metadata["status_code"] == 200
+    assert result.metadata["method"] == "GET"
+    assert result.metadata["response_kind"] == "json"
+    assert result.metadata["api_url"] == "https://api.example.org/v1/payments"
+    assert result.citations[0]["url"] == "https://api.example.org/v1/payments"
+    assert "payment_123" in result.output_text
+
+
 def test_local_executor_generate_report_creates_grounded_markdown_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1732,6 +1760,26 @@ def test_container_script_generate_chart_creates_html_artifact(tmp_path: Path) -
     assert "Container latency" in body
     assert "provider" in body
     assert "latency_ms" in body
+
+
+def test_container_script_call_api_returns_grounded_json(tmp_path: Path) -> None:
+    payload, session = _run_container_script_step(
+        tmp_path,
+        action_type="call_api",
+        instruction=json.dumps(
+            {
+                "url": "https://api.example.org/v1/payments",
+                "method": "GET",
+                "headers": {"Accept": "application/json"},
+            }
+        ),
+    )
+
+    assert payload["metadata"]["status_code"] == 200
+    assert payload["metadata"]["response_kind"] == "json"
+    assert payload["metadata"]["api_url"] == "https://api.example.org/v1/payments"
+    assert payload["citations"][0]["url"] == "https://api.example.org/v1/payments"
+    assert session["current_url"] == "https://api.example.org/v1/payments"
 
 
 def test_container_script_generate_image_creates_svg_artifact(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ _RESEARCHER_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
         "fetch_url",
+        "call_api",
         "navigate",
         "inspect",
         "scroll",
@@ -26,6 +27,7 @@ _RESEARCHER_ACTIONS: frozenset[str] = frozenset(
 )
 _OPERATOR_ACTIONS: frozenset[str] = frozenset(
     {
+        "call_api",
         "navigate",
         "inspect",
         "scroll",
@@ -106,6 +108,10 @@ def risk_tier_for_action(action_type: str, instruction: str = "") -> RiskTier:
         return RiskTier.HIGH
     if normalized_action == "execute_code":
         if _execute_code_instruction_is_low_risk(instruction):
+            return RiskTier.LOW
+        return RiskTier.HIGH
+    if normalized_action == "call_api":
+        if _call_api_instruction_is_low_risk(instruction):
             return RiskTier.LOW
         return RiskTier.HIGH
     if normalized_action in _HIGH_RISK_ACTIONS:
@@ -258,6 +264,19 @@ def _execute_code_instruction_is_low_risk(instruction: str) -> bool:
     return any(
         tuple(normalized[: len(prefix)]) == prefix for prefix in _LOW_RISK_EXECUTE_CODE_PREFIXES
     )
+
+
+def _call_api_instruction_is_low_risk(instruction: str) -> bool:
+    payload: Any
+    try:
+        payload = json.loads(instruction)
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        return False
+    method = str(payload.get("method", "GET")).strip().upper() or "GET"
+    has_body = payload.get("json") is not None or payload.get("body") is not None
+    return method in {"GET", "HEAD"} and not has_body
 
 
 def _command_from_execute_code_instruction(instruction: str) -> list[str]:
