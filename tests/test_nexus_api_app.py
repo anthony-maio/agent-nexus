@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import sys
 from pathlib import Path
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from nexus_api.app import create_app
 from nexus_api.config import ApiSettings
+import nexus_api.service as api_service
 from nexus_api.service import build_context
 from nexus_core.models import ArtifactRecord, CitationRecord, StepDefinition, StepExecutionResult
 from nexus_core.planner import RuleAdaptivePlanner
@@ -376,6 +381,58 @@ class FailingCodeWorkspaceExecutionAdapter(FakeExecutionAdapter):
         return await super().execute_step(run_id, step_id, action_type, instruction)
 
 
+_API_DB_TEMPLATE_PATH: Path | None = None
+
+
+def _sqlite_db_path(database_url: str) -> Path | None:
+    prefix = "sqlite:///"
+    if not database_url.startswith(prefix):
+        return None
+    return Path(database_url.removeprefix(prefix))
+
+
+def _ensure_api_db_template(settings: ApiSettings) -> Path | None:
+    global _API_DB_TEMPLATE_PATH
+    if _API_DB_TEMPLATE_PATH is not None:
+        return _API_DB_TEMPLATE_PATH
+    db_path = _sqlite_db_path(settings.APP_DATABASE_URL)
+    if db_path is None:
+        return None
+    template_root = db_path.parent / ".template-db"
+    template_root.mkdir(parents=True, exist_ok=True)
+    template_db_path = template_root / "app-template.db"
+    template_settings = settings.model_copy(
+        update={
+            "APP_DATABASE_URL": f"sqlite:///{template_db_path}",
+            "APP_CANONICAL_WORKSPACE": str(template_root / "workspace"),
+            "APP_SANDBOX_ARTIFACT_ROOT": str(template_root / "sandbox"),
+        }
+    )
+    template_ctx = build_context(template_settings)
+    template_ctx.db_engine.dispose()
+    _API_DB_TEMPLATE_PATH = template_db_path
+    return _API_DB_TEMPLATE_PATH
+
+
+def _build_test_context(settings: ApiSettings):
+    template_db_path = _ensure_api_db_template(settings)
+    db_path = _sqlite_db_path(settings.APP_DATABASE_URL)
+    if template_db_path is None or db_path is None:
+        return build_context(settings)
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path.exists():
+        db_path.unlink()
+    shutil.copy2(template_db_path, db_path)
+
+    original_run_migrations = api_service.run_migrations
+    try:
+        api_service.run_migrations = lambda _: None
+        return build_context(settings)
+    finally:
+        api_service.run_migrations = original_run_migrations
+
+
 def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = None) -> TestClient:
     settings = ApiSettings(
         APP_DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}",
@@ -386,7 +443,7 @@ def _client(tmp_path: Path, execution_adapter: FakeExecutionAdapter | None = Non
         APP_SESSION_TTL_HOURS=24,
         APP_ENABLE_MODEL_REPLANNER=False,
     )
-    ctx = build_context(settings)
+    ctx = _build_test_context(settings)
     ctx.execution_adapter = execution_adapter or FakeExecutionAdapter(tmp_path)
     return TestClient(create_app(ctx))
 
@@ -405,7 +462,7 @@ def _client_with_planner(
         APP_SESSION_TTL_HOURS=24,
         APP_ENABLE_MODEL_REPLANNER=False,
     )
-    ctx = build_context(settings)
+    ctx = _build_test_context(settings)
     ctx.execution_adapter = execution_adapter or FakeExecutionAdapter(tmp_path)
     ctx.adaptive_planner = adaptive_planner
     return TestClient(create_app(ctx))
@@ -416,6 +473,32 @@ def _auth_header(client: TestClient) -> dict[str, str]:
     assert resp.status_code == 200
     token = resp.json()["token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_client_helpers_reuse_migrated_template_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_API_DB_TEMPLATE_PATH", None, raising=False)
+    monkeypatch.setitem(globals(), "create_app", lambda ctx: FastAPI())
+
+    migration_calls: list[str] = []
+
+    def fake_run_migrations(database_url: str) -> None:
+        migration_calls.append(database_url)
+        db_path = Path(database_url.removeprefix("sqlite:///"))
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path.touch()
+
+    monkeypatch.setattr(api_service, "run_migrations", fake_run_migrations)
+
+    first_client = _client(tmp_path / "one")
+    second_client = _client(tmp_path / "two")
+
+    first_client.close()
+    second_client.close()
+
+    assert len(migration_calls) == 1
 
 
 def test_run_lifecycle_with_approval_and_promotion(tmp_path: Path) -> None:
