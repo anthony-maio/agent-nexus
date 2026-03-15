@@ -79,6 +79,8 @@ class EngineRepository(Protocol):
 
     def reset_step_for_retry(self, step_id: str) -> bool: ...
 
+    def merge_step_metadata(self, step_id: str, metadata: dict[str, Any]) -> None: ...
+
     def add_citations(self, run_id: str, step_id: str, citations: list[dict[str, str]]) -> None: ...
 
     def add_artifacts(self, run_id: str, step_id: str, artifacts: list[dict[str, str]]) -> None: ...
@@ -127,6 +129,7 @@ class RunEngine:
         sandbox_artifacts_root: Path | None = None,
         adaptive_planner: AdaptivePlanner | None = None,
         capability_resolver: CapabilityResolver | None = None,
+        max_autonomous_steps: int = 24,
     ) -> None:
         self.repo = repository
         self.execution = execution
@@ -138,6 +141,7 @@ class RunEngine:
         self.sandbox_artifacts_root = (
             sandbox_artifacts_root.resolve() if sandbox_artifacts_root else None
         )
+        self.max_autonomous_steps = max(int(max_autonomous_steps), 1)
         self.canonical_workspace.mkdir(parents=True, exist_ok=True)
 
     async def create_run(
@@ -440,6 +444,35 @@ class RunEngine:
                 await self._publish(run_id, "run.completed", {})
                 return
 
+            if self._autonomous_step_budget_reached(run_id):
+                message = (
+                    "Run exceeded the autonomous step budget before converging."
+                )
+                self.repo.merge_step_metadata(
+                    next_step["id"],
+                    {
+                        "verification_result": "failed",
+                        "kernel_decision": "fail",
+                        "retryable": True,
+                    },
+                )
+                self.repo.mark_step_status(
+                    next_step["id"],
+                    StepStatus.FAILED.value,
+                    error_text=message,
+                )
+                await self._publish(
+                    run_id,
+                    "step.failed",
+                    self._step_event_payload(
+                        next_step,
+                        step_id=next_step["id"],
+                        error=message,
+                    ),
+                )
+                await self._mark_run_failed(run_id, next_step["id"])
+                return
+
             try:
                 self._assert_delegated_step_allowed(run, next_step)
             except PermissionError as exc:
@@ -513,12 +546,19 @@ class RunEngine:
             if self._is_deferred_delegate_result(result):
                 self.repo.mark_run_status(run_id, RunStatus.PENDING_APPROVAL.value)
                 return result
+            verification_result = self._verification_result(result)
             self.repo.mark_step_status(
                 step_id,
                 StepStatus.COMPLETED.value,
                 output_text=result.output_text,
             )
-            self.repo.merge_step_metadata(step_id, result.metadata)
+            self.repo.merge_step_metadata(
+                step_id,
+                {
+                    **result.metadata,
+                    "verification_result": verification_result,
+                },
+            )
             self.repo.add_citations(
                 run_id=run_id,
                 step_id=step_id,
@@ -538,11 +578,20 @@ class RunEngine:
                     output_text=result.output_text[:500],
                     citations=len(result.citations),
                     artifacts=len(result.artifacts),
+                    verification_result=verification_result,
                 ),
             )
             return result
         except Exception as exc:
             log.warning("Step execution failed for %s: %s", step_id, exc)
+            self.repo.merge_step_metadata(
+                step_id,
+                {
+                    "verification_result": "failed",
+                    "kernel_decision": "fail",
+                    "retryable": True,
+                },
+            )
             self.repo.mark_step_status(
                 step_id,
                 StepStatus.FAILED.value,
@@ -623,6 +672,15 @@ class RunEngine:
             result=result,
             existing_steps=existing_steps,
         ):
+            decision = (
+                "continue"
+                if self._has_pending_steps_after(completed_step, existing_steps)
+                else "stop"
+            )
+            self.repo.merge_step_metadata(
+                completed_step["id"],
+                {"kernel_decision": decision},
+            )
             return
 
         follow_up_steps = await self._plan_next_steps(
@@ -633,6 +691,15 @@ class RunEngine:
             result=result,
         )
         if not follow_up_steps:
+            decision = (
+                "continue"
+                if self._has_pending_steps_after(completed_step, self.repo.list_steps(run["id"]))
+                else "stop"
+            )
+            self.repo.merge_step_metadata(
+                completed_step["id"],
+                {"kernel_decision": decision},
+            )
             return
 
         self.repo.insert_steps_after(completed_step["id"], follow_up_steps)
@@ -650,6 +717,10 @@ class RunEngine:
             },
         )
         if gated_follow_up_step is not None:
+            self.repo.merge_step_metadata(
+                completed_step["id"],
+                {"kernel_decision": "await_approval"},
+            )
             self.repo.mark_step_status(gated_follow_up_step["id"], StepStatus.PENDING_APPROVAL.value)
             self.repo.mark_run_status(run["id"], RunStatus.PENDING_APPROVAL.value)
             summary = f"{gated_follow_up_step['action_type']}: {gated_follow_up_step['instruction'][:120]}"
@@ -664,6 +735,11 @@ class RunEngine:
                 "step.pending_approval",
                 self._step_event_payload(gated_follow_up_step, step_id=gated_follow_up_step["id"]),
             )
+            return
+        self.repo.merge_step_metadata(
+            completed_step["id"],
+            {"kernel_decision": "continue"},
+        )
 
     async def _mark_run_failed(self, run_id: str, step_id: str) -> None:
         self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
@@ -693,17 +769,48 @@ class RunEngine:
                 payload["planner_fallback_reason"] = planner_fallback_reason
             skill_source = str(metadata.get("skill_source", "")).strip()
             skill_names = metadata.get("skill_names")
+            verification_result = str(metadata.get("verification_result", "")).strip()
+            kernel_decision = str(metadata.get("kernel_decision", "")).strip()
+            retryable = metadata.get("retryable")
+            retry_count = metadata.get("retry_count")
             if skill_source:
                 payload["skill_source"] = skill_source
             if isinstance(skill_names, list) and skill_names:
                 payload["skill_names"] = [str(name) for name in skill_names]
+            if verification_result:
+                payload["verification_result"] = verification_result
+            if kernel_decision:
+                payload["kernel_decision"] = kernel_decision
+            if isinstance(retryable, bool):
+                payload["retryable"] = retryable
+            if isinstance(retry_count, int):
+                payload["retry_count"] = retry_count
         payload.update(extra)
         return payload
+
+    @staticmethod
+    def _verification_result(result: StepExecutionResult) -> str:
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        if metadata.get("command_failed") is True:
+            return "failed"
+        exit_code = metadata.get("exit_code")
+        if isinstance(exit_code, int) and exit_code != 0:
+            return "failed"
+        if result.citations or result.artifacts or str(result.output_text or "").strip():
+            return "passed"
+        return "unknown"
 
     def _resolved_skills_for_objective(self, objective: str) -> list[SkillManifest]:
         if self.capability_resolver is None:
             return []
         return self.capability_resolver.resolve(objective)
+
+    def _autonomous_step_budget_reached(self, run_id: str) -> bool:
+        executed_steps = 0
+        for step in self.repo.list_steps(run_id):
+            if step.get("started_at"):
+                executed_steps += 1
+        return executed_steps >= self.max_autonomous_steps
 
     @staticmethod
     def _annotate_skill_context(

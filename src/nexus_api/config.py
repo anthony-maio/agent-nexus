@@ -35,6 +35,7 @@ class ApiSettings(BaseSettings):
     APP_ENABLE_MODEL_REPLANNER: bool = Field(default=True)
     APP_REPLANNER_MAX_STEPS: int = Field(default=4)
     APP_REPLANNER_TIMEOUT_SEC: float = Field(default=12.0)
+    APP_KERNEL_MAX_AUTONOMOUS_STEPS: int = Field(default=24)
     APP_MODEL_REPLANNER_PROVIDER: str = Field(default="openrouter")
     APP_MODEL_REPLANNER_API_KEY: str = Field(default="")
     APP_MODEL_REPLANNER_BASE_URL: str = Field(default="")

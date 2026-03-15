@@ -326,6 +326,33 @@ class UnifiedNextStepPlanner:
         )
 
 
+class EndlessFollowUpPlanner:
+    async def plan_next_steps(
+        self,
+        objective: str,
+        mode: object,
+        existing_steps: list[dict[str, str]],
+        completed_step: dict[str, str] | None = None,
+        result: StepExecutionResult | None = None,
+    ) -> list[StepDefinition]:
+        _ = mode, existing_steps, result
+        if completed_step is None:
+            return [
+                StepDefinition(
+                    action_type="search_web",
+                    instruction=f"bootstrap {objective}",
+                    metadata={"planner_source": "model", "planner_phase": "initial"},
+                )
+            ]
+        return [
+            StepDefinition(
+                action_type="extract",
+                instruction="loop again",
+                metadata={"planner_source": "model", "planner_phase": "follow_up"},
+            )
+        ]
+
+
 class WorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
     async def execute_step(
         self, run_id: str, step_id: str, action_type: str, instruction: str
@@ -853,7 +880,11 @@ def test_approved_step_failure_marks_run_failed(tmp_path: Path) -> None:
         json={"decision": "approve", "reason": "continue"},
     )
     assert approve.status_code == 200
-    assert approve.json()["status"] == "failed"
+    failed_run = approve.json()
+    assert failed_run["status"] == "failed"
+    failed_step = next(step for step in failed_run["steps"] if step["id"] == step_id)
+    assert failed_step["metadata"]["kernel_decision"] == "fail"
+    assert failed_step["metadata"]["retryable"] is True
 
 
 def test_default_research_run_bootstraps_autonomous_tool_loop(tmp_path: Path) -> None:
@@ -934,6 +965,31 @@ def test_default_api_run_bootstraps_call_api_tool_loop(tmp_path: Path) -> None:
     assert run["steps"][0]["output_text"]
 
 
+def test_kernel_step_budget_fails_non_converging_run(tmp_path: Path) -> None:
+    client = _client_with_planner(
+        tmp_path,
+        adaptive_planner=EndlessFollowUpPlanner(),
+        settings_overrides={"APP_KERNEL_MAX_AUTONOMOUS_STEPS": 3},
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Loop forever",
+            "mode": "manual",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "failed"
+    assert len([step for step in run["steps"] if step["status"] == "completed"]) == 3
+    failed_step = next(step for step in run["steps"] if step["status"] == "failed")
+    assert "autonomous step budget" in failed_step["error_text"]
+
+
 def test_default_research_run_timeline_includes_planner_decision_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)
@@ -964,6 +1020,11 @@ def test_default_research_run_timeline_includes_planner_decision_events(tmp_path
     assert planner_events[0]["planner_source"] == "rule"
     assert planner_events[0]["planner_phase"] == "initial"
     assert all(item["planner_phase"] == "follow_up" for item in planner_events[1:])
+    kernel_events = [
+        item for item in timeline.json()["timeline"] if item["type"] == "kernel.decision"
+    ]
+    assert kernel_events[0]["kernel_decision"] == "continue"
+    assert kernel_events[0]["verification_result"] == "passed"
 
 
 def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: Path) -> None:
@@ -2421,8 +2482,11 @@ def test_retry_failed_steps_reexecutes_run(tmp_path: Path) -> None:
 
     retry = client.post(f"/runs/{run_id}/retry", headers=headers)
     assert retry.status_code == 200
-    assert retry.json()["status"] == "completed"
-    assert retry.json()["steps"][1]["status"] == "completed"
+    retried_run = retry.json()
+    assert retried_run["status"] == "completed"
+    assert retried_run["steps"][1]["status"] == "completed"
+    assert retried_run["steps"][1]["metadata"]["retry_count"] == 1
+    assert retried_run["steps"][1]["metadata"]["kernel_decision"] == "stop"
 
 
 def test_model_replanner_proposals_are_policy_checked_and_gated(tmp_path: Path) -> None:

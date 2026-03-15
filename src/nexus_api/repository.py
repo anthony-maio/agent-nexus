@@ -245,6 +245,12 @@ class SqlRunRepository:
         step = self.session.get(RunStep, step_id)
         if step is None:
             return False
+        metadata = self._deserialize_context(step.metadata_json)
+        retry_count = int(metadata.get("retry_count", 0) or 0) + 1
+        metadata["retry_count"] = retry_count
+        metadata.pop("kernel_decision", None)
+        metadata["retryable"] = False
+        step.metadata_json = self._serialize_context(metadata)
         step.status = StepStatus.PENDING.value
         step.output_text = ""
         step.error_text = ""
@@ -514,6 +520,35 @@ class SqlRunRepository:
                     "skill_names": skill_names,
                 }
             )
+            kernel_decision = (
+                str(metadata.get("kernel_decision", "")).strip()
+                if isinstance(metadata, dict)
+                else ""
+            )
+            verification_result = (
+                str(metadata.get("verification_result", "")).strip()
+                if isinstance(metadata, dict)
+                else ""
+            )
+            retryable = metadata.get("retryable") if isinstance(metadata, dict) else None
+            retry_count = metadata.get("retry_count") if isinstance(metadata, dict) else None
+            if kernel_decision or verification_result:
+                kernel_event: dict[str, Any] = {
+                    "type": "kernel.decision",
+                    "timestamp": step["ended_at"] or step["started_at"] or step["created_at"],
+                    "step_id": step["id"],
+                    "action_type": step["action_type"],
+                    "instruction": step["instruction"],
+                }
+                if kernel_decision:
+                    kernel_event["kernel_decision"] = kernel_decision
+                if verification_result:
+                    kernel_event["verification_result"] = verification_result
+                if isinstance(retryable, bool):
+                    kernel_event["retryable"] = retryable
+                if isinstance(retry_count, int):
+                    kernel_event["retry_count"] = retry_count
+                events.append(kernel_event)
         for approval in self.list_approvals(run_id):
             events.append(
                 {

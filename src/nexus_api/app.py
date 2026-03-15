@@ -185,6 +185,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
+            max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
         )
         run = await engine.create_run(
             objective=request.objective,
@@ -283,6 +284,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
+            max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
         )
         run = await engine.decide_approval(
             run_id=run_id,
@@ -310,6 +312,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
+            max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
         )
         return await engine.resume_run(run_id=run_id)
 
@@ -330,6 +333,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
+            max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
         )
         return await engine.retry_run(run_id=run_id)
 
@@ -357,6 +361,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             sandbox_artifacts_root=ctx.settings.sandbox_artifact_root_path,
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
+            max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
         )
         return await engine.promote_artifact(
             run_id=run_id,
