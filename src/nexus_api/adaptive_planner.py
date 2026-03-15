@@ -73,7 +73,9 @@ class ChatCompletionsAdaptivePlanner:
                     '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
                     "Plan exactly one grounded bootstrap tool call. "
                     "Use only low-risk starting actions that gather context or open the correct page/file. "
-                    "Prefer workspace read tools when the objective references local files. No prose."
+                    "Prefer workspace read tools when the objective references local files. "
+                    'For list_files/read_file use instruction payload {"path":"..."} as a JSON string or JSON object. '
+                    "No prose."
                 ),
                 payload=payload,
             )
@@ -132,6 +134,10 @@ class ChatCompletionsAdaptivePlanner:
                 "Return strict JSON with shape "
                 '{"next_steps":[{"action_type":"...","instruction":"..."}]}. '
                 "No prose. Return exactly one next step. Prefer workspace and code tools when result metadata references files. "
+                'For list_files/read_file use instruction payload {"path":"..."}. '
+                'For write_file use instruction payload {"path":"...","content":"..."}. '
+                'For edit_file use instruction payload {"path":"...","old":"...","new":"..."} or {"path":"...","content":"..."}. '
+                'For execute_code use instruction payload {"command":["cmd","arg"]}. '
                 "When metadata includes page_affordances, use those grounded inputs, buttons, and links instead of generic UI guesses. "
                 "When metadata includes command_failed or a non-zero exit_code, treat that as diagnostic evidence and inspect or edit the referenced code path instead of repeating the same command blindly."
             ),
@@ -213,8 +219,12 @@ class ChatCompletionsAdaptivePlanner:
         for item in raw_steps[:limit]:
             if not isinstance(item, dict):
                 continue
-            action_type = str(item.get("action_type", "")).strip()
-            instruction = str(item.get("instruction", "")).strip()
+            action_type = _stringify_action_type(
+                item.get("action_type", item.get("action", item.get("tool", item.get("tool_name", ""))))
+            )
+            instruction = _stringify_step_instruction(
+                item.get("instruction", item.get("payload", item.get("arguments", "")))
+            )
             if not action_type or not instruction:
                 continue
             try:
@@ -313,6 +323,22 @@ def _parse_model_json(content: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _stringify_step_instruction(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _stringify_action_type(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _truncate_text(value: str, limit: int) -> str:
