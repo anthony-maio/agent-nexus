@@ -843,10 +843,17 @@ def _preferred_workspace_path(
     if isinstance(raw_value, str) and raw_value.strip():
         return _normalize_workspace_path(raw_value)
     if isinstance(raw_value, list):
+        normalized_candidates: list[str] = []
         for item in raw_value:
             normalized = _normalize_workspace_path(str(item))
             if normalized:
-                return normalized
+                normalized_candidates.append(normalized)
+        if _looks_like_code_task(objective):
+            preferred = _preferred_code_workspace_path(normalized_candidates)
+            if preferred:
+                return preferred
+        if normalized_candidates:
+            return normalized_candidates[0]
     return ""
 
 
@@ -857,6 +864,41 @@ def _normalize_workspace_path(path: str) -> str:
     if normalized.lower().startswith("workspace/"):
         normalized = normalized[len("workspace/") :]
     return normalized
+
+
+def _preferred_code_workspace_path(candidates: list[str]) -> str:
+    source_candidates = [candidate for candidate in candidates if not _is_test_workspace_path(candidate)]
+    for candidate in source_candidates:
+        if _looks_like_source_workspace_path(candidate):
+            return candidate
+    if source_candidates:
+        return source_candidates[0]
+    return candidates[0] if candidates else ""
+
+
+def _is_test_workspace_path(path: str) -> bool:
+    lowered = path.lower()
+    filename = lowered.rsplit("/", 1)[-1]
+    return (
+        lowered.startswith("tests/")
+        or "/tests/" in lowered
+        or filename.startswith("test_")
+        or filename.endswith("_test.py")
+        or filename.endswith("_test.go")
+        or filename.endswith(".spec.ts")
+        or filename.endswith(".spec.tsx")
+        or filename.endswith(".test.ts")
+        or filename.endswith(".test.tsx")
+        or filename.endswith(".test.js")
+        or filename.endswith(".test.jsx")
+    )
+
+
+def _looks_like_source_workspace_path(path: str) -> bool:
+    lowered = path.lower()
+    return lowered.startswith(("src/", "app/", "cmd/", "lib/", "pkg/", "internal/")) or lowered.endswith(
+        (".py", ".go", ".js", ".jsx", ".ts", ".tsx", ".rs", ".java", ".rb", ".php", ".cs")
+    )
 
 
 def _diagnostic_workspace_path(result: StepExecutionResult) -> str:

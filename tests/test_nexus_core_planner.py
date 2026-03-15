@@ -210,6 +210,21 @@ def test_plan_steps_for_code_objective_bootstraps_workspace_discovery() -> None:
     assert steps[0].instruction == '{"path": "."}'
 
 
+def test_plan_follow_up_steps_code_list_files_prefers_source_file_over_tests() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement the payment retry backoff fix in the repo and update tests",
+        completed_step=_step(0, "list_files"),
+        result=StepExecutionResult(
+            output_text="done:list_files",
+            metadata={"files": ["tests/test_retry.py", "src/payments/retry.py"]},
+        ),
+        existing_steps=[_step(0, "list_files")],
+    )
+
+    assert [step.action_type for step in steps] == ["read_file"]
+    assert steps[0].instruction == '{"path": "src/payments/retry.py"}'
+
+
 def test_plan_follow_up_steps_code_read_file_prefers_execute_code() -> None:
     steps = plan_follow_up_steps(
         objective="Implement the payment retry backoff fix in the repo and update tests",

@@ -335,6 +335,27 @@ class CodeWorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
         return await super().execute_step(run_id, step_id, action_type, instruction)
 
 
+class ReversedCodeWorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
+    async def execute_step(
+        self, run_id: str, step_id: str, action_type: str, instruction: str
+    ) -> StepExecutionResult:
+        if action_type == "list_files":
+            return StepExecutionResult(
+                output_text="done:list_files",
+                citations=[],
+                artifacts=[],
+                metadata={"files": ["tests/test_retry.py", "src/payments/retry.py"]},
+            )
+        if action_type == "read_file":
+            return StepExecutionResult(
+                output_text="def retry_backoff():\n    return 1",
+                citations=[],
+                artifacts=[],
+                metadata={"file_path": "src/payments/retry.py"},
+            )
+        return await super().execute_step(run_id, step_id, action_type, instruction)
+
+
 class CodeArtifactExecutionAdapter(FakeExecutionAdapter):
     async def execute_step(
         self, run_id: str, step_id: str, action_type: str, instruction: str
@@ -1079,6 +1100,32 @@ def test_code_task_run_reads_code_then_executes_tests(tmp_path: Path) -> None:
     assert run["steps"][2]["instruction"] == '{"command": ["python", "-m", "pytest", "-q"]}'
     assert run["steps"][2]["status"] == "completed"
     assert run["steps"][4]["status"] == "pending_approval"
+
+
+def test_code_task_run_prefers_source_file_when_tests_are_listed_first(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=ReversedCodeWorkspaceDiscoveryExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Implement the payment retry backoff fix in the repo and update tests",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert [step["action_type"] for step in run["steps"]] == [
+        "list_files",
+        "read_file",
+        "execute_code",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][1]["instruction"] == '{"path": "src/payments/retry.py"}'
+    assert run["steps"][1]["status"] == "completed"
 
 
 def test_code_task_failed_tests_trigger_diagnostic_file_read(tmp_path: Path) -> None:
