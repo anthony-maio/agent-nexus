@@ -36,6 +36,7 @@ class SqlRunRepository:
             objective=objective,
             mode=mode,
             status=RunStatus.RUNNING.value,
+            metadata_json=self._serialize_context({}),
             parent_run_id=parent_run_id or None,
         )
         self.session.add(run)
@@ -124,6 +125,7 @@ class SqlRunRepository:
                     "objective": run.objective,
                     "mode": run.mode,
                     "status": run.status,
+                    "metadata": self._deserialize_context(run.metadata_json),
                     "parent_run_id": run.parent_run_id,
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                     "updated_at": run.updated_at.isoformat() if run.updated_at else None,
@@ -158,6 +160,7 @@ class SqlRunRepository:
             "objective": run.objective,
             "mode": run.mode,
             "status": run.status,
+            "metadata": self._deserialize_context(run.metadata_json),
             "parent_run_id": run.parent_run_id,
             "created_at": run.created_at.isoformat() if run.created_at else None,
             "updated_at": run.updated_at.isoformat() if run.updated_at else None,
@@ -212,6 +215,18 @@ class SqlRunRepository:
         if run is None:
             return
         run.status = status
+        run.updated_at = _utc_now()
+        self.session.flush()
+
+    def merge_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
+        if not isinstance(metadata, dict) or not metadata:
+            return
+        run = self.session.get(Run, run_id)
+        if run is None:
+            return
+        merged = self._deserialize_context(run.metadata_json)
+        merged.update(metadata)
+        run.metadata_json = self._serialize_context(merged)
         run.updated_at = _utc_now()
         self.session.flush()
 
@@ -462,6 +477,17 @@ class SqlRunRepository:
         run = self.get_run(run_id)
         if run is None:
             return events
+        run_metadata = run.get("metadata")
+        if isinstance(run_metadata, dict):
+            kernel_state = run_metadata.get("kernel_state")
+            if isinstance(kernel_state, dict) and kernel_state:
+                events.append(
+                    {
+                        "type": "run.kernel",
+                        "timestamp": run.get("updated_at") or run.get("created_at"),
+                        **kernel_state,
+                    }
+                )
 
         for step in run["steps"]:
             metadata = step.get("metadata")

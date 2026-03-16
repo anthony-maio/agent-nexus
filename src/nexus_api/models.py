@@ -46,6 +46,7 @@ class Run(Base):
     objective: Mapped[str] = mapped_column(Text, nullable=False)
     mode: Mapped[str] = mapped_column(String(24), nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     parent_run_id: Mapped[str | None] = mapped_column(
         ForeignKey("runs.id"),
         nullable=True,

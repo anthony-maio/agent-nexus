@@ -923,6 +923,9 @@ def test_default_research_run_bootstraps_autonomous_tool_loop(tmp_path: Path) ->
         "follow_up",
     ]
     assert run["status"] == "pending_approval"
+    assert run["metadata"]["kernel_state"]["phase"] == "awaiting_approval"
+    assert run["metadata"]["kernel_state"]["completed_step_count"] == 3
+    assert run["metadata"]["kernel_state"]["pending_step_count"] == 1
 
     timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
     assert timeline.status_code == 200
@@ -1054,6 +1057,11 @@ def test_default_research_run_timeline_includes_planner_decision_events(tmp_path
     ]
     assert kernel_events[0]["kernel_decision"] == "continue"
     assert kernel_events[0]["verification_result"] == "passed"
+    run_kernel_events = [
+        item for item in timeline.json()["timeline"] if item["type"] == "run.kernel"
+    ]
+    assert run_kernel_events[-1]["phase"] == "awaiting_approval"
+    assert run_kernel_events[-1]["pending_step_count"] == 1
 
 
 def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: Path) -> None:
@@ -2542,6 +2550,8 @@ def test_kernel_auto_retries_transient_step_failures(tmp_path: Path) -> None:
     run = create.json()
 
     assert run["status"] == "completed"
+    assert run["metadata"]["kernel_state"]["phase"] == "completed"
+    assert run["metadata"]["kernel_state"]["completed_step_count"] == 2
     export_step = next(step for step in run["steps"] if step["action_type"] == "export")
     assert export_step["status"] == "completed"
     assert export_step["metadata"]["retry_count"] == 1

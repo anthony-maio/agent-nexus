@@ -69,6 +69,8 @@ class EngineRepository(Protocol):
 
     def mark_run_status(self, run_id: str, status: str) -> None: ...
 
+    def merge_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None: ...
+
     def mark_step_status(
         self,
         step_id: str,
@@ -169,6 +171,7 @@ class RunEngine:
             parent_run_id=parent_run_id,
             delegation=delegation,
         )
+        await self._update_run_kernel_state(run["id"], phase="running")
         await self._publish(run["id"], "run.created", {"objective": objective})
         await self._execute_until_gate(run["id"])
         return self.repo.get_run(run["id"]) or run
@@ -269,6 +272,11 @@ class RunEngine:
         if decision == ApprovalDecision.REJECT:
             self.repo.mark_step_status(step_id, StepStatus.REJECTED.value, error_text=reason)
             self.repo.mark_run_status(run_id, RunStatus.PAUSED.value)
+            await self._update_run_kernel_state(
+                run_id,
+                phase="paused",
+                failure_reason=reason,
+            )
             await self.interaction.deliver_status(
                 run_id,
                 RunStatus.PAUSED.value,
@@ -281,6 +289,7 @@ class RunEngine:
             return self.repo.get_run(run_id) or {}
 
         self.repo.mark_run_status(run_id, RunStatus.RUNNING.value)
+        await self._update_run_kernel_state(run_id, phase="running")
         run = self.repo.get_run(run_id)
         result = await self._execute_step(step)
         if result is None:
@@ -385,6 +394,7 @@ class RunEngine:
             raise ValueError("Failed runs require retry")
 
         self.repo.mark_run_status(run_id, RunStatus.RUNNING.value)
+        await self._update_run_kernel_state(run_id, phase="running")
         await self._publish(run_id, "run.resumed", {})
         await self._execute_until_gate(run_id)
         return self.repo.get_run(run_id) or {}
@@ -407,6 +417,7 @@ class RunEngine:
             self.repo.reset_step_for_retry(step["id"])
 
         self.repo.mark_run_status(run_id, RunStatus.RUNNING.value)
+        await self._update_run_kernel_state(run_id, phase="running")
         await self._publish(
             run_id,
             "run.retry_requested",
@@ -433,6 +444,7 @@ class RunEngine:
                     return
                 if status == StepStatus.PENDING_APPROVAL.value:
                     self.repo.mark_run_status(run_id, RunStatus.PENDING_APPROVAL.value)
+                    await self._update_run_kernel_state(run_id, phase="awaiting_approval")
                     return
                 if status == StepStatus.PENDING.value:
                     next_step = step
@@ -440,6 +452,7 @@ class RunEngine:
 
             if next_step is None:
                 self.repo.mark_run_status(run_id, RunStatus.COMPLETED.value)
+                await self._update_run_kernel_state(run_id, phase="completed")
                 await self.interaction.deliver_status(
                     run_id,
                     RunStatus.COMPLETED.value,
@@ -489,6 +502,7 @@ class RunEngine:
             ):
                 self.repo.mark_step_status(next_step["id"], StepStatus.PENDING_APPROVAL.value)
                 self.repo.mark_run_status(run_id, RunStatus.PENDING_APPROVAL.value)
+                await self._update_run_kernel_state(run_id, phase="awaiting_approval")
                 summary = f"{next_step['action_type']}: {next_step['instruction'][:120]}"
                 await self.interaction.request_approval(
                     run_id=run_id,
@@ -736,11 +750,73 @@ class RunEngine:
 
     async def _mark_run_failed(self, run_id: str, step_id: str) -> None:
         self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
+        failed_step = self.repo.get_step(step_id)
+        failure_reason = ""
+        if failed_step is not None:
+            failure_reason = str(failed_step.get("error_text", "")).strip()
+        await self._update_run_kernel_state(
+            run_id,
+            phase="failed",
+            failure_reason=failure_reason,
+        )
         await self.interaction.deliver_status(run_id, RunStatus.FAILED.value, "Run failed")
         await self._publish(run_id, "run.failed", {"step_id": step_id})
 
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         await self.events.publish(RunEvent(run_id=run_id, event_type=event_type, payload=payload))
+
+    async def _update_run_kernel_state(
+        self,
+        run_id: str,
+        *,
+        phase: str,
+        failure_reason: str = "",
+    ) -> None:
+        run = self.repo.get_run(run_id)
+        if run is None:
+            return
+        steps = run.get("steps") if isinstance(run.get("steps"), list) else []
+        completed_step_count = sum(
+            1 for step in steps if str(step.get("status", "")) == StepStatus.COMPLETED.value
+        )
+        pending_step_count = sum(
+            1
+            for step in steps
+            if str(step.get("status", "")) in {
+                StepStatus.PENDING.value,
+                StepStatus.RUNNING.value,
+                StepStatus.PENDING_APPROVAL.value,
+            }
+        )
+        failed_step_count = sum(
+            1 for step in steps if str(step.get("status", "")) == StepStatus.FAILED.value
+        )
+        rejected_step_count = sum(
+            1 for step in steps if str(step.get("status", "")) == StepStatus.REJECTED.value
+        )
+        current_step_id = ""
+        for step in steps:
+            if str(step.get("status", "")) in {
+                StepStatus.RUNNING.value,
+                StepStatus.PENDING_APPROVAL.value,
+                StepStatus.PENDING.value,
+            }:
+                current_step_id = str(step.get("id", ""))
+                break
+        kernel_state: dict[str, Any] = {
+            "phase": phase,
+            "completed_step_count": completed_step_count,
+            "pending_step_count": pending_step_count,
+            "failed_step_count": failed_step_count,
+            "rejected_step_count": rejected_step_count,
+        }
+        if current_step_id:
+            kernel_state["current_step_id"] = current_step_id
+        normalized_failure_reason = failure_reason.strip()
+        if normalized_failure_reason:
+            kernel_state["failure_reason"] = normalized_failure_reason
+        self.repo.merge_run_metadata(run_id, {"kernel_state": kernel_state})
+        await self._publish(run_id, "run.kernel", kernel_state)
 
     @staticmethod
     def _step_event_payload(step: dict[str, Any], **extra: Any) -> dict[str, Any]:
