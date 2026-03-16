@@ -131,6 +131,7 @@ class RunEngine:
         capability_resolver: CapabilityResolver | None = None,
         max_autonomous_steps: int = 24,
         max_step_retries: int = 0,
+        max_identical_step_streak: int = 0,
     ) -> None:
         self.repo = repository
         self.execution = execution
@@ -144,6 +145,7 @@ class RunEngine:
         )
         self.max_autonomous_steps = max(int(max_autonomous_steps), 1)
         self.max_step_retries = max(int(max_step_retries), 0)
+        self.max_identical_step_streak = max(int(max_identical_step_streak), 0)
         self.canonical_workspace.mkdir(parents=True, exist_ok=True)
 
     async def create_run(
@@ -450,28 +452,15 @@ class RunEngine:
                 message = (
                     "Run exceeded the autonomous step budget before converging."
                 )
-                self.repo.merge_step_metadata(
-                    next_step["id"],
-                    {
-                        "verification_result": "failed",
-                        "kernel_decision": "fail",
-                        "retryable": True,
-                    },
+                await self._fail_pending_step(run_id, next_step, message, retryable=True)
+                await self._mark_run_failed(run_id, next_step["id"])
+                return
+
+            if self._identical_step_streak_reached(run_id, next_step):
+                message = (
+                    "Run stopped because the same step repeated without progress."
                 )
-                self.repo.mark_step_status(
-                    next_step["id"],
-                    StepStatus.FAILED.value,
-                    error_text=message,
-                )
-                await self._publish(
-                    run_id,
-                    "step.failed",
-                    self._step_event_payload(
-                        next_step,
-                        step_id=next_step["id"],
-                        error=message,
-                    ),
-                )
+                await self._fail_pending_step(run_id, next_step, message, retryable=False)
                 await self._mark_run_failed(run_id, next_step["id"])
                 return
 
@@ -816,6 +805,41 @@ class RunEngine:
                 executed_steps += 1
         return executed_steps >= self.max_autonomous_steps
 
+    def _identical_step_streak_reached(self, run_id: str, next_step: dict[str, Any]) -> bool:
+        if self.max_identical_step_streak <= 0:
+            return False
+        steps = self.repo.list_steps(run_id)
+        next_step_id = str(next_step.get("id", ""))
+        prefix: list[dict[str, Any]] = []
+        for step in steps:
+            if str(step.get("id", "")) == next_step_id:
+                break
+            prefix.append(step)
+        streak = 0
+        baseline_output = ""
+        baseline_verification = ""
+        for step in reversed(prefix):
+            if str(step.get("status", "")) != StepStatus.COMPLETED.value:
+                break
+            if str(step.get("action_type", "")) != str(next_step.get("action_type", "")):
+                break
+            if str(step.get("instruction", "")) != str(next_step.get("instruction", "")):
+                break
+            metadata = step.get("metadata")
+            verification = (
+                str(metadata.get("verification_result", "")).strip()
+                if isinstance(metadata, dict)
+                else ""
+            )
+            output_text = str(step.get("output_text", "")).strip()
+            if streak == 0:
+                baseline_output = output_text
+                baseline_verification = verification
+            elif output_text != baseline_output or verification != baseline_verification:
+                break
+            streak += 1
+        return streak >= self.max_identical_step_streak
+
     async def _retry_failed_step_if_allowed(self, run_id: str, step_id: str) -> bool:
         if self.max_step_retries <= 0:
             return False
@@ -840,6 +864,38 @@ class RunEngine:
             ),
         )
         return True
+
+    async def _fail_pending_step(
+        self,
+        run_id: str,
+        step: dict[str, Any],
+        message: str,
+        *,
+        retryable: bool,
+    ) -> None:
+        self.repo.merge_step_metadata(
+            step["id"],
+            {
+                "verification_result": "failed",
+                "kernel_decision": "fail",
+                "retryable": retryable,
+            },
+        )
+        self.repo.mark_step_status(
+            step["id"],
+            StepStatus.FAILED.value,
+            error_text=message,
+        )
+        await self._publish(
+            run_id,
+            "step.failed",
+            self._step_event_payload(
+                step,
+                step_id=step["id"],
+                error=message,
+            ),
+        )
+
 
     @staticmethod
     def _annotate_skill_context(

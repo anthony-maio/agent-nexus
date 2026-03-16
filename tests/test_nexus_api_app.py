@@ -990,6 +990,35 @@ def test_kernel_step_budget_fails_non_converging_run(tmp_path: Path) -> None:
     assert "autonomous step budget" in failed_step["error_text"]
 
 
+def test_kernel_stops_identical_follow_up_streaks(tmp_path: Path) -> None:
+    client = _client_with_planner(
+        tmp_path,
+        adaptive_planner=EndlessFollowUpPlanner(),
+        settings_overrides={
+            "APP_KERNEL_MAX_AUTONOMOUS_STEPS": 10,
+            "APP_KERNEL_MAX_IDENTICAL_STEP_STREAK": 2,
+        },
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Loop forever",
+            "mode": "manual",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "failed"
+    completed_actions = [step["action_type"] for step in run["steps"] if step["status"] == "completed"]
+    assert completed_actions == ["search_web", "extract", "extract"]
+    failed_step = next(step for step in run["steps"] if step["status"] == "failed")
+    assert "repeated without progress" in failed_step["error_text"]
+
+
 def test_default_research_run_timeline_includes_planner_decision_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)
