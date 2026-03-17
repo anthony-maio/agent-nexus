@@ -199,7 +199,10 @@ def annotate_planner_fallback(
     return annotated
 
 
-def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
+def plan_steps_for_objective(
+    objective: str,
+    skill_context: list[dict[str, Any]] | None = None,
+) -> list[StepDefinition]:
     """Return bootstrap steps for an autonomous tool loop."""
     cleaned = " ".join(objective.split())
     if not _extract_url(cleaned):
@@ -218,6 +221,32 @@ def plan_steps_for_objective(objective: str) -> list[StepDefinition]:
                     instruction=_workspace_listing_instruction(),
                 )
             ]
+        preferred_action = _preferred_initial_action_from_skills(skill_context)
+        if preferred_action == "read_file":
+            return [
+                StepDefinition(
+                    action_type="list_files",
+                    instruction=_workspace_listing_instruction(),
+                )
+            ]
+        if preferred_action == "list_files":
+            return [
+                StepDefinition(
+                    action_type="list_files",
+                    instruction=_workspace_listing_instruction(),
+                )
+            ]
+        if preferred_action == "call_api":
+            return [
+                StepDefinition(
+                    action_type="call_api",
+                    instruction=_api_instruction(cleaned),
+                )
+            ]
+        if preferred_action == "navigate":
+            return _workflow_bootstrap_steps(cleaned)
+        if preferred_action == "search_web":
+            return _research_bootstrap_steps(cleaned)
     if _looks_like_workflow(cleaned):
         return _workflow_bootstrap_steps(cleaned)
     return _research_bootstrap_steps(cleaned)
@@ -625,10 +654,10 @@ class RuleAdaptivePlanner:
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
     ) -> list[StepDefinition]:
-        _ = mode, skill_context
+        _ = mode
         if completed_step is None or result is None:
             return annotate_planner_steps(
-                plan_steps_for_objective(objective),
+                plan_steps_for_objective(objective, skill_context=skill_context),
                 planner_source="rule",
                 planner_phase="initial",
             )
@@ -866,6 +895,24 @@ def _workspace_instruction(path: str) -> str:
 
 def _workspace_listing_instruction(path: str = ".") -> str:
     return json.dumps({"path": path})
+
+
+def _preferred_initial_action_from_skills(
+    skill_context: list[dict[str, Any]] | None,
+) -> str:
+    if not isinstance(skill_context, list):
+        return ""
+    for skill in skill_context:
+        if not isinstance(skill, dict):
+            continue
+        raw_actions = skill.get("preferred_initial_actions")
+        if not isinstance(raw_actions, list):
+            continue
+        for raw_action in raw_actions:
+            action = str(raw_action).strip().lower()
+            if action in _ALLOWED_INITIAL_ACTIONS:
+                return action
+    return ""
 
 
 def _research_bootstrap_steps(objective: str) -> list[StepDefinition]:

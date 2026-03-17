@@ -49,6 +49,7 @@ class SkillManifest:
     description: str
     path: str
     guidance: str = ""
+    preferred_initial_actions: tuple[str, ...] = ()
 
     def to_dict(self, *, include_guidance: bool = False, guidance_limit: int = 600) -> dict[str, str]:
         payload = {
@@ -56,6 +57,8 @@ class SkillManifest:
             "description": self.description,
             "path": self.path,
         }
+        if self.preferred_initial_actions:
+            payload["preferred_initial_actions"] = list(self.preferred_initial_actions)
         if include_guidance and self.guidance:
             payload["guidance_excerpt"] = self.guidance[:guidance_limit].strip()
         return payload
@@ -171,6 +174,9 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
         description=description,
         path=str(path),
         guidance=guidance,
+        preferred_initial_actions=_parse_action_list(
+            str(frontmatter.get("preferred_initial_actions", ""))
+        ),
     )
 
 
@@ -255,3 +261,17 @@ def _normalize_token(token: str) -> str:
     if token.endswith("s") and len(token) > 3 and not token.endswith("ss"):
         return token[:-1]
     return token
+
+
+def _parse_action_list(raw: str) -> tuple[str, ...]:
+    if not raw.strip():
+        return ()
+    actions: list[str] = []
+    seen: set[str] = set()
+    for chunk in raw.replace("|", ",").split(","):
+        action = chunk.strip().lower().replace(" ", "_")
+        if not action or action in seen:
+            continue
+        seen.add(action)
+        actions.append(action)
+    return tuple(actions)

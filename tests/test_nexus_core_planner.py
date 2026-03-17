@@ -57,6 +57,23 @@ def test_plan_follow_up_steps_workflow_inspect_returns_only_type_step() -> None:
     assert "message" in steps[0].instruction
 
 
+def test_plan_steps_for_objective_uses_skill_preferred_initial_action() -> None:
+    steps = plan_steps_for_objective(
+        "Generate a chart from local sales data and summarize it",
+        skill_context=[
+            {
+                "name": "chart-maker",
+                "description": "Generate charts from local tabular data.",
+                "path": "skills/chart-maker/SKILL.md",
+                "preferred_initial_actions": ["list_files", "read_file"],
+            }
+        ],
+    )
+
+    assert [step.action_type for step in steps] == ["list_files"]
+    assert steps[0].instruction == '{"path": "."}'
+
+
 def test_plan_follow_up_steps_workflow_inspect_without_inputs_falls_back_to_extract() -> None:
     objective = "Fill out the signup form at https://example.com/register"
 

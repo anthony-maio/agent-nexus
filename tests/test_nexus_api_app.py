@@ -363,7 +363,28 @@ class WorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
                 citations=[],
                 artifacts=[],
                 metadata={"files": ["reports/summary.md"]},
-        )
+            )
+        return await super().execute_step(run_id, step_id, action_type, instruction)
+
+
+class ChartWorkspaceDiscoveryExecutionAdapter(FakeExecutionAdapter):
+    async def execute_step(
+        self, run_id: str, step_id: str, action_type: str, instruction: str
+    ) -> StepExecutionResult:
+        if action_type == "list_files":
+            return StepExecutionResult(
+                output_text="done:list_files",
+                citations=[],
+                artifacts=[],
+                metadata={"files": ["data/sales.csv"]},
+            )
+        if action_type == "read_file":
+            return StepExecutionResult(
+                output_text="date,revenue\n2026-03-01,120\n2026-03-02,140",
+                citations=[],
+                artifacts=[],
+                metadata={"file_path": "data/sales.csv"},
+            )
         return await super().execute_step(run_id, step_id, action_type, instruction)
 
 
@@ -507,17 +528,28 @@ def _build_test_context(settings: ApiSettings):
         api_service.run_migrations = original_run_migrations
 
 
-def _write_skill(root: Path, folder: str, *, name: str, description: str) -> Path:
+def _write_skill(
+    root: Path,
+    folder: str,
+    *,
+    name: str,
+    description: str,
+    preferred_initial_actions: str = "",
+) -> Path:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
+    frontmatter = [
+        "---",
+        f"name: {name}",
+        f'description: "{description}"',
+    ]
+    if preferred_initial_actions:
+        frontmatter.append(f"preferred_initial_actions: {preferred_initial_actions}")
+    frontmatter.extend(["---", ""])
     (skill_dir / "SKILL.md").write_text(
         "\n".join(
-            [
-                "---",
-                f"name: {name}",
-                f'description: "{description}"',
-                "---",
-                "",
+            frontmatter
+            + [
                 f"# {name}",
                 "",
                 description,
@@ -669,6 +701,43 @@ def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
         item for item in timeline.json()["timeline"] if item["type"] == "run.capability"
     ]
     assert capability_events[-1]["skill_names"] == ["chart-maker"]
+
+
+def test_skill_preferred_initial_actions_bias_rule_bootstrap(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from local CSV files.",
+        preferred_initial_actions="list_files, read_file",
+    )
+    client = _client(
+        tmp_path,
+        execution_adapter=ChartWorkspaceDiscoveryExecutionAdapter(tmp_path),
+        settings_overrides={"APP_SKILL_PATHS": str(skill_root)},
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Generate a chart from local sales data and summarize it",
+            "mode": "supervised",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    assert [step["action_type"] for step in run["steps"]] == [
+        "list_files",
+        "read_file",
+        "extract",
+        "export",
+    ]
+    assert run["steps"][0]["metadata"]["skill_names"] == ["chart-maker"]
+    assert run["metadata"]["capability_state"]["skill_names"] == ["chart-maker"]
 
 
 def test_run_lifecycle_with_approval_and_promotion(tmp_path: Path) -> None:
