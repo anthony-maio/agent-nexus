@@ -77,3 +77,8 @@ class PendingApprovalItem(BaseModel):
     action_type: str
     instruction: str
     risk_tier: str
+
+
+class SkillAcquireRequest(BaseModel):
+    intent: str = Field(min_length=1, max_length=2000)
+    requirements: str = Field(default="", max_length=4000)

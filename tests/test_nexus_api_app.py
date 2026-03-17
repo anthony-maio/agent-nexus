@@ -560,6 +560,62 @@ def _write_skill(
     return skill_dir / "SKILL.md"
 
 
+def _write_fake_synthesis_project(root: Path) -> None:
+    package_dir = root / "synthesis"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "__init__.py").write_text(
+        "from .client import SynthesisClient\n",
+        encoding="utf-8",
+    )
+    (package_dir / "client.py").write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "",
+                "",
+                "class _Result:",
+                "    def __init__(self, payload):",
+                "        self._payload = payload",
+                "",
+                "    def to_dict(self):",
+                "        return dict(self._payload)",
+                "",
+                "",
+                "class SynthesisClient:",
+                "    def __init__(self, provider_type='mock', canonical_repo_path=None, host_root=None, **kwargs):",
+                "        _ = provider_type, canonical_repo_path, kwargs",
+                "        self.host_root = Path(host_root).expanduser()",
+                "        self.host_root.mkdir(parents=True, exist_ok=True)",
+                "",
+                "    async def acquire_skill(self, intent, requirements=''):",
+                "        skill_dir = self.host_root / 'synthesized-skill'",
+                "        skill_dir.mkdir(parents=True, exist_ok=True)",
+                "        (skill_dir / 'SKILL.md').write_text(",
+                "            '\\n'.join([",
+                "                '---',",
+                "                'name: synthesized-skill',",
+                "                'description: Acquired via fake Synthesis bridge.',",
+                "                '---',",
+                "                '',",
+                "                '# synthesized-skill',",
+                "                '',",
+                "                f'Intent: {intent}',",
+                "                f'Requirements: {requirements}',",
+                "            ]),",
+                "            encoding='utf-8',",
+                "        )",
+                "        return _Result({",
+                "            'success': True,",
+                "            'method': 'canonical_skill',",
+                "            'primary_skill': {'name': 'synthesized-skill'},",
+                "            'activation_message': 'Installed via fake Synthesis',",
+                "        })",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _client(
     tmp_path: Path,
     execution_adapter: FakeExecutionAdapter | None = None,
@@ -661,6 +717,44 @@ def test_list_skills_returns_discovered_runtime_skill_manifests(tmp_path: Path) 
     assert payload["items"][0]["description"] == "Generate charts from tabular data."
 
 
+def test_list_skills_includes_synthesis_host_and_canonical_roots(tmp_path: Path) -> None:
+    synthesis_root = tmp_path / "synthesis-project"
+    host_root = tmp_path / "installed-skills"
+    canonical_root = tmp_path / "canonical-skills"
+    _write_fake_synthesis_project(synthesis_root)
+    _write_skill(
+        host_root,
+        "local-helper",
+        name="local-helper",
+        description="Installed local skill from Synthesis host root.",
+    )
+    _write_skill(
+        canonical_root / "skills",
+        "canonical-helper",
+        name="canonical-helper",
+        description="Curated canonical skill from Synthesis repo.",
+    )
+
+    client = _client(
+        tmp_path,
+        settings_overrides={
+            "APP_ENABLE_SYNTHESIS": True,
+            "APP_SYNTHESIS_ROOT": str(synthesis_root),
+            "APP_SYNTHESIS_HOST_ROOT": str(host_root),
+            "APP_SYNTHESIS_CANONICAL_REPO_PATH": str(canonical_root),
+        },
+    )
+    headers = _auth_header(client)
+
+    response = client.get("/skills", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    names = {item["name"] for item in payload["items"]}
+    assert "local-helper" in names
+    assert "canonical-helper" in names
+
+
 def test_resolve_skills_returns_scored_runtime_matches(tmp_path: Path) -> None:
     skill_root = tmp_path / "skills"
     _write_skill(
@@ -694,6 +788,40 @@ def test_resolve_skills_returns_scored_runtime_matches(tmp_path: Path) -> None:
     assert payload["items"][0]["name"] == "chart-maker"
     assert payload["items"][0]["score"] > 0
     assert payload["items"][0]["preferred_initial_actions"] == ["list_files", "read_file"]
+
+
+def test_acquire_skill_uses_synthesis_bridge_and_refreshes_registry(tmp_path: Path) -> None:
+    synthesis_root = tmp_path / "synthesis-project"
+    host_root = tmp_path / "installed-skills"
+    _write_fake_synthesis_project(synthesis_root)
+    client = _client(
+        tmp_path,
+        settings_overrides={
+            "APP_ENABLE_SYNTHESIS": True,
+            "APP_SYNTHESIS_ROOT": str(synthesis_root),
+            "APP_SYNTHESIS_HOST_ROOT": str(host_root),
+        },
+    )
+    headers = _auth_header(client)
+
+    acquire = client.post(
+        "/skills/acquire",
+        headers=headers,
+        json={
+            "intent": "parse csv files",
+            "requirements": "Prefer reusable skill packages",
+        },
+    )
+
+    assert acquire.status_code == 200
+    payload = acquire.json()
+    assert payload["success"] is True
+    assert payload["primary_skill"]["name"] == "synthesized-skill"
+
+    listed = client.get("/skills", headers=headers)
+    assert listed.status_code == 200
+    names = {item["name"] for item in listed.json()["items"]}
+    assert "synthesized-skill" in names
 
 
 def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:

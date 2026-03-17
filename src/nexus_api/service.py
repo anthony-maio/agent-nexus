@@ -14,6 +14,7 @@ from nexus_api.config import ApiSettings
 from nexus_api.db import build_engine, build_session_factory
 from nexus_api.migrator import run_migrations
 from nexus_api.model_router import ModelProfile, parse_model_router_config
+from nexus_api.synthesis_bridge import SynthesisBridge, synthesis_skill_paths
 from nexus_core.events import RunEventBus
 from nexus_core.planner import (
     CompositeAdaptivePlanner,
@@ -35,6 +36,7 @@ class ApiContext:
     adaptive_planner: Any
     skill_registry: SkillRegistry
     capability_resolver: CapabilityResolver | None
+    synthesis_bridge: SynthesisBridge | None
 
 
 def build_model_adaptive_planner(settings: ApiSettings) -> Any | None:
@@ -150,10 +152,31 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
                 adaptive_planner = CompositeAdaptivePlanner([*model_planner.planners, rule_planner])
             else:
                 adaptive_planner = CompositeAdaptivePlanner([model_planner, rule_planner])
-    skill_registry = SkillRegistry(settings.skill_paths)
+    extra_skill_paths = (
+        synthesis_skill_paths(
+            host_root=settings.APP_SYNTHESIS_HOST_ROOT,
+            canonical_repo_path=settings.APP_SYNTHESIS_CANONICAL_REPO_PATH,
+        )
+        if settings.APP_ENABLE_SYNTHESIS
+        else []
+    )
+    skill_registry = SkillRegistry([*settings.skill_paths, *extra_skill_paths])
     capability_resolver = (
         CapabilityResolver(skill_registry, max_matches=settings.APP_SKILL_MAX_MATCHES)
         if settings.APP_ENABLE_SKILL_RESOLVER
+        else None
+    )
+    synthesis_bridge = (
+        SynthesisBridge.from_settings(
+            synthesis_root=settings.APP_SYNTHESIS_ROOT,
+            host_root=settings.APP_SYNTHESIS_HOST_ROOT,
+            canonical_repo_path=settings.APP_SYNTHESIS_CANONICAL_REPO_PATH,
+            provider_type=settings.APP_SYNTHESIS_PROVIDER_TYPE,
+            api_key=settings.APP_SYNTHESIS_API_KEY,
+            model=settings.APP_SYNTHESIS_MODEL,
+            base_url=settings.APP_SYNTHESIS_BASE_URL,
+        )
+        if settings.APP_ENABLE_SYNTHESIS
         else None
     )
     return ApiContext(
@@ -166,4 +189,5 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
         adaptive_planner=adaptive_planner,
         skill_registry=skill_registry,
         capability_resolver=capability_resolver,
+        synthesis_bridge=synthesis_bridge,
     )

@@ -30,6 +30,7 @@ from nexus_api.schemas import (
     RunCreateRequest,
     SessionCreateRequest,
     SessionCreateResponse,
+    SkillAcquireRequest,
 )
 from nexus_api.service import ApiContext, build_context
 from nexus_core.engine import RunEngine
@@ -129,6 +130,21 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         _ = user
         matches = [match.to_dict() for match in ctx.capability_resolver.resolve_matches(objective)]
         return {"objective": objective, "items": matches, "total": len(matches)}
+
+    @app.post("/skills/acquire")
+    async def acquire_skill(
+        request: SkillAcquireRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ) -> dict[str, Any]:
+        _ = user
+        if ctx.synthesis_bridge is None:
+            raise HTTPException(status_code=503, detail="Synthesis integration is not configured")
+        payload = await ctx.synthesis_bridge.acquire_skill(
+            intent=request.intent,
+            requirements=request.requirements,
+        )
+        ctx.skill_registry.refresh()
+        return payload
 
     @app.get("/bootstrap/status", response_model=BootstrapStatusResponse)
     def get_bootstrap_status() -> BootstrapStatusResponse:
