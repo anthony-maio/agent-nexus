@@ -121,6 +121,15 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         items = [manifest.to_dict() for manifest in ctx.skill_registry.list_manifests()]
         return {"items": items, "total": len(items)}
 
+    @app.get("/skills/resolve")
+    def resolve_skills(
+        objective: str = Query(default="", min_length=1, max_length=2000),
+        user: dict[str, Any] = Depends(current_user),
+    ) -> dict[str, Any]:
+        _ = user
+        matches = [match.to_dict() for match in ctx.capability_resolver.resolve_matches(objective)]
+        return {"objective": objective, "items": matches, "total": len(matches)}
+
     @app.get("/bootstrap/status", response_model=BootstrapStatusResponse)
     def get_bootstrap_status() -> BootstrapStatusResponse:
         return bootstrap_status(ctx.settings)

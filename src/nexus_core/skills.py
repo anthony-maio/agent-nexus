@@ -64,6 +64,19 @@ class SkillManifest:
         return payload
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityMatch:
+    """One scored skill match for an objective."""
+
+    manifest: SkillManifest
+    score: int
+
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = self.manifest.to_dict()
+        payload["score"] = self.score
+        return payload
+
+
 class SkillRegistry:
     """Discovers skills from configured roots."""
 
@@ -106,17 +119,20 @@ class CapabilityResolver:
         self.max_matches = max(1, min(int(max_matches), 8))
 
     def resolve(self, objective: str) -> list[SkillManifest]:
+        return [match.manifest for match in self.resolve_matches(objective)]
+
+    def resolve_matches(self, objective: str) -> list[CapabilityMatch]:
         objective_tokens = _tokenize(objective)
         if not objective_tokens:
             return []
 
-        scored: list[tuple[int, SkillManifest]] = []
+        scored: list[CapabilityMatch] = []
         for manifest in self.registry.list_manifests():
             score = _score_manifest(manifest, objective_tokens, objective)
             if score > 0:
-                scored.append((score, manifest))
-        scored.sort(key=lambda item: (-item[0], item[1].name.lower()))
-        return [manifest for _, manifest in scored[: self.max_matches]]
+                scored.append(CapabilityMatch(manifest=manifest, score=score))
+        scored.sort(key=lambda item: (-item.score, item.manifest.name.lower()))
+        return scored[: self.max_matches]
 
 
 def serialize_skill_context(

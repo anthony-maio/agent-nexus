@@ -661,6 +661,41 @@ def test_list_skills_returns_discovered_runtime_skill_manifests(tmp_path: Path) 
     assert payload["items"][0]["description"] == "Generate charts from tabular data."
 
 
+def test_resolve_skills_returns_scored_runtime_matches(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+        preferred_initial_actions="list_files, read_file",
+    )
+    _write_skill(
+        skill_root,
+        "browser-agent",
+        name="browser-agent",
+        description="Navigate websites and fill forms.",
+    )
+    client = _client(
+        tmp_path,
+        settings_overrides={"APP_SKILL_PATHS": str(skill_root)},
+    )
+    headers = _auth_header(client)
+
+    response = client.get(
+        "/skills/resolve",
+        headers=headers,
+        params={"objective": "Generate a chart from local sales data"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["objective"] == "Generate a chart from local sales data"
+    assert payload["items"][0]["name"] == "chart-maker"
+    assert payload["items"][0]["score"] > 0
+    assert payload["items"][0]["preferred_initial_actions"] == ["list_files", "read_file"]
+
+
 def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
     skill_root = tmp_path / "skills"
     _write_skill(

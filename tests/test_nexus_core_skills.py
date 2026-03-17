@@ -60,9 +60,12 @@ def test_skill_registry_discovers_manifests_and_resolves_relevant_skills(tmp_pat
 
     resolver = CapabilityResolver(registry, max_matches=2)
     resolved = resolver.resolve("Generate a chart from CSV sales data and summarize it")
+    matches = resolver.resolve_matches("Generate a chart from CSV sales data and summarize it")
 
     assert [skill.name for skill in resolved] == ["chart-maker"]
     assert resolved[0].description == "Generate charts and plots from CSV or tabular data."
+    assert matches[0].manifest.name == "chart-maker"
+    assert matches[0].score > 0
 
 
 def test_skill_registry_parses_preferred_initial_actions(tmp_path: Path) -> None:
