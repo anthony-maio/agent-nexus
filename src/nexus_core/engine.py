@@ -171,6 +171,10 @@ class RunEngine:
             parent_run_id=parent_run_id,
             delegation=delegation,
         )
+        await self._update_run_capability_state(
+            run["id"],
+            self._resolved_skills_for_objective(objective),
+        )
         await self._update_run_kernel_state(run["id"], phase="running")
         await self._publish(run["id"], "run.created", {"objective": objective})
         await self._execute_until_gate(run["id"])
@@ -818,6 +822,17 @@ class RunEngine:
         self.repo.merge_run_metadata(run_id, {"kernel_state": kernel_state})
         await self._publish(run_id, "run.kernel", kernel_state)
 
+    async def _update_run_capability_state(
+        self,
+        run_id: str,
+        resolved_skills: list[SkillManifest],
+    ) -> None:
+        capability_state = self._capability_state(resolved_skills)
+        if not capability_state:
+            return
+        self.repo.merge_run_metadata(run_id, {"capability_state": capability_state})
+        await self._publish(run_id, "run.capability", capability_state)
+
     @staticmethod
     def _step_event_payload(step: dict[str, Any], **extra: Any) -> dict[str, Any]:
         payload = {
@@ -873,6 +888,25 @@ class RunEngine:
         if self.capability_resolver is None:
             return []
         return self.capability_resolver.resolve(objective)
+
+    @staticmethod
+    def _capability_state(resolved_skills: list[SkillManifest]) -> dict[str, Any]:
+        if not resolved_skills:
+            return {}
+        resolved_payload = [
+            {
+                "name": skill.name,
+                "description": skill.description,
+                "path": skill.path,
+            }
+            for skill in resolved_skills
+        ]
+        return {
+            "skill_source": "capability_resolver",
+            "skill_names": [skill.name for skill in resolved_skills],
+            "resolved_skill_count": len(resolved_skills),
+            "resolved_skills": resolved_payload,
+        }
 
     def _autonomous_step_budget_reached(self, run_id: str) -> bool:
         executed_steps = 0
@@ -978,23 +1012,13 @@ class RunEngine:
         steps: list[StepDefinition],
         resolved_skills: list[SkillManifest],
     ) -> list[StepDefinition]:
-        if not resolved_skills:
+        capability_state = RunEngine._capability_state(resolved_skills)
+        if not capability_state:
             return steps
-        skill_names = [skill.name for skill in resolved_skills]
-        resolved_payload = [
-            {
-                "name": skill.name,
-                "description": skill.description,
-                "path": skill.path,
-            }
-            for skill in resolved_skills
-        ]
         annotated: list[StepDefinition] = []
         for step in steps:
             metadata = dict(step.metadata)
-            metadata["skill_source"] = "capability_resolver"
-            metadata["skill_names"] = skill_names
-            metadata["resolved_skills"] = resolved_payload
+            metadata.update(capability_state)
             annotated.append(
                 StepDefinition(
                     action_type=step.action_type,

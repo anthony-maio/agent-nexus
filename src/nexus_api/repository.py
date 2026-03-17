@@ -488,6 +488,15 @@ class SqlRunRepository:
                         **kernel_state,
                     }
                 )
+            capability_state = run_metadata.get("capability_state")
+            if isinstance(capability_state, dict) and capability_state:
+                events.append(
+                    {
+                        "type": "run.capability",
+                        "timestamp": run.get("updated_at") or run.get("created_at"),
+                        **capability_state,
+                    }
+                )
 
         for step in run["steps"]:
             metadata = step.get("metadata")

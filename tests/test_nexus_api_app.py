@@ -659,6 +659,16 @@ def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
     assert planner.calls[0][0]["name"] == "chart-maker"
     assert run["steps"][0]["metadata"]["skill_source"] == "capability_resolver"
     assert run["steps"][0]["metadata"]["skill_names"] == ["chart-maker"]
+    assert run["metadata"]["capability_state"]["skill_source"] == "capability_resolver"
+    assert run["metadata"]["capability_state"]["skill_names"] == ["chart-maker"]
+    assert run["metadata"]["capability_state"]["resolved_skill_count"] == 1
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    capability_events = [
+        item for item in timeline.json()["timeline"] if item["type"] == "run.capability"
+    ]
+    assert capability_events[-1]["skill_names"] == ["chart-maker"]
 
 
 def test_run_lifecycle_with_approval_and_promotion(tmp_path: Path) -> None:
