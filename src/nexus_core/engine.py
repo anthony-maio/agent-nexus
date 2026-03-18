@@ -231,6 +231,7 @@ class RunEngine:
                         completed_step=completed_step,
                         result=result,
                         existing_steps=existing_steps,
+                        skill_context=skill_context,
                     ),
                     planner_source="rule",
                     planner_phase="follow_up",
@@ -688,9 +689,11 @@ class RunEngine:
                 if self._has_pending_steps_after(completed_step, existing_steps)
                 else "stop"
             )
-            self.repo.merge_step_metadata(
-                completed_step["id"],
-                {"kernel_decision": decision},
+            await self._record_kernel_decision(
+                run["id"],
+                completed_step,
+                decision,
+                reason="existing_pending_steps" if decision == "continue" else "no_follow_up_needed",
             )
             return
 
@@ -707,9 +710,11 @@ class RunEngine:
                 if self._has_pending_steps_after(completed_step, self.repo.list_steps(run["id"]))
                 else "stop"
             )
-            self.repo.merge_step_metadata(
-                completed_step["id"],
-                {"kernel_decision": decision},
+            await self._record_kernel_decision(
+                run["id"],
+                completed_step,
+                decision,
+                reason="no_follow_up_steps",
             )
             return
 
@@ -728,9 +733,11 @@ class RunEngine:
             },
         )
         if gated_follow_up_step is not None:
-            self.repo.merge_step_metadata(
-                completed_step["id"],
-                {"kernel_decision": "await_approval"},
+            await self._record_kernel_decision(
+                run["id"],
+                completed_step,
+                "await_approval",
+                reason="high_risk_follow_up",
             )
             self.repo.mark_step_status(gated_follow_up_step["id"], StepStatus.PENDING_APPROVAL.value)
             self.repo.mark_run_status(run["id"], RunStatus.PENDING_APPROVAL.value)
@@ -747,9 +754,11 @@ class RunEngine:
                 self._step_event_payload(gated_follow_up_step, step_id=gated_follow_up_step["id"]),
             )
             return
-        self.repo.merge_step_metadata(
-            completed_step["id"],
-            {"kernel_decision": "continue"},
+        await self._record_kernel_decision(
+            run["id"],
+            completed_step,
+            "continue",
+            reason="follow_up_inserted",
         )
 
     async def _mark_run_failed(self, run_id: str, step_id: str) -> None:
@@ -780,6 +789,12 @@ class RunEngine:
         if run is None:
             return
         steps = run.get("steps") if isinstance(run.get("steps"), list) else []
+        metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+        capability_state = (
+            metadata.get("capability_state")
+            if isinstance(metadata.get("capability_state"), dict)
+            else {}
+        )
         completed_step_count = sum(
             1 for step in steps if str(step.get("status", "")) == StepStatus.COMPLETED.value
         )
@@ -816,6 +831,14 @@ class RunEngine:
         }
         if current_step_id:
             kernel_state["current_step_id"] = current_step_id
+        kernel_state.update(
+            self._kernel_strategy_snapshot(
+                objective=str(run.get("objective", "")),
+                phase=phase,
+                steps=steps,
+                capability_state=capability_state,
+            )
+        )
         normalized_failure_reason = failure_reason.strip()
         if normalized_failure_reason:
             kernel_state["failure_reason"] = normalized_failure_reason
@@ -898,6 +921,8 @@ class RunEngine:
                 "name": skill.name,
                 "description": skill.description,
                 "path": skill.path,
+                "preferred_initial_actions": list(skill.preferred_initial_actions),
+                "preferred_follow_up_actions": list(skill.preferred_follow_up_actions),
             }
             for skill in resolved_skills
         ]
@@ -907,6 +932,138 @@ class RunEngine:
             "resolved_skill_count": len(resolved_skills),
             "resolved_skills": resolved_payload,
         }
+
+    async def _record_kernel_decision(
+        self,
+        run_id: str,
+        completed_step: dict[str, Any],
+        decision: str,
+        *,
+        reason: str = "",
+    ) -> None:
+        metadata = {"kernel_decision": decision}
+        if reason.strip():
+            metadata["kernel_decision_reason"] = reason.strip()
+        self.repo.merge_step_metadata(completed_step["id"], metadata)
+        payload = self._step_event_payload(
+            self.repo.get_step(completed_step["id"]) or completed_step,
+            decision=decision,
+        )
+        if reason.strip():
+            payload["reason"] = reason.strip()
+        await self._publish(run_id, "kernel.decision", payload)
+
+    @staticmethod
+    def _kernel_strategy_snapshot(
+        *,
+        objective: str,
+        phase: str,
+        steps: list[dict[str, Any]],
+        capability_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        strategy = RunEngine._strategy_for_objective(objective)
+        current_step = next(
+            (
+                step
+                for step in steps
+                if str(step.get("status", "")) in {
+                    StepStatus.RUNNING.value,
+                    StepStatus.PENDING_APPROVAL.value,
+                    StepStatus.PENDING.value,
+                }
+            ),
+            None,
+        )
+        last_completed_step = next(
+            (
+                step
+                for step in reversed(steps)
+                if str(step.get("status", "")) == StepStatus.COMPLETED.value
+            ),
+            None,
+        )
+        tactic = "idle"
+        tactic_reason = ""
+        if current_step is not None:
+            tactic = RunEngine._tactic_for_action(str(current_step.get("action_type", "")))
+            tactic_reason = (
+                f"Current step is {str(current_step.get('action_type', '')).strip().lower()}."
+            )
+        elif last_completed_step is not None:
+            last_action = str(last_completed_step.get("action_type", "")).strip().lower()
+            last_metadata = (
+                last_completed_step.get("metadata")
+                if isinstance(last_completed_step.get("metadata"), dict)
+                else {}
+            )
+            decision = str(last_metadata.get("kernel_decision", "")).strip().lower()
+            tactic = RunEngine._tactic_after_decision(last_action, decision)
+            if decision:
+                tactic_reason = f"Last completed step decided to {decision.replace('_', ' ')}."
+            elif last_action:
+                tactic_reason = f"Last completed step was {last_action}."
+        if phase == "awaiting_approval":
+            tactic = "approval"
+            tactic_reason = "Kernel is waiting for approval before continuing."
+        elif phase == "completed":
+            tactic = "done"
+            tactic_reason = "Run has no remaining pending work."
+        elif phase == "failed":
+            tactic = "blocked"
+            tactic_reason = "Run failed and needs intervention or retry."
+        snapshot: dict[str, Any] = {
+            "strategy": strategy,
+            "tactic": tactic,
+        }
+        if tactic_reason:
+            snapshot["tactic_reason"] = tactic_reason
+        skill_names = capability_state.get("skill_names")
+        if isinstance(skill_names, list) and skill_names:
+            snapshot["skill_names"] = [str(name) for name in skill_names]
+        return snapshot
+
+    @staticmethod
+    def _strategy_for_objective(objective: str) -> str:
+        lowered = objective.lower()
+        if any(token in lowered for token in ("fix", "implement", "refactor", "repo", "codebase", "test")):
+            return "coding"
+        if any(token in lowered for token in ("api", "endpoint", "webhook", "http request")):
+            return "api"
+        if any(token in lowered for token in ("image", "illustration", "graphic", "poster", "hero image")):
+            return "image"
+        if any(token in lowered for token in ("chart", "graph", "plot", "report", "brief", "memo")):
+            return "artifact"
+        if "http://" in lowered or "https://" in lowered or any(
+            token in lowered
+            for token in ("submit", "fill out", "apply", "register", "book", "checkout", "form")
+        ):
+            return "workflow"
+        return "research"
+
+    @staticmethod
+    def _tactic_for_action(action_type: str) -> str:
+        action = action_type.strip().lower()
+        if action in {"search_web", "fetch_url", "navigate", "inspect", "list_files", "read_file", "call_api"}:
+            return "observe"
+        if action in {"extract", "read", "generate_report", "generate_chart", "generate_image", "export"}:
+            return "synthesize"
+        if action in {"execute_code", "write_file", "edit_file", "type", "click", "submit", "write"}:
+            return "act"
+        if action in {"wait", "scroll"}:
+            return "stabilize"
+        if action == "delegate":
+            return "delegate"
+        return "act"
+
+    @staticmethod
+    def _tactic_after_decision(action_type: str, decision: str) -> str:
+        if decision == "await_approval":
+            return "approval"
+        if decision == "stop":
+            return "done"
+        if decision == "continue":
+            return RunEngine._tactic_for_action(action_type)
+        return "review"
 
     def _autonomous_step_budget_reached(self, run_id: str) -> bool:
         executed_steps = 0

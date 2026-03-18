@@ -100,6 +100,26 @@ function formatSkillSentence(source, skillNames) {
   return `Using ${names.join(", ")}.`;
 }
 
+function formatKernelStrategyDetail(event) {
+  const strategy = typeof event?.strategy === "string" ? event.strategy : "";
+  const tactic = typeof event?.tactic === "string" ? event.tactic : "";
+  const reason = typeof event?.tactic_reason === "string" ? event.tactic_reason : "";
+  if (!strategy && !tactic && !reason) {
+    return "";
+  }
+  const parts = [];
+  if (strategy) {
+    parts.push(`Strategy: ${strategy.replaceAll("_", "-")}.`);
+  }
+  if (tactic) {
+    parts.push(`Tactic: ${tactic.replaceAll("_", "-")}.`);
+  }
+  if (reason) {
+    parts.push(reason);
+  }
+  return parts.join(" ");
+}
+
 function buildTranscriptDetails(step) {
   const metadata = step?.metadata && typeof step.metadata === "object" ? step.metadata : {};
   const payload = parseInstructionPayload(step?.instruction);
@@ -149,6 +169,9 @@ function buildTranscriptDetails(step) {
   }
   if (Array.isArray(metadata.skill_names) && metadata.skill_names.length) {
     details.push({ label: "Skills", value: metadata.skill_names.join(", ") });
+  }
+  if (typeof metadata.kernel_decision_reason === "string" && metadata.kernel_decision_reason) {
+    details.push({ label: "Kernel", value: metadata.kernel_decision_reason.replaceAll("_", " ") });
   }
 
   return details;
@@ -209,6 +232,28 @@ function summarizeTimelineEvent(event) {
       tone: "info",
       detail: instruction || "Planner selected the next step.",
       plannerDetail,
+      skillDetail
+    };
+  }
+  if (type === "kernel.decision") {
+    const decision = typeof event?.decision === "string" ? event.decision : "continue";
+    const reason = typeof event?.reason === "string" ? event.reason : "";
+    return {
+      label: "Kernel decision",
+      tone: decision === "stop" ? "success" : decision === "await_approval" ? "pending" : "info",
+      detail: reason
+        ? `Kernel chose to ${decision.replaceAll("_", "-")} because ${reason.replaceAll("_", " ")}.`
+        : `Kernel chose to ${decision.replaceAll("_", "-")}.`,
+      plannerDetail,
+      skillDetail
+    };
+  }
+  if (type === "run.kernel") {
+    return {
+      label: "Kernel state",
+      tone: event?.phase === "failed" ? "danger" : event?.phase === "completed" ? "success" : "info",
+      detail: `Run phase is ${String(event?.phase || "running").replaceAll("_", "-")}.`,
+      plannerDetail: formatKernelStrategyDetail(event),
       skillDetail
     };
   }

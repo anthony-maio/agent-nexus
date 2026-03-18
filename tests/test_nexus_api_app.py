@@ -1306,6 +1306,34 @@ def test_default_research_run_timeline_includes_planner_decision_events(tmp_path
     assert run_kernel_events[-1]["pending_step_count"] == 1
 
 
+def test_run_kernel_state_includes_strategy_and_tactic(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Implement the payment retry backoff fix in the repo and update tests",
+            "mode": "supervised",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+
+    kernel_state = run["metadata"]["kernel_state"]
+    assert kernel_state["strategy"] == "coding"
+    assert kernel_state["tactic"] in {"observe", "approval", "done", "synthesize", "act"}
+    assert "tactic_reason" in kernel_state
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    kernel_events = [item for item in timeline.json()["timeline"] if item["type"] == "kernel.decision"]
+    assert kernel_events
+    assert kernel_events[0]["kernel_decision"] in {"continue", "stop", "await_approval"}
+
+
 def test_default_workflow_run_gates_on_first_autonomous_write_action(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

@@ -50,6 +50,7 @@ class SkillManifest:
     path: str
     guidance: str = ""
     preferred_initial_actions: tuple[str, ...] = ()
+    preferred_follow_up_actions: tuple[str, ...] = ()
 
     def to_dict(self, *, include_guidance: bool = False, guidance_limit: int = 600) -> dict[str, str]:
         payload = {
@@ -59,6 +60,8 @@ class SkillManifest:
         }
         if self.preferred_initial_actions:
             payload["preferred_initial_actions"] = list(self.preferred_initial_actions)
+        if self.preferred_follow_up_actions:
+            payload["preferred_follow_up_actions"] = list(self.preferred_follow_up_actions)
         if include_guidance and self.guidance:
             payload["guidance_excerpt"] = self.guidance[:guidance_limit].strip()
         return payload
@@ -192,6 +195,9 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
         guidance=guidance,
         preferred_initial_actions=_parse_action_list(
             str(frontmatter.get("preferred_initial_actions", ""))
+        ),
+        preferred_follow_up_actions=_parse_action_list(
+            str(frontmatter.get("preferred_follow_up_actions", ""))
         ),
     )
 

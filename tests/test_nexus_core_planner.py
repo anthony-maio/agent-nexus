@@ -71,7 +71,29 @@ def test_plan_steps_for_objective_uses_skill_preferred_initial_action() -> None:
     )
 
     assert [step.action_type for step in steps] == ["list_files"]
-    assert steps[0].instruction == '{"path": "."}'
+
+
+def test_plan_follow_up_steps_uses_skill_preferred_follow_up_action() -> None:
+    steps = plan_follow_up_steps(
+        objective="Review payments API findings and package the result",
+        completed_step=_step(2, "extract"),
+        result=StepExecutionResult(
+            output_text="grounded findings gathered",
+            citations=[CitationRecord(url="https://example.com", title="Example", snippet="ok")],
+        ),
+        existing_steps=[_step(0, "search_web"), _step(1, "fetch_url"), _step(2, "extract")],
+        skill_context=[
+            {
+                "name": "report-maker",
+                "description": "Produce polished reports from gathered findings.",
+                "path": "skills/report-maker/SKILL.md",
+                "preferred_follow_up_actions": ["generate_report", "export"],
+            }
+        ],
+    )
+
+    assert [step.action_type for step in steps] == ["generate_report"]
+    assert '"path": "reports/' in steps[0].instruction
 
 
 def test_plan_follow_up_steps_workflow_inspect_without_inputs_falls_back_to_extract() -> None:

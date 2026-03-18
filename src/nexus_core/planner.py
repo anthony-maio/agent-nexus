@@ -257,6 +257,7 @@ def plan_follow_up_steps(
     completed_step: dict[str, Any],
     result: StepExecutionResult,
     existing_steps: list[dict[str, Any]],
+    skill_context: list[dict[str, Any]] | None = None,
 ) -> list[StepDefinition]:
     """Return dynamic follow-up steps based on execution result."""
     metadata_steps = _metadata_follow_up_steps(result)
@@ -269,7 +270,12 @@ def plan_follow_up_steps(
         top_url = _top_result_url(result)
         if not top_url:
             return []
-        next_action = "navigate" if _looks_like_workflow(objective) else "fetch_url"
+        next_action = _preferred_follow_up_action_from_skills(
+            skill_context,
+            allowed={"navigate", "fetch_url"},
+        )
+        if not next_action:
+            next_action = "navigate" if _looks_like_workflow(objective) else "fetch_url"
         return [
             StepDefinition(
                 action_type=next_action,
@@ -361,7 +367,12 @@ def plan_follow_up_steps(
         ]
 
     if action in {"fetch_url", "navigate", "call_api"}:
-        next_action = "inspect" if _looks_like_workflow(objective) else "extract"
+        next_action = _preferred_follow_up_action_from_skills(
+            skill_context,
+            allowed={"inspect", "extract"},
+        )
+        if not next_action:
+            next_action = "inspect" if _looks_like_workflow(objective) else "extract"
         if _has_action_after(existing_steps, step_index, next_action):
             return []
         instruction = (
@@ -473,6 +484,49 @@ def plan_follow_up_steps(
                 StepDefinition(
                     action_type="submit",
                     instruction=instruction,
+                )
+            ]
+        preferred_artifact_action = _preferred_follow_up_action_from_skills(
+            skill_context,
+            allowed={"generate_report", "generate_chart", "generate_image", "export"},
+        )
+        if preferred_artifact_action == "generate_chart":
+            chart_payload = _chart_instruction_payload(objective, result)
+            if (
+                chart_payload
+                and not _has_action_after(existing_steps, step_index, "generate_chart")
+            ):
+                return [
+                    StepDefinition(
+                        action_type="generate_chart",
+                        instruction=json.dumps(chart_payload),
+                    )
+                ]
+        if preferred_artifact_action == "generate_image" and not _has_action_after(
+            existing_steps, step_index, "generate_image"
+        ):
+            return [
+                StepDefinition(
+                    action_type="generate_image",
+                    instruction=_image_instruction_payload(objective, result),
+                )
+            ]
+        if preferred_artifact_action == "generate_report" and not _has_action_after(
+            existing_steps, step_index, "generate_report"
+        ):
+            return [
+                StepDefinition(
+                    action_type="generate_report",
+                    instruction=json.dumps(_report_instruction_payload(objective, result)),
+                )
+            ]
+        if preferred_artifact_action == "export" and not _has_action_after(
+            existing_steps, step_index, "export"
+        ):
+            return [
+                StepDefinition(
+                    action_type="export",
+                    instruction=f"Export the grounded findings for: {objective}",
                 )
             ]
         if _wants_chart_artifact(objective):
@@ -912,6 +966,30 @@ def _preferred_initial_action_from_skills(
             action = str(raw_action).strip().lower()
             if action in _ALLOWED_INITIAL_ACTIONS:
                 return action
+    return ""
+
+
+def _preferred_follow_up_action_from_skills(
+    skill_context: list[dict[str, Any]] | None,
+    *,
+    allowed: set[str] | frozenset[str] | None = None,
+) -> str:
+    if not isinstance(skill_context, list):
+        return ""
+    normalized_allowed = {item.strip().lower() for item in (allowed or set()) if item}
+    for skill in skill_context:
+        if not isinstance(skill, dict):
+            continue
+        raw_actions = skill.get("preferred_follow_up_actions")
+        if not isinstance(raw_actions, list):
+            continue
+        for raw_action in raw_actions:
+            action = str(raw_action).strip().lower()
+            if not action:
+                continue
+            if normalized_allowed and action not in normalized_allowed:
+                continue
+            return action
     return ""
 
 
