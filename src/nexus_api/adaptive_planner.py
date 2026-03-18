@@ -46,6 +46,7 @@ class ChatCompletionsAdaptivePlanner:
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         if not self.model:
             return []
@@ -73,6 +74,8 @@ class ChatCompletionsAdaptivePlanner:
             }
             if skill_context:
                 payload["resolved_skills"] = skill_context
+            if kernel_context:
+                payload["kernel_context"] = kernel_context
             parsed = await self._request_plan(
                 prompt=(
                     "Return strict JSON with shape "
@@ -81,6 +84,7 @@ class ChatCompletionsAdaptivePlanner:
                     "Use only low-risk starting actions that gather context or open the correct page/file. "
                     "Prefer workspace read tools when the objective references local files. "
                     "When resolved_skills are present, follow their guidance before improvising a toolchain. "
+                    "When kernel_context is present, align the bootstrap step with its strategy and tactic. "
                     'For list_files/read_file use instruction payload {"path":"..."} as a JSON string or JSON object. '
                     "No prose."
                 ),
@@ -145,6 +149,8 @@ class ChatCompletionsAdaptivePlanner:
         }
         if skill_context:
             payload["resolved_skills"] = skill_context
+        if kernel_context:
+            payload["kernel_context"] = kernel_context
         parsed = await self._request_plan(
             prompt=(
                 "Return strict JSON with shape "
@@ -159,6 +165,7 @@ class ChatCompletionsAdaptivePlanner:
                 'For generate_report use instruction payload {"path":"reports/...md","title":"...","sources":[...]}. '
                 'For generate_chart use instruction payload {"path":"charts/...html","chart_type":"bar","title":"...","x_key":"...","y_key":"...","data":[...]}. '
                 'For generate_image use instruction payload {"path":"images/...svg","title":"...","prompt":"...","sources":[...]}. '
+                "When kernel_context is present, follow its current strategy and tactic unless grounded evidence requires changing course. "
                 "When metadata includes page_affordances, use those grounded inputs, buttons, and links instead of generic UI guesses. "
                 "When metadata includes command_failed or a non-zero exit_code, treat that as diagnostic evidence and inspect or edit the referenced code path instead of repeating the same command blindly."
             ),
@@ -178,12 +185,14 @@ class ChatCompletionsAdaptivePlanner:
         objective: str,
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
     async def propose_follow_up(
@@ -193,6 +202,7 @@ class ChatCompletionsAdaptivePlanner:
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -201,6 +211,7 @@ class ChatCompletionsAdaptivePlanner:
             completed_step=completed_step,
             result=result,
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
     async def _request_plan(
@@ -299,6 +310,7 @@ class RuleFallbackAdaptivePlanner:
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await request_next_steps(
             self.planner,
@@ -308,6 +320,7 @@ class RuleFallbackAdaptivePlanner:
             completed_step=completed_step,
             result=result,
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
     async def plan_initial_steps(
@@ -315,12 +328,14 @@ class RuleFallbackAdaptivePlanner:
         objective: str,
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
     async def propose_follow_up(
@@ -330,6 +345,7 @@ class RuleFallbackAdaptivePlanner:
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -338,6 +354,7 @@ class RuleFallbackAdaptivePlanner:
             completed_step=completed_step,
             result=result,
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
 

@@ -188,6 +188,7 @@ class RunEngine:
         existing_steps: list[dict[str, Any]],
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         resolved_skills = self._resolved_skills_for_objective(objective)
         skill_context = serialize_skill_context(resolved_skills)
@@ -199,6 +200,7 @@ class RunEngine:
             completed_step=completed_step,
             result=result,
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
         if completed_step is None or result is None:
             planned = apply_initial_plan_policy(proposed, mode=mode)
@@ -703,6 +705,7 @@ class RunEngine:
             existing_steps=existing_steps,
             completed_step=completed_step,
             result=result,
+            kernel_context=self._current_kernel_context(run),
         )
         if not follow_up_steps:
             decision = (
@@ -844,6 +847,14 @@ class RunEngine:
             kernel_state["failure_reason"] = normalized_failure_reason
         self.repo.merge_run_metadata(run_id, {"kernel_state": kernel_state})
         await self._publish(run_id, "run.kernel", kernel_state)
+
+    @staticmethod
+    def _current_kernel_context(run: dict[str, Any]) -> dict[str, Any]:
+        metadata = run.get("metadata")
+        if not isinstance(metadata, dict):
+            return {}
+        kernel_state = metadata.get("kernel_state")
+        return kernel_state if isinstance(kernel_state, dict) else {}
 
     async def _update_run_capability_state(
         self,

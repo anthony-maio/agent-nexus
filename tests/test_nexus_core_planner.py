@@ -96,6 +96,21 @@ def test_plan_follow_up_steps_uses_skill_preferred_follow_up_action() -> None:
     assert '"path": "reports/' in steps[0].instruction
 
 
+def test_plan_follow_up_steps_uses_kernel_strategy_for_ambiguous_workflow_context() -> None:
+    steps = plan_follow_up_steps(
+        objective="Continue the operator task",
+        completed_step=_step(1, "fetch_url"),
+        result=StepExecutionResult(
+            output_text="page loaded",
+            citations=[CitationRecord(url="https://example.com", title="Example", snippet="ok")],
+        ),
+        existing_steps=[_step(0, "search_web"), _step(1, "fetch_url")],
+        kernel_context={"strategy": "workflow", "tactic": "observe"},
+    )
+
+    assert [step.action_type for step in steps] == ["inspect"]
+
+
 def test_plan_follow_up_steps_workflow_inspect_without_inputs_falls_back_to_extract() -> None:
     objective = "Fill out the signup form at https://example.com/register"
 
@@ -434,19 +449,20 @@ async def test_request_next_steps_supports_unified_planner_contract() -> None:
             existing_steps: list[dict[str, Any]],
             completed_step: dict[str, Any] | None = None,
             result: StepExecutionResult | None = None,
+            kernel_context: dict[str, Any] | None = None,
         ) -> list[StepDefinition]:
             _ = mode, existing_steps
             if completed_step is None or result is None:
                 return [
                     StepDefinition(
                         action_type="search_web",
-                        instruction=f"bootstrap {objective}",
+                        instruction=f"bootstrap {objective} {kernel_context['strategy']}",
                     )
                 ]
             return [
                 StepDefinition(
                     action_type="extract",
-                    instruction=f"follow up {objective}",
+                    instruction=f"follow up {objective} {kernel_context['tactic']}",
                 )
             ]
 
@@ -457,6 +473,7 @@ async def test_request_next_steps_supports_unified_planner_contract() -> None:
         objective="Research grounded browser runtime docs",
         mode=RunMode.SUPERVISED,
         existing_steps=[],
+        kernel_context={"strategy": "research"},
     )
     follow_up_steps = await request_next_steps(
         planner,
@@ -465,10 +482,13 @@ async def test_request_next_steps_supports_unified_planner_contract() -> None:
         existing_steps=[_step(0, "search_web")],
         completed_step=_step(0, "search_web"),
         result=StepExecutionResult(output_text="search complete"),
+        kernel_context={"tactic": "observe"},
     )
 
     assert [step.action_type for step in initial_steps] == ["search_web"]
+    assert "research" in initial_steps[0].instruction
     assert [step.action_type for step in follow_up_steps] == ["extract"]
+    assert "observe" in follow_up_steps[0].instruction
 
 
 @pytest.mark.asyncio

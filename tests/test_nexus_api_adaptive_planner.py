@@ -119,6 +119,7 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
                 "path": "/skills/browser-agent/SKILL.md",
             }
         ],
+        kernel_context={"strategy": "workflow", "tactic": "observe"},
     )
 
     assert steps
@@ -143,6 +144,8 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     completed_payload = payload["completed_step"]
     assert payload["resolved_skills"][0]["name"] == "browser-agent"
     assert payload["resolved_skills"][0]["path"] == "/skills/browser-agent/SKILL.md"
+    assert payload["kernel_context"]["strategy"] == "workflow"
+    assert payload["kernel_context"]["tactic"] == "observe"
     assert completed_payload["citations"][0]["url"] == "https://docs.example.org/start"
     assert completed_payload["metadata"]["current_url"] == "https://docs.example.org/start"
     assert completed_payload["metadata"]["command_failed"] is True

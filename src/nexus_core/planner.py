@@ -258,6 +258,7 @@ def plan_follow_up_steps(
     result: StepExecutionResult,
     existing_steps: list[dict[str, Any]],
     skill_context: list[dict[str, Any]] | None = None,
+    kernel_context: dict[str, Any] | None = None,
 ) -> list[StepDefinition]:
     """Return dynamic follow-up steps based on execution result."""
     metadata_steps = _metadata_follow_up_steps(result)
@@ -270,7 +271,10 @@ def plan_follow_up_steps(
         top_url = _top_result_url(result)
         if not top_url:
             return []
-        next_action = _preferred_follow_up_action_from_skills(
+        next_action = _preferred_follow_up_action_from_kernel(
+            kernel_context,
+            allowed={"navigate", "fetch_url"},
+        ) or _preferred_follow_up_action_from_skills(
             skill_context,
             allowed={"navigate", "fetch_url"},
         )
@@ -367,7 +371,10 @@ def plan_follow_up_steps(
         ]
 
     if action in {"fetch_url", "navigate", "call_api"}:
-        next_action = _preferred_follow_up_action_from_skills(
+        next_action = _preferred_follow_up_action_from_kernel(
+            kernel_context,
+            allowed={"inspect", "extract"},
+        ) or _preferred_follow_up_action_from_skills(
             skill_context,
             allowed={"inspect", "extract"},
         )
@@ -623,6 +630,7 @@ class AdaptivePlanner(Protocol):
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         """Return the next steps for either bootstrap or follow-up planning."""
 
@@ -631,6 +639,7 @@ class AdaptivePlanner(Protocol):
         objective: str,
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         """Return the initial bootstrap steps for a run."""
 
@@ -641,6 +650,7 @@ class AdaptivePlanner(Protocol):
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         """Return proposed follow-up steps for current run context."""
 
@@ -654,6 +664,7 @@ async def request_next_steps(
     completed_step: dict[str, Any] | None = None,
     result: StepExecutionResult | None = None,
     skill_context: list[dict[str, str]] | None = None,
+    kernel_context: dict[str, Any] | None = None,
 ) -> list[StepDefinition]:
     """Dispatch to the planner's shared next-step contract when available."""
 
@@ -666,6 +677,7 @@ async def request_next_steps(
             completed_step=completed_step,
             result=result,
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
     if completed_step is None or result is None:
         return await _call_planner_method(
@@ -673,6 +685,7 @@ async def request_next_steps(
             objective=objective,
             mode=mode,
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
     return await _call_planner_method(
         planner.propose_follow_up,
@@ -681,6 +694,7 @@ async def request_next_steps(
         result=result,
         existing_steps=existing_steps,
         skill_context=skill_context,
+        kernel_context=kernel_context,
     )
 
 
@@ -707,6 +721,7 @@ class RuleAdaptivePlanner:
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         _ = mode
         if completed_step is None or result is None:
@@ -721,6 +736,8 @@ class RuleAdaptivePlanner:
                 completed_step=completed_step,
                 result=result,
                 existing_steps=existing_steps,
+                skill_context=skill_context,
+                kernel_context=kernel_context,
             ),
             planner_source="rule",
             planner_phase="follow_up",
@@ -731,12 +748,14 @@ class RuleAdaptivePlanner:
         objective: str,
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
     async def propose_follow_up(
@@ -746,6 +765,7 @@ class RuleAdaptivePlanner:
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -754,6 +774,7 @@ class RuleAdaptivePlanner:
             completed_step=completed_step,
             result=result,
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
 
@@ -769,6 +790,7 @@ class CompositeAdaptivePlanner:
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         fallback_reason = ""
         for planner in self.planners:
@@ -781,6 +803,7 @@ class CompositeAdaptivePlanner:
                     completed_step=completed_step,
                     result=result,
                     skill_context=skill_context,
+                    kernel_context=kernel_context,
                 )
             except Exception as exc:
                 log.warning("Adaptive planner failed (%s): %s", type(planner).__name__, exc)
@@ -801,12 +824,14 @@ class CompositeAdaptivePlanner:
         objective: str,
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
     async def propose_follow_up(
@@ -816,6 +841,7 @@ class CompositeAdaptivePlanner:
         result: StepExecutionResult,
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -824,6 +850,7 @@ class CompositeAdaptivePlanner:
             completed_step=completed_step,
             result=result,
             skill_context=skill_context,
+            kernel_context=kernel_context,
         )
 
 
@@ -990,6 +1017,36 @@ def _preferred_follow_up_action_from_skills(
             if normalized_allowed and action not in normalized_allowed:
                 continue
             return action
+    return ""
+
+
+def _preferred_follow_up_action_from_kernel(
+    kernel_context: dict[str, Any] | None,
+    *,
+    allowed: set[str] | frozenset[str] | None = None,
+) -> str:
+    if not isinstance(kernel_context, dict):
+        return ""
+    strategy = str(kernel_context.get("strategy", "")).strip().lower()
+    preferences: list[str] = []
+    if strategy == "workflow":
+        preferences.extend(["inspect", "navigate", "submit"])
+    elif strategy == "coding":
+        preferences.extend(["read_file", "execute_code", "extract"])
+    elif strategy == "api":
+        preferences.extend(["extract", "inspect"])
+    else:
+        preferences.extend(["fetch_url", "extract", "inspect"])
+    normalized_allowed = {item.strip().lower() for item in (allowed or set()) if item}
+    seen: set[str] = set()
+    for action in preferences:
+        normalized = action.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        if normalized_allowed and normalized not in normalized_allowed:
+            continue
+        return normalized
     return ""
 
 
