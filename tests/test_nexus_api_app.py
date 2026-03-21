@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import weakref
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -269,6 +271,18 @@ class MultiStepInitialPlanner:
             result=result,
             existing_steps=existing_steps,
         )
+
+
+class NoFollowUpPlanner:
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, str],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, str]],
+    ) -> list[StepDefinition]:
+        _ = objective, completed_step, result, existing_steps
+        return []
 
 
 class SkillAwarePlanner:
@@ -616,6 +630,25 @@ def _write_fake_synthesis_project(root: Path) -> None:
     )
 
 
+class ManagedTestClient(TestClient):
+    def __init__(self, app: FastAPI, cleanup: callable | None = None) -> None:
+        super().__init__(app)
+        self._nexus_cleanup = cleanup
+        self._nexus_cleanup_finalizer = weakref.finalize(self, cleanup) if cleanup else None
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            cleanup = self._nexus_cleanup
+            self._nexus_cleanup = None
+            if cleanup is not None:
+                cleanup()
+            finalizer = getattr(self, "_nexus_cleanup_finalizer", None)
+            if finalizer is not None and finalizer.alive:
+                finalizer.detach()
+
+
 def _client(
     tmp_path: Path,
     execution_adapter: FakeExecutionAdapter | None = None,
@@ -635,7 +668,7 @@ def _client(
     settings = ApiSettings(**settings_payload)
     ctx = _build_test_context(settings)
     ctx.execution_adapter = execution_adapter or FakeExecutionAdapter(tmp_path)
-    return TestClient(create_app(ctx))
+    return ManagedTestClient(create_app(ctx), cleanup=ctx.db_engine.dispose)
 
 
 def _client_with_planner(
@@ -659,7 +692,7 @@ def _client_with_planner(
     ctx = _build_test_context(settings)
     ctx.execution_adapter = execution_adapter or FakeExecutionAdapter(tmp_path)
     ctx.adaptive_planner = adaptive_planner
-    return TestClient(create_app(ctx))
+    return ManagedTestClient(create_app(ctx), cleanup=ctx.db_engine.dispose)
 
 
 def _auth_header(client: TestClient) -> dict[str, str]:
@@ -693,6 +726,86 @@ def test_client_helpers_reuse_migrated_template_database(
     second_client.close()
 
     assert len(migration_calls) == 1
+
+
+def test_create_app_disposes_db_engine_on_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    disposed = False
+
+    class FakeSession:
+        def __enter__(self) -> FakeSession:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            _ = exc_type, exc, tb
+            self.close()
+
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeSessionFactory:
+        def __call__(self) -> FakeSession:
+            return FakeSession()
+
+    class FakeEngine:
+        def dispose(self) -> None:
+            nonlocal disposed
+            disposed = True
+
+    monkeypatch.setattr("nexus_api.app.ensure_admin_user", lambda *args, **kwargs: None)
+
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret"),
+        session_factory=FakeSessionFactory(),
+        db_engine=FakeEngine(),
+        skill_registry=SimpleNamespace(list_manifests=lambda: []),
+        capability_resolver=SimpleNamespace(resolve_matches=lambda _: []),
+        synthesis_bridge=None,
+        execution_adapter=object(),
+        interaction_adapter=object(),
+        events=SimpleNamespace(subscribe=lambda _: None, unsubscribe=lambda *_: None),
+        adaptive_planner=object(),
+    )
+
+    with TestClient(create_app(ctx)):
+        pass
+
+    assert disposed is True
+
+
+def test_client_helpers_close_and_gc_dispose_db_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    disposed = False
+    finalized: list[weakref.finalize] = []
+
+    class FakeEngine:
+        def dispose(self) -> None:
+            nonlocal disposed
+            disposed = True
+
+    fake_ctx = SimpleNamespace(
+        db_engine=FakeEngine(),
+        execution_adapter=None,
+    )
+
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_build_test_context", lambda settings: fake_ctx)
+    monkeypatch.setitem(globals(), "create_app", lambda ctx: FastAPI())
+
+    client = _client(tmp_path)
+    finalizer = getattr(client, "_nexus_cleanup_finalizer", None)
+    if finalizer is not None:
+        finalized.append(finalizer)
+    client.close()
+
+    assert disposed is True
+    assert finalized and finalized[0].alive is False
 
 
 def test_list_skills_returns_discovered_runtime_skill_manifests(tmp_path: Path) -> None:
@@ -1667,6 +1780,34 @@ def test_code_task_failed_tests_trigger_diagnostic_file_read(tmp_path: Path) -> 
     assert run["steps"][5]["status"] == "pending_approval"
 
 
+def test_kernel_focus_switches_to_diagnose_after_failed_code_verification(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=FailingCodeWorkspaceExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Implement the payment retry backoff fix in the repo and update tests",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    diagnose_events = [
+        item
+        for item in timeline.json()["timeline"]
+        if item["type"] == "run.kernel" and item.get("tactic") == "diagnose"
+    ]
+
+    assert diagnose_events
+    assert "failed" in diagnose_events[-1]["tactic_reason"].lower()
+    assert run["metadata"]["kernel_state"]["tactic"] == "approval"
+
+
 def test_run_adapts_list_files_into_read_file(tmp_path: Path) -> None:
     client = _client(tmp_path, execution_adapter=WorkspaceDiscoveryExecutionAdapter(tmp_path))
     headers = _auth_header(client)
@@ -2589,6 +2730,106 @@ def test_run_adapts_when_extract_returns_no_citations(tmp_path: Path) -> None:
         "extract",
         "export",
     ]
+
+
+def test_research_run_without_terminal_output_is_blocked_by_completion_verifier(tmp_path: Path) -> None:
+    client = _client_with_planner(tmp_path, adaptive_planner=NoFollowUpPlanner())
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research competitor pricing pages",
+            "mode": "manual",
+            "steps": [
+                {"action_type": "search_web", "instruction": "find competitor pricing pages"},
+                {"action_type": "fetch_url", "instruction": "open the grounded pricing result"},
+                {"action_type": "extract", "instruction": "extract grounded pricing evidence"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "failed"
+    verification = run["metadata"]["run_verification"]
+    assert verification["result"] == "blocked"
+    assert verification["strategy"] == "research"
+    assert "terminal" in verification["reason"].lower()
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    verification_events = [
+        item for item in timeline.json()["timeline"] if item["type"] == "run.verification"
+    ]
+    assert verification_events
+    assert verification_events[-1]["result"] == "blocked"
+
+
+def test_research_run_with_terminal_output_is_verified_by_completion_layer(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research competitor pricing pages",
+            "mode": "manual",
+            "steps": [
+                {"action_type": "search_web", "instruction": "find competitor pricing pages"},
+                {"action_type": "fetch_url", "instruction": "open the grounded pricing result"},
+                {"action_type": "extract", "instruction": "extract grounded pricing evidence"},
+                {"action_type": "export", "instruction": "export the pricing brief"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "completed"
+    verification = run["metadata"]["run_verification"]
+    assert verification["result"] == "verified"
+    assert verification["strategy"] == "research"
+    assert verification["signals"]["artifact_count"] >= 1
+    assert verification["signals"]["citation_count"] >= 1
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    verification_events = [
+        item for item in timeline.json()["timeline"] if item["type"] == "run.verification"
+    ]
+    assert verification_events
+    assert verification_events[-1]["result"] == "verified"
+
+
+def test_kernel_focus_switches_to_recover_after_evidence_gap(tmp_path: Path) -> None:
+    client = _client(tmp_path, execution_adapter=AdaptiveExecutionAdapter(tmp_path))
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research grounded browser runtime docs",
+            "mode": "supervised",
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    recover_events = [
+        item
+        for item in timeline.json()["timeline"]
+        if item["type"] == "run.kernel" and item.get("tactic") == "recover"
+    ]
+
+    assert recover_events
+    assert "citation" in recover_events[-1]["tactic_reason"].lower()
+    assert run["metadata"]["kernel_state"]["tactic"] in {"approval", "done"}
 
 
 def test_list_runs_returns_recent_first(tmp_path: Path) -> None:

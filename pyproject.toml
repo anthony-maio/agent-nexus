@@ -46,6 +46,8 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=6.0",
+    "coverage>=7.6",
     "ruff>=0.4",
 ]
 local = [
@@ -83,5 +85,16 @@ select = ["E", "F", "I", "W"]
 "src/nexus/setup_web.py" = ["E501"]
 
 [tool.pytest.ini_options]
+addopts = "--cov=nexus_api --cov=nexus_core --cov=nexus_sandbox_runner --cov-report=term-missing:skip-covered"
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["nexus_api", "nexus_core", "nexus_sandbox_runner"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+omit = ["tests/*"]

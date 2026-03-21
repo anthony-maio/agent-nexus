@@ -12,6 +12,7 @@ def _write_skill(
     name: str,
     description: str,
     preferred_initial_actions: str = "",
+    preferred_follow_up_actions: str = "",
 ) -> Path:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -22,6 +23,8 @@ def _write_skill(
     ]
     if preferred_initial_actions:
         frontmatter.append(f"preferred_initial_actions: {preferred_initial_actions}")
+    if preferred_follow_up_actions:
+        frontmatter.append(f"preferred_follow_up_actions: {preferred_follow_up_actions}")
     frontmatter.extend(["---", ""])
     (skill_dir / "SKILL.md").write_text(
         "\n".join(
@@ -82,3 +85,22 @@ def test_skill_registry_parses_preferred_initial_actions(tmp_path: Path) -> None
 
     assert manifests[0].preferred_initial_actions == ("list_files", "read_file")
     assert manifests[0].to_dict()["preferred_initial_actions"] == ["list_files", "read_file"]
+
+
+def test_skill_registry_parses_preferred_follow_up_actions(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "report-maker",
+        name="report-maker",
+        description="Produce polished reports from gathered findings.",
+        preferred_follow_up_actions="generate_report, export",
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].preferred_follow_up_actions == ("generate_report", "export")
+    assert manifests[0].to_dict()["preferred_follow_up_actions"] == [
+        "generate_report",
+        "export",
+    ]

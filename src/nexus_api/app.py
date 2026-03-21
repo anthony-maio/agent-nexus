@@ -56,7 +56,10 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             )
             session.commit()
         log.info("Nexus API started with single-admin auth enabled.")
-        yield
+        try:
+            yield
+        finally:
+            ctx.db_engine.dispose()
 
     app = FastAPI(title="Agent Nexus API", version="0.1.0", lifespan=lifespan)
     app.state.ctx = ctx

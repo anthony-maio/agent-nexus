@@ -479,6 +479,18 @@ class SqlRunRepository:
             return events
         run_metadata = run.get("metadata")
         if isinstance(run_metadata, dict):
+            kernel_history = run_metadata.get("kernel_event_history")
+            if isinstance(kernel_history, list):
+                for item in kernel_history:
+                    if not isinstance(item, dict):
+                        continue
+                    events.append(
+                        {
+                            "type": "run.kernel",
+                            "timestamp": item.get("timestamp") or run.get("updated_at") or run.get("created_at"),
+                            **{key: value for key, value in item.items() if key != "timestamp"},
+                        }
+                    )
             kernel_state = run_metadata.get("kernel_state")
             if isinstance(kernel_state, dict) and kernel_state:
                 events.append(
@@ -486,6 +498,15 @@ class SqlRunRepository:
                         "type": "run.kernel",
                         "timestamp": run.get("updated_at") or run.get("created_at"),
                         **kernel_state,
+                    }
+                )
+            run_verification = run_metadata.get("run_verification")
+            if isinstance(run_verification, dict) and run_verification:
+                events.append(
+                    {
+                        "type": "run.verification",
+                        "timestamp": run.get("updated_at") or run.get("created_at"),
+                        **run_verification,
                     }
                 )
             capability_state = run_metadata.get("capability_state")

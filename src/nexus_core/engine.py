@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,6 +19,7 @@ from nexus_core.models import (
     ArtifactRecord,
     CitationRecord,
     DelegationStepPayload,
+    RunVerificationRecord,
     RunEvent,
     RunMode,
     RunStatus,
@@ -43,6 +45,7 @@ from nexus_core.policy import (
     is_high_risk_action,
 )
 from nexus_core.skills import CapabilityResolver, SkillManifest, serialize_skill_context
+from nexus_core.verification import evaluate_run_completion
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +65,10 @@ class EngineRepository(Protocol):
     def get_run(self, run_id: str) -> dict[str, Any] | None: ...
 
     def list_steps(self, run_id: str) -> list[dict[str, Any]]: ...
+
+    def list_citations(self, run_id: str) -> list[dict[str, Any]]: ...
+
+    def list_artifacts(self, run_id: str) -> list[dict[str, Any]]: ...
 
     def insert_steps_after(self, step_id: str, steps: list[StepDefinition]) -> None: ...
 
@@ -458,14 +465,7 @@ class RunEngine:
                     break
 
             if next_step is None:
-                self.repo.mark_run_status(run_id, RunStatus.COMPLETED.value)
-                await self._update_run_kernel_state(run_id, phase="completed")
-                await self.interaction.deliver_status(
-                    run_id,
-                    RunStatus.COMPLETED.value,
-                    "Run completed",
-                )
-                await self._publish(run_id, "run.completed", {})
+                await self._finalize_run_completion(run_id)
                 return
 
             if self._autonomous_step_budget_reached(run_id):
@@ -542,6 +542,8 @@ class RunEngine:
             run = self.repo.get_run(run_id)
             if run is not None:
                 self._assert_delegated_step_allowed(run, step)
+            if self._clear_run_kernel_focus(run_id):
+                await self._update_run_kernel_state(run_id, phase="running")
             self.repo.mark_step_status(step_id, StepStatus.RUNNING.value)
             await self._publish(
                 run_id,
@@ -680,6 +682,15 @@ class RunEngine:
     ) -> None:
         completed_action = str(completed_step.get("action_type", "")).strip().lower()
         existing_steps = self.repo.list_steps(run["id"])
+        kernel_focus = self._kernel_focus_for_result(completed_action, result)
+        if kernel_focus is not None:
+            await self._set_run_kernel_focus(
+                run["id"],
+                tactic=kernel_focus["tactic"],
+                reason=kernel_focus["tactic_reason"],
+                source_step_id=str(completed_step.get("id", "")),
+            )
+            run = self.repo.get_run(run["id"]) or run
         if not self._should_plan_follow_up(
             completed_step=completed_step,
             completed_action=completed_action,
@@ -778,6 +789,58 @@ class RunEngine:
         await self.interaction.deliver_status(run_id, RunStatus.FAILED.value, "Run failed")
         await self._publish(run_id, "run.failed", {"step_id": step_id})
 
+    async def _finalize_run_completion(self, run_id: str) -> None:
+        run = self.repo.get_run(run_id)
+        if run is None:
+            return
+        verification = self._evaluate_run_completion(run)
+        self.repo.merge_run_metadata(run_id, {"run_verification": verification.model_dump()})
+        await self._publish(run_id, "run.verification", verification.model_dump())
+        if verification.result == "blocked":
+            self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
+            await self._update_run_kernel_state(
+                run_id,
+                phase="failed",
+                failure_reason=verification.reason,
+            )
+            message = verification.reason or "Run blocked by completion verification."
+            await self.interaction.deliver_status(run_id, RunStatus.FAILED.value, message)
+            await self._publish(
+                run_id,
+                "run.failed",
+                {
+                    "reason": message,
+                    "verification_result": verification.result,
+                },
+            )
+            return
+
+        self.repo.mark_run_status(run_id, RunStatus.COMPLETED.value)
+        await self._update_run_kernel_state(run_id, phase="completed")
+        message = (
+            "Run completed with verified completion signals."
+            if verification.result == "verified"
+            else "Run completed provisionally; stronger completion verification is not yet available."
+        )
+        await self.interaction.deliver_status(run_id, RunStatus.COMPLETED.value, message)
+        await self._publish(
+            run_id,
+            "run.completed",
+            {"verification_result": verification.result},
+        )
+
+    def _evaluate_run_completion(self, run: dict[str, Any]) -> RunVerificationRecord:
+        run_id = str(run.get("id", "")).strip()
+        strategy = self._strategy_for_objective(str(run.get("objective", "")))
+        citations = self.repo.list_citations(run_id) if run_id else []
+        artifacts = self.repo.list_artifacts(run_id) if run_id else []
+        return evaluate_run_completion(
+            strategy=strategy,
+            run=run,
+            citations=citations,
+            artifacts=artifacts,
+        )
+
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         await self.events.publish(RunEvent(run_id=run_id, event_type=event_type, payload=payload))
 
@@ -796,6 +859,11 @@ class RunEngine:
         capability_state = (
             metadata.get("capability_state")
             if isinstance(metadata.get("capability_state"), dict)
+            else {}
+        )
+        kernel_focus = (
+            metadata.get("kernel_focus")
+            if isinstance(metadata.get("kernel_focus"), dict)
             else {}
         )
         completed_step_count = sum(
@@ -840,6 +908,7 @@ class RunEngine:
                 phase=phase,
                 steps=steps,
                 capability_state=capability_state,
+                kernel_focus=kernel_focus,
             )
         )
         normalized_failure_reason = failure_reason.strip()
@@ -855,6 +924,73 @@ class RunEngine:
             return {}
         kernel_state = metadata.get("kernel_state")
         return kernel_state if isinstance(kernel_state, dict) else {}
+
+    async def _set_run_kernel_focus(
+        self,
+        run_id: str,
+        *,
+        tactic: str,
+        reason: str,
+        source_step_id: str = "",
+    ) -> None:
+        run = self.repo.get_run(run_id)
+        if run is None:
+            return
+        focus = {
+            "tactic": tactic.strip(),
+            "tactic_reason": reason.strip(),
+        }
+        if source_step_id.strip():
+            focus["source_step_id"] = source_step_id.strip()
+        self.repo.merge_run_metadata(run_id, {"kernel_focus": focus})
+        await self._update_run_kernel_state(
+            run_id,
+            phase=self._phase_for_run_status(str(run.get("status", ""))),
+        )
+        refreshed_run = self.repo.get_run(run_id)
+        if refreshed_run is not None:
+            refreshed_metadata = (
+                refreshed_run.get("metadata")
+                if isinstance(refreshed_run.get("metadata"), dict)
+                else {}
+            )
+            kernel_state = (
+                refreshed_metadata.get("kernel_state")
+                if isinstance(refreshed_metadata.get("kernel_state"), dict)
+                else {}
+            )
+            if kernel_state:
+                self._append_kernel_event_history(run_id, kernel_state)
+
+    def _clear_run_kernel_focus(self, run_id: str) -> bool:
+        run = self.repo.get_run(run_id)
+        if run is None:
+            return False
+        metadata = run.get("metadata")
+        if not isinstance(metadata, dict):
+            return False
+        focus = metadata.get("kernel_focus")
+        if not isinstance(focus, dict) or not focus:
+            return False
+        self.repo.merge_run_metadata(run_id, {"kernel_focus": {}})
+        return True
+
+    def _append_kernel_event_history(self, run_id: str, kernel_state: dict[str, Any]) -> None:
+        run = self.repo.get_run(run_id)
+        if run is None:
+            return
+        metadata = run.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        raw_history = metadata.get("kernel_event_history")
+        history = list(raw_history) if isinstance(raw_history, list) else []
+        history.append(
+            {
+                **kernel_state,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        self.repo.merge_run_metadata(run_id, {"kernel_event_history": history[-24:]})
 
     async def _update_run_capability_state(
         self,
@@ -971,6 +1107,7 @@ class RunEngine:
         phase: str,
         steps: list[dict[str, Any]],
         capability_state: dict[str, Any],
+        kernel_focus: dict[str, Any],
     ) -> dict[str, Any]:
         strategy = RunEngine._strategy_for_objective(objective)
         current_step = next(
@@ -1022,12 +1159,19 @@ class RunEngine:
         elif phase == "failed":
             tactic = "blocked"
             tactic_reason = "Run failed and needs intervention or retry."
+        focus_tactic = str(kernel_focus.get("tactic", "")).strip()
+        if focus_tactic:
+            tactic = focus_tactic
+            tactic_reason = str(kernel_focus.get("tactic_reason", "")).strip() or tactic_reason
         snapshot: dict[str, Any] = {
             "strategy": strategy,
             "tactic": tactic,
         }
         if tactic_reason:
             snapshot["tactic_reason"] = tactic_reason
+        focus_source_step_id = str(kernel_focus.get("source_step_id", "")).strip()
+        if focus_source_step_id:
+            snapshot["focus_source_step_id"] = focus_source_step_id
         skill_names = capability_state.get("skill_names")
         if isinstance(skill_names, list) and skill_names:
             snapshot["skill_names"] = [str(name) for name in skill_names]
@@ -1050,6 +1194,18 @@ class RunEngine:
         ):
             return "workflow"
         return "research"
+
+    @staticmethod
+    def _phase_for_run_status(status: str) -> str:
+        normalized = status.strip().lower()
+        mapping = {
+            RunStatus.RUNNING.value: "running",
+            RunStatus.PENDING_APPROVAL.value: "awaiting_approval",
+            RunStatus.PAUSED.value: "paused",
+            RunStatus.COMPLETED.value: "completed",
+            RunStatus.FAILED.value: "failed",
+        }
+        return mapping.get(normalized, "running")
 
     @staticmethod
     def _tactic_for_action(action_type: str) -> str:
@@ -1075,6 +1231,28 @@ class RunEngine:
         if decision == "continue":
             return RunEngine._tactic_for_action(action_type)
         return "review"
+
+    def _kernel_focus_for_result(
+        self,
+        completed_action: str,
+        result: StepExecutionResult,
+    ) -> dict[str, str] | None:
+        verification = self._verification_result(result)
+        if verification == "failed":
+            return {
+                "tactic": "diagnose",
+                "tactic_reason": (
+                    f"{completed_action or 'step'} verification failed; inspect the grounded evidence before continuing."
+                ),
+            }
+        if completed_action == "extract" and not result.citations:
+            return {
+                "tactic": "recover",
+                "tactic_reason": (
+                    "Extraction returned no citations; gather more grounded evidence before continuing."
+                ),
+            }
+        return None
 
     def _autonomous_step_budget_reached(self, run_id: str) -> bool:
         executed_steps = 0

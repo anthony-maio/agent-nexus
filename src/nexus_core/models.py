@@ -99,6 +99,15 @@ class StepExecutionResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class RunVerificationRecord(BaseModel):
+    """Run-level completion verification snapshot."""
+
+    strategy: str
+    result: str
+    reason: str = ""
+    signals: dict[str, Any] = Field(default_factory=dict)
+
+
 class RunEvent(BaseModel):
     """Event emitted to timeline stream subscribers."""
 
