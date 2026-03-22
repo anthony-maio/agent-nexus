@@ -13,6 +13,8 @@ def _write_skill(
     description: str,
     preferred_initial_actions: str = "",
     preferred_follow_up_actions: str = "",
+    verification_signals: str = "",
+    required_artifact_kinds: str = "",
 ) -> Path:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -25,6 +27,10 @@ def _write_skill(
         frontmatter.append(f"preferred_initial_actions: {preferred_initial_actions}")
     if preferred_follow_up_actions:
         frontmatter.append(f"preferred_follow_up_actions: {preferred_follow_up_actions}")
+    if verification_signals:
+        frontmatter.append(f"verification_signals: {verification_signals}")
+    if required_artifact_kinds:
+        frontmatter.append(f"required_artifact_kinds: {required_artifact_kinds}")
     frontmatter.extend(["---", ""])
     (skill_dir / "SKILL.md").write_text(
         "\n".join(
@@ -104,3 +110,22 @@ def test_skill_registry_parses_preferred_follow_up_actions(tmp_path: Path) -> No
         "generate_report",
         "export",
     ]
+
+
+def test_skill_registry_parses_verification_requirements(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+        verification_signals="citations, artifact",
+        required_artifact_kinds="chart, report",
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].verification_signals == ("citations", "artifact")
+    assert manifests[0].required_artifact_kinds == ("chart", "report")
+    assert manifests[0].to_dict()["verification_signals"] == ["citations", "artifact"]
+    assert manifests[0].to_dict()["required_artifact_kinds"] == ["chart", "report"]

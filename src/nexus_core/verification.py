@@ -49,11 +49,19 @@ def evaluate_run_completion(
     child_runs = run.get("child_runs")
     child_statuses = [
         str(child.get("status", "")).strip().lower()
-        for child in child_runs
+        for child in (child_runs or [])
         if isinstance(child_runs, list) and isinstance(child, dict)
     ]
     objective_text = str(run.get("objective", "")).strip().lower()
     explicit_research_intent = any(keyword in objective_text for keyword in _EXPLICIT_RESEARCH_KEYWORDS)
+    metadata = run.get("metadata")
+    capability_state = (
+        metadata.get("capability_state")
+        if isinstance(metadata, dict) and isinstance(metadata.get("capability_state"), dict)
+        else {}
+    )
+    required_signals = _normalized_string_list(capability_state.get("verification_signals"))
+    required_artifact_kinds = _normalized_string_list(capability_state.get("required_artifact_kinds"))
     successful_execute_code_count = 0
     for step in completed_steps:
         action = str(step.get("action_type", "")).strip().lower()
@@ -71,6 +79,13 @@ def evaluate_run_completion(
         "completed_step_count": len(completed_steps),
         "citation_count": len(citations),
         "artifact_count": len(artifacts),
+        "artifact_kinds": sorted(
+            {
+                str(item.get("kind", "")).strip().lower()
+                for item in artifacts
+                if isinstance(item, dict) and str(item.get("kind", "")).strip()
+            }
+        ),
         "completed_actions": sorted(completed_actions),
         "child_run_count": len(child_statuses),
         "completed_child_run_count": sum(status == RunStatus.COMPLETED.value for status in child_statuses),
@@ -78,12 +93,42 @@ def evaluate_run_completion(
         "successful_execute_code_count": successful_execute_code_count,
         "mutating_code_action_count": sum(action in _CODING_MUTATION_ACTIONS for action in completed_actions),
     }
+    if required_signals:
+        signals["required_verification_signals"] = list(required_signals)
+    if required_artifact_kinds:
+        signals["required_artifact_kinds"] = list(required_artifact_kinds)
 
     if not completed_steps:
         return RunVerificationRecord(
             strategy=strategy,
             result="blocked",
             reason="Run ended without completing any steps.",
+            signals=signals,
+        )
+
+    capability_missing = _missing_capability_requirements(
+        required_signals=required_signals,
+        required_artifact_kinds=required_artifact_kinds,
+        completed_actions=completed_actions,
+        citations=citations,
+        artifacts=artifacts,
+        signals=signals,
+    )
+    if capability_missing:
+        return RunVerificationRecord(
+            strategy=strategy,
+            result="blocked",
+            reason=(
+                "Run did not satisfy skill-defined completion requirements: "
+                + ", ".join(capability_missing)
+            ),
+            signals=signals,
+        )
+    if required_signals or required_artifact_kinds:
+        return RunVerificationRecord(
+            strategy=strategy,
+            result="verified",
+            reason="Run satisfied skill-defined completion requirements.",
             signals=signals,
         )
 
@@ -184,3 +229,47 @@ def evaluate_run_completion(
         reason="Run finished without a strategy-specific terminal verifier.",
         signals=signals,
     )
+
+
+def _missing_capability_requirements(
+    *,
+    required_signals: list[str],
+    required_artifact_kinds: list[str],
+    completed_actions: set[str],
+    citations: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+    signals: dict[str, Any],
+) -> list[str]:
+    missing: list[str] = []
+    artifact_kinds = set(signals.get("artifact_kinds", []))
+    for signal in required_signals:
+        if signal == "citations" and not citations:
+            missing.append("citations")
+        elif signal == "artifact" and not artifacts:
+            missing.append("artifact")
+        elif signal == "submit" and not (completed_actions & _WORKFLOW_ACTIONS):
+            missing.append("submit")
+        elif signal == "execute_code" and int(signals.get("successful_execute_code_count", 0)) <= 0:
+            missing.append("execute_code")
+        elif signal in {"mutating_code", "file_mutation"} and int(
+            signals.get("mutating_code_action_count", 0)
+        ) <= 0:
+            missing.append("mutating_code")
+    missing_artifact_kinds = [kind for kind in required_artifact_kinds if kind not in artifact_kinds]
+    for kind in missing_artifact_kinds:
+        missing.append(f"artifact_kind:{kind}")
+    return missing
+
+
+def _normalized_string_list(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    items: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        value = str(item).strip().lower()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        items.append(value)
+    return items

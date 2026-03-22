@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 _FRONTMATTER_BOUNDARY = "---"
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -51,9 +51,16 @@ class SkillManifest:
     guidance: str = ""
     preferred_initial_actions: tuple[str, ...] = ()
     preferred_follow_up_actions: tuple[str, ...] = ()
+    verification_signals: tuple[str, ...] = ()
+    required_artifact_kinds: tuple[str, ...] = ()
 
-    def to_dict(self, *, include_guidance: bool = False, guidance_limit: int = 600) -> dict[str, str]:
-        payload = {
+    def to_dict(
+        self,
+        *,
+        include_guidance: bool = False,
+        guidance_limit: int = 600,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "path": self.path,
@@ -62,6 +69,10 @@ class SkillManifest:
             payload["preferred_initial_actions"] = list(self.preferred_initial_actions)
         if self.preferred_follow_up_actions:
             payload["preferred_follow_up_actions"] = list(self.preferred_follow_up_actions)
+        if self.verification_signals:
+            payload["verification_signals"] = list(self.verification_signals)
+        if self.required_artifact_kinds:
+            payload["required_artifact_kinds"] = list(self.required_artifact_kinds)
         if include_guidance and self.guidance:
             payload["guidance_excerpt"] = self.guidance[:guidance_limit].strip()
         return payload
@@ -143,7 +154,7 @@ def serialize_skill_context(
     *,
     include_guidance: bool = True,
     guidance_limit: int = 600,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Serialize resolved skills into planner-safe prompt context."""
 
     return [
@@ -198,6 +209,12 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
         ),
         preferred_follow_up_actions=_parse_action_list(
             str(frontmatter.get("preferred_follow_up_actions", ""))
+        ),
+        verification_signals=_parse_identifier_list(
+            str(frontmatter.get("verification_signals", ""))
+        ),
+        required_artifact_kinds=_parse_identifier_list(
+            str(frontmatter.get("required_artifact_kinds", ""))
         ),
     )
 
@@ -286,12 +303,18 @@ def _normalize_token(token: str) -> str:
 
 
 def _parse_action_list(raw: str) -> tuple[str, ...]:
+    return _parse_identifier_list(raw, replace_spaces=True)
+
+
+def _parse_identifier_list(raw: str, *, replace_spaces: bool = False) -> tuple[str, ...]:
     if not raw.strip():
         return ()
     actions: list[str] = []
     seen: set[str] = set()
     for chunk in raw.replace("|", ",").split(","):
-        action = chunk.strip().lower().replace(" ", "_")
+        action = chunk.strip().lower()
+        if replace_spaces:
+            action = action.replace(" ", "_")
         if not action or action in seen:
             continue
         seen.add(action)

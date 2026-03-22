@@ -46,6 +46,7 @@ class ApiSettings(BaseSettings):
     APP_ENABLE_SKILL_RESOLVER: bool = Field(default=True)
     APP_SKILL_PATHS: str = Field(default="")
     APP_SKILL_MAX_MATCHES: int = Field(default=3)
+    APP_AUTO_ACQUIRE_SKILLS: bool = Field(default=False)
     APP_ENABLE_SYNTHESIS: bool = Field(default=False)
     APP_SYNTHESIS_ROOT: str = Field(default="")
     APP_SYNTHESIS_CANONICAL_REPO_PATH: str = Field(default="")

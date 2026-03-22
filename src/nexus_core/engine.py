@@ -44,7 +44,7 @@ from nexus_core.policy import (
     delegated_workspace_path_allowed,
     is_high_risk_action,
 )
-from nexus_core.skills import CapabilityResolver, SkillManifest, serialize_skill_context
+from nexus_core.skills import CapabilityResolver, SkillManifest, SkillRegistry, serialize_skill_context
 from nexus_core.verification import evaluate_run_completion
 
 log = logging.getLogger(__name__)
@@ -125,6 +125,10 @@ class EngineRepository(Protocol):
     def update_delegation(self, child_run_id: str, status: str, summary: str = "") -> None: ...
 
 
+class SkillAcquirer(Protocol):
+    async def acquire_skill(self, intent: str, requirements: str = "") -> dict[str, Any]: ...
+
+
 class RunEngine:
     """Executes run steps using risk-tier policy and adapter boundaries."""
 
@@ -138,6 +142,9 @@ class RunEngine:
         sandbox_artifacts_root: Path | None = None,
         adaptive_planner: AdaptivePlanner | None = None,
         capability_resolver: CapabilityResolver | None = None,
+        skill_registry: SkillRegistry | None = None,
+        skill_acquirer: SkillAcquirer | None = None,
+        auto_acquire_skills: bool = False,
         max_autonomous_steps: int = 24,
         max_step_retries: int = 0,
         max_identical_step_streak: int = 0,
@@ -148,6 +155,9 @@ class RunEngine:
         self.events = events
         self.adaptive_planner = adaptive_planner or RuleAdaptivePlanner()
         self.capability_resolver = capability_resolver
+        self.skill_registry = skill_registry
+        self.skill_acquirer = skill_acquirer
+        self.auto_acquire_skills = bool(auto_acquire_skills)
         self.canonical_workspace = canonical_workspace
         self.sandbox_artifacts_root = (
             sandbox_artifacts_root.resolve() if sandbox_artifacts_root else None
@@ -166,10 +176,15 @@ class RunEngine:
         delegation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a run and execute until completion or approval gate."""
+        resolved_skills, capability_state = await self._resolve_capability_context(
+            objective,
+            allow_acquire=True,
+        )
         planned_steps = steps or await self._plan_next_steps(
             objective=objective,
             mode=mode,
             existing_steps=[],
+            resolved_skills=resolved_skills,
         )
         run = self.repo.create_run(
             objective=objective,
@@ -178,10 +193,7 @@ class RunEngine:
             parent_run_id=parent_run_id,
             delegation=delegation,
         )
-        await self._update_run_capability_state(
-            run["id"],
-            self._resolved_skills_for_objective(objective),
-        )
+        await self._update_run_capability_state(run["id"], capability_state)
         await self._update_run_kernel_state(run["id"], phase="running")
         await self._publish(run["id"], "run.created", {"objective": objective})
         await self._execute_until_gate(run["id"])
@@ -196,8 +208,9 @@ class RunEngine:
         completed_step: dict[str, Any] | None = None,
         result: StepExecutionResult | None = None,
         kernel_context: dict[str, Any] | None = None,
+        resolved_skills: list[SkillManifest] | None = None,
     ) -> list[StepDefinition]:
-        resolved_skills = self._resolved_skills_for_objective(objective)
+        resolved_skills = resolved_skills if resolved_skills is not None else self._resolved_skills_for_objective(objective)
         skill_context = serialize_skill_context(resolved_skills)
         proposed = await request_next_steps(
             self.adaptive_planner,
@@ -841,6 +854,50 @@ class RunEngine:
             artifacts=artifacts,
         )
 
+    async def _resolve_capability_context(
+        self,
+        objective: str,
+        *,
+        allow_acquire: bool,
+    ) -> tuple[list[SkillManifest], dict[str, Any]]:
+        resolved_skills = self._resolved_skills_for_objective(objective)
+        acquisition: dict[str, Any] = {}
+        source = "capability_resolver"
+        if (
+            not resolved_skills
+            and allow_acquire
+            and self.auto_acquire_skills
+            and self.skill_acquirer is not None
+            and self.skill_registry is not None
+            and self.capability_resolver is not None
+        ):
+            acquisition = await self._acquire_skill_for_objective(objective)
+            if acquisition.get("success") is True:
+                self.skill_registry.refresh()
+                resolved_skills = self.capability_resolver.resolve(objective)
+                if resolved_skills:
+                    source = "synthesis_acquisition"
+        return resolved_skills, self._capability_state(
+            resolved_skills,
+            source=source,
+            acquisition=acquisition,
+        )
+
+    async def _acquire_skill_for_objective(self, objective: str) -> dict[str, Any]:
+        if self.skill_acquirer is None:
+            return {}
+        try:
+            return await self.skill_acquirer.acquire_skill(
+                intent=objective,
+                requirements=(
+                    "Install or retrieve a reusable capability package that helps "
+                    "Agent Nexus complete this objective end-to-end."
+                ),
+            )
+        except Exception:
+            log.exception("Automatic skill acquisition failed for objective: %s", objective)
+            return {}
+
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         await self.events.publish(RunEvent(run_id=run_id, event_type=event_type, payload=payload))
 
@@ -995,9 +1052,8 @@ class RunEngine:
     async def _update_run_capability_state(
         self,
         run_id: str,
-        resolved_skills: list[SkillManifest],
+        capability_state: dict[str, Any],
     ) -> None:
-        capability_state = self._capability_state(resolved_skills)
         if not capability_state:
             return
         self.repo.merge_run_metadata(run_id, {"capability_state": capability_state})
@@ -1023,6 +1079,8 @@ class RunEngine:
                 payload["planner_fallback_reason"] = planner_fallback_reason
             skill_source = str(metadata.get("skill_source", "")).strip()
             skill_names = metadata.get("skill_names")
+            verification_signals = metadata.get("verification_signals")
+            required_artifact_kinds = metadata.get("required_artifact_kinds")
             verification_result = str(metadata.get("verification_result", "")).strip()
             kernel_decision = str(metadata.get("kernel_decision", "")).strip()
             retryable = metadata.get("retryable")
@@ -1031,6 +1089,10 @@ class RunEngine:
                 payload["skill_source"] = skill_source
             if isinstance(skill_names, list) and skill_names:
                 payload["skill_names"] = [str(name) for name in skill_names]
+            if isinstance(verification_signals, list) and verification_signals:
+                payload["verification_signals"] = [str(item) for item in verification_signals]
+            if isinstance(required_artifact_kinds, list) and required_artifact_kinds:
+                payload["required_artifact_kinds"] = [str(item) for item in required_artifact_kinds]
             if verification_result:
                 payload["verification_result"] = verification_result
             if kernel_decision:
@@ -1060,9 +1122,22 @@ class RunEngine:
         return self.capability_resolver.resolve(objective)
 
     @staticmethod
-    def _capability_state(resolved_skills: list[SkillManifest]) -> dict[str, Any]:
+    def _capability_state(
+        resolved_skills: list[SkillManifest],
+        *,
+        source: str = "capability_resolver",
+        acquisition: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if not resolved_skills:
             return {}
+        verification_signals = RunEngine._merged_skill_values(
+            resolved_skills,
+            attribute="verification_signals",
+        )
+        required_artifact_kinds = RunEngine._merged_skill_values(
+            resolved_skills,
+            attribute="required_artifact_kinds",
+        )
         resolved_payload = [
             {
                 "name": skill.name,
@@ -1070,15 +1145,49 @@ class RunEngine:
                 "path": skill.path,
                 "preferred_initial_actions": list(skill.preferred_initial_actions),
                 "preferred_follow_up_actions": list(skill.preferred_follow_up_actions),
+                "verification_signals": list(skill.verification_signals),
+                "required_artifact_kinds": list(skill.required_artifact_kinds),
             }
             for skill in resolved_skills
         ]
-        return {
-            "skill_source": "capability_resolver",
+        capability_state: dict[str, Any] = {
+            "skill_source": source,
             "skill_names": [skill.name for skill in resolved_skills],
             "resolved_skill_count": len(resolved_skills),
             "resolved_skills": resolved_payload,
         }
+        if verification_signals:
+            capability_state["verification_signals"] = verification_signals
+        if required_artifact_kinds:
+            capability_state["required_artifact_kinds"] = required_artifact_kinds
+        if isinstance(acquisition, dict) and acquisition:
+            capability_state["skill_acquisition"] = {
+                "success": bool(acquisition.get("success")),
+                "method": str(acquisition.get("method", "")).strip(),
+                "primary_skill_name": str(
+                    (acquisition.get("primary_skill") or {}).get("name", "")
+                ).strip(),
+                "activation_message": str(acquisition.get("activation_message", "")).strip(),
+            }
+        return capability_state
+
+    @staticmethod
+    def _merged_skill_values(
+        resolved_skills: list[SkillManifest],
+        *,
+        attribute: str,
+    ) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for skill in resolved_skills:
+            raw_values = getattr(skill, attribute, ())
+            for raw_value in raw_values:
+                value = str(raw_value).strip().lower()
+                if not value or value in seen:
+                    continue
+                seen.add(value)
+                merged.append(value)
+        return merged
 
     async def _record_kernel_decision(
         self,

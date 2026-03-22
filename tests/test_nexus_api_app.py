@@ -549,6 +549,9 @@ def _write_skill(
     name: str,
     description: str,
     preferred_initial_actions: str = "",
+    preferred_follow_up_actions: str = "",
+    verification_signals: str = "",
+    required_artifact_kinds: str = "",
 ) -> Path:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -559,6 +562,12 @@ def _write_skill(
     ]
     if preferred_initial_actions:
         frontmatter.append(f"preferred_initial_actions: {preferred_initial_actions}")
+    if preferred_follow_up_actions:
+        frontmatter.append(f"preferred_follow_up_actions: {preferred_follow_up_actions}")
+    if verification_signals:
+        frontmatter.append(f"verification_signals: {verification_signals}")
+    if required_artifact_kinds:
+        frontmatter.append(f"required_artifact_kinds: {required_artifact_kinds}")
     frontmatter.extend(["---", ""])
     (skill_dir / "SKILL.md").write_text(
         "\n".join(
@@ -937,6 +946,43 @@ def test_acquire_skill_uses_synthesis_bridge_and_refreshes_registry(tmp_path: Pa
     assert "synthesized-skill" in names
 
 
+def test_run_auto_acquires_skill_from_synthesis_when_no_local_match_exists(tmp_path: Path) -> None:
+    synthesis_root = tmp_path / "synthesis-project"
+    host_root = tmp_path / "installed-skills"
+    _write_fake_synthesis_project(synthesis_root)
+    client = _client(
+        tmp_path,
+        settings_overrides={
+            "APP_ENABLE_SYNTHESIS": True,
+            "APP_SYNTHESIS_ROOT": str(synthesis_root),
+            "APP_SYNTHESIS_HOST_ROOT": str(host_root),
+            "APP_SYNTHESIS_PROVIDER_TYPE": "mock",
+            "APP_AUTO_ACQUIRE_SKILLS": True,
+            "APP_SKILL_PATHS": str(tmp_path / "empty-skills"),
+        },
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parse csv files into a reusable skill-backed workflow",
+            "mode": "manual",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    assert run["metadata"]["capability_state"]["skill_source"] == "synthesis_acquisition"
+    assert run["metadata"]["capability_state"]["skill_names"] == ["synthesized-skill"]
+
+    listed = client.get("/skills", headers=headers)
+    assert listed.status_code == 200
+    names = {item["name"] for item in listed.json()["items"]}
+    assert "synthesized-skill" in names
+
+
 def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
     skill_root = tmp_path / "skills"
     _write_skill(
@@ -944,6 +990,8 @@ def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
         "chart-maker",
         name="chart-maker",
         description="Generate charts from tabular data.",
+        verification_signals="artifact, citations",
+        required_artifact_kinds="chart",
     )
     planner = SkillAwarePlanner()
     client = _client_with_planner(
@@ -967,9 +1015,13 @@ def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
     assert planner.calls[0][0]["name"] == "chart-maker"
     assert run["steps"][0]["metadata"]["skill_source"] == "capability_resolver"
     assert run["steps"][0]["metadata"]["skill_names"] == ["chart-maker"]
+    assert run["steps"][0]["metadata"]["verification_signals"] == ["artifact", "citations"]
+    assert run["steps"][0]["metadata"]["required_artifact_kinds"] == ["chart"]
     assert run["metadata"]["capability_state"]["skill_source"] == "capability_resolver"
     assert run["metadata"]["capability_state"]["skill_names"] == ["chart-maker"]
     assert run["metadata"]["capability_state"]["resolved_skill_count"] == 1
+    assert run["metadata"]["capability_state"]["verification_signals"] == ["artifact", "citations"]
+    assert run["metadata"]["capability_state"]["required_artifact_kinds"] == ["chart"]
 
     timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
     assert timeline.status_code == 200
@@ -977,6 +1029,7 @@ def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
         item for item in timeline.json()["timeline"] if item["type"] == "run.capability"
     ]
     assert capability_events[-1]["skill_names"] == ["chart-maker"]
+    assert capability_events[-1]["verification_signals"] == ["artifact", "citations"]
 
 
 def test_skill_preferred_initial_actions_bias_rule_bootstrap(tmp_path: Path) -> None:
