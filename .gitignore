@@ -3,6 +3,9 @@
 docs/plans/
 # Files not intended for public repository
 .private/
+/node_modules/
+/package-lock.json
+/package.json
 
 # Python
 __pycache__/
