@@ -51,6 +51,7 @@ class SkillManifest:
     guidance: str = ""
     preferred_initial_actions: tuple[str, ...] = ()
     preferred_follow_up_actions: tuple[str, ...] = ()
+    external_tools: tuple[str, ...] = ()
     verification_signals: tuple[str, ...] = ()
     required_artifact_kinds: tuple[str, ...] = ()
 
@@ -69,6 +70,8 @@ class SkillManifest:
             payload["preferred_initial_actions"] = list(self.preferred_initial_actions)
         if self.preferred_follow_up_actions:
             payload["preferred_follow_up_actions"] = list(self.preferred_follow_up_actions)
+        if self.external_tools:
+            payload["external_tools"] = list(self.external_tools)
         if self.verification_signals:
             payload["verification_signals"] = list(self.verification_signals)
         if self.required_artifact_kinds:
@@ -209,6 +212,9 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
         ),
         preferred_follow_up_actions=_parse_action_list(
             str(frontmatter.get("preferred_follow_up_actions", ""))
+        ),
+        external_tools=_parse_identifier_list(
+            str(frontmatter.get("external_tools", ""))
         ),
         verification_signals=_parse_identifier_list(
             str(frontmatter.get("verification_signals", ""))

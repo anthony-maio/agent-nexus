@@ -64,6 +64,7 @@ _HIGH_RISK_ACTIONS: frozenset[str] = frozenset(
         "generate_report",
         "generate_chart",
         "generate_image",
+        "external_tool",
         "promote",
         "send",
         "purchase",

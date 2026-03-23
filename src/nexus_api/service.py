@@ -8,10 +8,19 @@ from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from nexus_api.adapters import SandboxExecutionAdapter, WebInteractionAdapter
+from nexus_api.adapters import (
+    ExternalToolDispatchExecutionAdapter,
+    SandboxExecutionAdapter,
+    WebInteractionAdapter,
+)
 from nexus_api.adaptive_planner import ChatCompletionsAdaptivePlanner, OpenRouterAdaptivePlanner
 from nexus_api.config import ApiSettings
 from nexus_api.db import build_engine, build_session_factory
+from nexus_api.external_tools import (
+    ExternalToolRegistry,
+    StdioExternalToolInvoker,
+    parse_external_tool_config,
+)
 from nexus_api.migrator import run_migrations
 from nexus_api.model_router import ModelProfile, parse_model_router_config
 from nexus_api.synthesis_bridge import SynthesisBridge, synthesis_skill_paths
@@ -36,6 +45,7 @@ class ApiContext:
     adaptive_planner: Any
     skill_registry: SkillRegistry
     capability_resolver: CapabilityResolver | None
+    external_tool_registry: ExternalToolRegistry
     synthesis_bridge: SynthesisBridge | None
 
 
@@ -138,9 +148,23 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
     session_factory = build_session_factory(db_engine)
 
     events = RunEventBus()
-    execution_adapter = SandboxExecutionAdapter(
+    external_tool_registry = parse_external_tool_config(settings.APP_EXTERNAL_TOOL_CONFIG)
+    external_tool_invoker = (
+        StdioExternalToolInvoker()
+        if any(
+            (tool.transport or {}).get("kind") == "stdio"
+            for tool in external_tool_registry.list_tools()
+        )
+        else None
+    )
+    sandbox_execution_adapter = SandboxExecutionAdapter(
         base_url=settings.SANDBOX_RUNNER_URL,
         auth_token=settings.SANDBOX_RUNNER_TOKEN,
+    )
+    execution_adapter = ExternalToolDispatchExecutionAdapter(
+        base_adapter=sandbox_execution_adapter,
+        tool_registry=external_tool_registry,
+        tool_invoker=external_tool_invoker,
     )
     interaction_adapter = WebInteractionAdapter()
     rule_planner = RuleAdaptivePlanner()
@@ -189,5 +213,6 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
         adaptive_planner=adaptive_planner,
         skill_registry=skill_registry,
         capability_resolver=capability_resolver,
+        external_tool_registry=external_tool_registry,
         synthesis_bridge=synthesis_bridge,
     )

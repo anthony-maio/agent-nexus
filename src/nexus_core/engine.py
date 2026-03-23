@@ -143,6 +143,7 @@ class RunEngine:
         adaptive_planner: AdaptivePlanner | None = None,
         capability_resolver: CapabilityResolver | None = None,
         skill_registry: SkillRegistry | None = None,
+        external_tool_registry: Any | None = None,
         skill_acquirer: SkillAcquirer | None = None,
         auto_acquire_skills: bool = False,
         max_autonomous_steps: int = 24,
@@ -156,6 +157,7 @@ class RunEngine:
         self.adaptive_planner = adaptive_planner or RuleAdaptivePlanner()
         self.capability_resolver = capability_resolver
         self.skill_registry = skill_registry
+        self.external_tool_registry = external_tool_registry
         self.skill_acquirer = skill_acquirer
         self.auto_acquire_skills = bool(auto_acquire_skills)
         self.canonical_workspace = canonical_workspace
@@ -212,6 +214,7 @@ class RunEngine:
     ) -> list[StepDefinition]:
         resolved_skills = resolved_skills if resolved_skills is not None else self._resolved_skills_for_objective(objective)
         skill_context = serialize_skill_context(resolved_skills)
+        external_tool_context = self._external_tool_context()
         proposed = await request_next_steps(
             self.adaptive_planner,
             objective=objective,
@@ -221,6 +224,7 @@ class RunEngine:
             result=result,
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
         if completed_step is None or result is None:
             planned = apply_initial_plan_policy(proposed, mode=mode)
@@ -254,6 +258,7 @@ class RunEngine:
                         result=result,
                         existing_steps=existing_steps,
                         skill_context=skill_context,
+                        external_tool_context=external_tool_context,
                     ),
                     planner_source="rule",
                     planner_phase="follow_up",
@@ -1081,6 +1086,7 @@ class RunEngine:
             skill_names = metadata.get("skill_names")
             verification_signals = metadata.get("verification_signals")
             required_artifact_kinds = metadata.get("required_artifact_kinds")
+            external_tools = metadata.get("external_tools")
             verification_result = str(metadata.get("verification_result", "")).strip()
             kernel_decision = str(metadata.get("kernel_decision", "")).strip()
             retryable = metadata.get("retryable")
@@ -1093,6 +1099,8 @@ class RunEngine:
                 payload["verification_signals"] = [str(item) for item in verification_signals]
             if isinstance(required_artifact_kinds, list) and required_artifact_kinds:
                 payload["required_artifact_kinds"] = [str(item) for item in required_artifact_kinds]
+            if isinstance(external_tools, list) and external_tools:
+                payload["external_tools"] = [str(item) for item in external_tools]
             if verification_result:
                 payload["verification_result"] = verification_result
             if kernel_decision:
@@ -1138,6 +1146,10 @@ class RunEngine:
             resolved_skills,
             attribute="required_artifact_kinds",
         )
+        external_tools = RunEngine._merged_skill_values(
+            resolved_skills,
+            attribute="external_tools",
+        )
         resolved_payload = [
             {
                 "name": skill.name,
@@ -1145,6 +1157,7 @@ class RunEngine:
                 "path": skill.path,
                 "preferred_initial_actions": list(skill.preferred_initial_actions),
                 "preferred_follow_up_actions": list(skill.preferred_follow_up_actions),
+                "external_tools": list(skill.external_tools),
                 "verification_signals": list(skill.verification_signals),
                 "required_artifact_kinds": list(skill.required_artifact_kinds),
             }
@@ -1160,6 +1173,8 @@ class RunEngine:
             capability_state["verification_signals"] = verification_signals
         if required_artifact_kinds:
             capability_state["required_artifact_kinds"] = required_artifact_kinds
+        if external_tools:
+            capability_state["external_tools"] = external_tools
         if isinstance(acquisition, dict) and acquisition:
             capability_state["skill_acquisition"] = {
                 "success": bool(acquisition.get("success")),
@@ -1188,6 +1203,23 @@ class RunEngine:
                 seen.add(value)
                 merged.append(value)
         return merged
+
+    def _external_tool_context(self) -> list[dict[str, Any]]:
+        registry = self.external_tool_registry
+        if registry is None or not hasattr(registry, "list_tools"):
+            return []
+        try:
+            tools = registry.list_tools()
+        except Exception:
+            return []
+
+        serialized: list[dict[str, Any]] = []
+        for tool in tools:
+            if hasattr(tool, "to_dict"):
+                payload = tool.to_dict()
+                if isinstance(payload, dict):
+                    serialized.append(payload)
+        return serialized
 
     async def _record_kernel_decision(
         self,

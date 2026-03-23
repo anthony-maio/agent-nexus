@@ -125,6 +125,14 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
         items = [manifest.to_dict() for manifest in ctx.skill_registry.list_manifests()]
         return {"items": items, "total": len(items)}
 
+    @app.get("/tools")
+    def list_tools(
+        user: dict[str, Any] = Depends(current_user),
+    ) -> dict[str, Any]:
+        _ = user
+        items = [tool.to_dict() for tool in ctx.external_tool_registry.list_tools()]
+        return {"items": items, "total": len(items)}
+
     @app.get("/skills/resolve")
     def resolve_skills(
         objective: str = Query(default="", min_length=1, max_length=2000),
@@ -214,6 +222,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
             skill_registry=ctx.skill_registry,
+            external_tool_registry=ctx.external_tool_registry,
             skill_acquirer=ctx.synthesis_bridge,
             auto_acquire_skills=ctx.settings.APP_AUTO_ACQUIRE_SKILLS,
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
@@ -318,6 +327,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
             skill_registry=ctx.skill_registry,
+            external_tool_registry=ctx.external_tool_registry,
             skill_acquirer=ctx.synthesis_bridge,
             auto_acquire_skills=ctx.settings.APP_AUTO_ACQUIRE_SKILLS,
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
@@ -351,6 +361,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
             skill_registry=ctx.skill_registry,
+            external_tool_registry=ctx.external_tool_registry,
             skill_acquirer=ctx.synthesis_bridge,
             auto_acquire_skills=ctx.settings.APP_AUTO_ACQUIRE_SKILLS,
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
@@ -377,6 +388,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
             skill_registry=ctx.skill_registry,
+            external_tool_registry=ctx.external_tool_registry,
             skill_acquirer=ctx.synthesis_bridge,
             auto_acquire_skills=ctx.settings.APP_AUTO_ACQUIRE_SKILLS,
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
@@ -410,6 +422,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             adaptive_planner=ctx.adaptive_planner,
             capability_resolver=ctx.capability_resolver,
             skill_registry=ctx.skill_registry,
+            external_tool_registry=ctx.external_tool_registry,
             skill_acquirer=ctx.synthesis_bridge,
             auto_acquire_skills=ctx.settings.APP_AUTO_ACQUIRE_SKILLS,
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,

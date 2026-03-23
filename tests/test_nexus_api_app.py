@@ -14,8 +14,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from nexus_api.adapters import ExternalToolDispatchExecutionAdapter
 from nexus_api.app import create_app
 from nexus_api.config import ApiSettings
+from nexus_api.external_tools import StdioExternalToolInvoker, parse_external_tool_config
 import nexus_api.service as api_service
 from nexus_api.service import build_context
 from nexus_core.models import ArtifactRecord, CitationRecord, StepDefinition, StepExecutionResult
@@ -639,6 +641,56 @@ def _write_fake_synthesis_project(root: Path) -> None:
     )
 
 
+def _write_fake_stdio_mcp_server(root: Path) -> Path:
+    script_path = root / "fake_mcp_server.py"
+    script_path.write_text(
+        "\n".join(
+            [
+                "import json",
+                "import sys",
+                "",
+                "for line in sys.stdin:",
+                "    raw = line.strip()",
+                "    if not raw:",
+                "        continue",
+                "    req = json.loads(raw)",
+                "    req_id = req.get('id')",
+                "    method = req.get('method')",
+                "    params = req.get('params') or {}",
+                "    if method == 'initialize':",
+                "        resp = {",
+                "            'jsonrpc': '2.0',",
+                "            'id': req_id,",
+                "            'result': {",
+                "                'protocolVersion': '2024-11-05',",
+                "                'serverInfo': {'name': 'fake-mcp', 'version': '1.0'},",
+                "                'capabilities': {'tools': {}},",
+                "            },",
+                "        }",
+                "    elif method == 'tools/call':",
+                "        resp = {",
+                "            'jsonrpc': '2.0',",
+                "            'id': req_id,",
+                "            'result': {",
+                "                'content': [",
+                "                    {",
+                "                        'type': 'text',",
+                "                        'text': json.dumps({'neo4j': 'offline', 'echo': params.get('arguments') or {}}),",
+                "                    }",
+                "                ]",
+                "            },",
+                "        }",
+                "    else:",
+                "        resp = {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32601, 'message': method}}",
+                "    sys.stdout.write(json.dumps(resp) + '\\n')",
+                "    sys.stdout.flush()",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return script_path
+
+
 class ManagedTestClient(TestClient):
     def __init__(self, app: FastAPI, cleanup: callable | None = None) -> None:
         super().__init__(app)
@@ -837,6 +889,97 @@ def test_list_skills_returns_discovered_runtime_skill_manifests(tmp_path: Path) 
     payload = response.json()
     assert payload["items"][0]["name"] == "chart-maker"
     assert payload["items"][0]["description"] == "Generate charts from tabular data."
+
+
+def test_list_tools_returns_registered_external_tools(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        settings_overrides={
+            "APP_EXTERNAL_TOOL_CONFIG": json.dumps(
+                [
+                    {
+                        "name": "mnemos.retrieve",
+                        "description": "Retrieve scoped memory from Mnemos.",
+                        "source": "mcp://mnemos",
+                        "tags": ["memory", "retrieval"],
+                    },
+                    {
+                        "name": "cartographer.map_repo",
+                        "description": "Build a scoped repository map.",
+                        "source": "mcp://cartographer",
+                        "tags": ["repo", "context"],
+                    },
+                ]
+            )
+        },
+    )
+    headers = _auth_header(client)
+
+    response = client.get("/tools", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["items"][0]["name"] == "cartographer.map_repo"
+    assert payload["items"][0]["source"] == "mcp://cartographer"
+    assert payload["items"][1]["name"] == "mnemos.retrieve"
+    assert payload["items"][1]["tags"] == ["memory", "retrieval"]
+
+
+def test_manual_run_executes_registered_stdio_external_tool(tmp_path: Path) -> None:
+    script_path = _write_fake_stdio_mcp_server(tmp_path)
+    tool_config = json.dumps(
+        [
+            {
+                "name": "c2.status",
+                "description": "Return continuity-core status.",
+                "source": "mcp://continuity-core",
+                "transport": {
+                    "kind": "stdio",
+                    "command": [sys.executable, str(script_path)],
+                },
+            }
+        ]
+    )
+    client = _client(
+        tmp_path,
+        execution_adapter=ExternalToolDispatchExecutionAdapter(
+            base_adapter=FakeExecutionAdapter(tmp_path),
+            tool_registry=parse_external_tool_config(tool_config),
+            tool_invoker=StdioExternalToolInvoker(timeout_sec=10.0),
+        ),
+        settings_overrides={
+            "APP_EXTERNAL_TOOL_CONFIG": tool_config
+        },
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Inspect continuity-core status",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "external_tool",
+                    "instruction": json.dumps({"tool_name": "c2.status", "arguments": {}}),
+                }
+            ],
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    assert run["status"] == "completed"
+    assert run["steps"][0]["action_type"] == "external_tool"
+    assert run["steps"][0]["status"] == "completed"
+
+    details = client.get(f"/runs/{run['id']}", headers=headers)
+    assert details.status_code == 200
+    payload = details.json()
+    assert payload["citations"][0]["url"] == "mcp://continuity-core"
+    assert payload["steps"][0]["metadata"]["external_tool"]["name"] == "c2.status"
 
 
 def test_list_skills_includes_synthesis_host_and_canonical_roots(tmp_path: Path) -> None:

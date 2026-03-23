@@ -13,6 +13,7 @@ def _write_skill(
     description: str,
     preferred_initial_actions: str = "",
     preferred_follow_up_actions: str = "",
+    external_tools: str = "",
     verification_signals: str = "",
     required_artifact_kinds: str = "",
 ) -> Path:
@@ -27,6 +28,8 @@ def _write_skill(
         frontmatter.append(f"preferred_initial_actions: {preferred_initial_actions}")
     if preferred_follow_up_actions:
         frontmatter.append(f"preferred_follow_up_actions: {preferred_follow_up_actions}")
+    if external_tools:
+        frontmatter.append(f"external_tools: {external_tools}")
     if verification_signals:
         frontmatter.append(f"verification_signals: {verification_signals}")
     if required_artifact_kinds:
@@ -109,6 +112,25 @@ def test_skill_registry_parses_preferred_follow_up_actions(tmp_path: Path) -> No
     assert manifests[0].to_dict()["preferred_follow_up_actions"] == [
         "generate_report",
         "export",
+    ]
+
+
+def test_skill_registry_parses_external_tool_dependencies(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "memory-helper",
+        name="memory-helper",
+        description="Retrieve scoped memory and repo maps from external tools.",
+        external_tools="mnemos.retrieve, cartographer.map_repo",
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].external_tools == ("mnemos.retrieve", "cartographer.map_repo")
+    assert manifests[0].to_dict()["external_tools"] == [
+        "mnemos.retrieve",
+        "cartographer.map_repo",
     ]
 
 

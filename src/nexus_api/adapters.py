@@ -7,6 +7,11 @@ from typing import Any
 
 import httpx
 
+from nexus_api.external_tools import (
+    ExternalToolInvoker,
+    ExternalToolRegistry,
+    parse_external_tool_instruction,
+)
 from nexus_core.models import ArtifactRecord, CitationRecord, StepExecutionResult
 
 log = logging.getLogger(__name__)
@@ -87,4 +92,50 @@ class SandboxExecutionAdapter:
             citations=citations,
             artifacts=artifacts,
             metadata=data.get("metadata", {}),
+        )
+
+
+class ExternalToolDispatchExecutionAdapter:
+    """Execution adapter that routes external_tool calls outside the sandbox plane."""
+
+    def __init__(
+        self,
+        *,
+        base_adapter: Any,
+        tool_registry: ExternalToolRegistry,
+        tool_invoker: ExternalToolInvoker | None = None,
+    ) -> None:
+        self.base_adapter = base_adapter
+        self.tool_registry = tool_registry
+        self.tool_invoker = tool_invoker
+
+    async def execute_step(
+        self, run_id: str, step_id: str, action_type: str, instruction: str
+    ) -> StepExecutionResult:
+        if action_type.strip().lower() != "external_tool":
+            return await self.base_adapter.execute_step(run_id, step_id, action_type, instruction)
+
+        if self.tool_invoker is None:
+            raise RuntimeError("External tool invocation is not configured")
+
+        tool_name, arguments = parse_external_tool_instruction(instruction)
+        tool_spec = self.tool_registry.get_tool(tool_name)
+        if tool_spec is None:
+            raise ValueError(f"External tool `{tool_name}` is not registered")
+
+        result = await self.tool_invoker.invoke_tool(
+            run_id=run_id,
+            step_id=step_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            instruction=instruction,
+            tool_spec=tool_spec,
+        )
+        metadata = dict(result.metadata)
+        metadata["external_tool"] = tool_spec.to_dict()
+        return StepExecutionResult(
+            output_text=result.output_text,
+            citations=result.citations,
+            artifacts=result.artifacts,
+            metadata=metadata,
         )

@@ -110,6 +110,7 @@ _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
         "search_web",
         "fetch_url",
         "call_api",
+        "external_tool",
         "list_files",
         "read_file",
         "write_file",
@@ -259,6 +260,7 @@ def plan_follow_up_steps(
     existing_steps: list[dict[str, Any]],
     skill_context: list[dict[str, Any]] | None = None,
     kernel_context: dict[str, Any] | None = None,
+    external_tool_context: list[dict[str, Any]] | None = None,
 ) -> list[StepDefinition]:
     """Return dynamic follow-up steps based on execution result."""
     metadata_steps = _metadata_follow_up_steps(result)
@@ -631,6 +633,7 @@ class AdaptivePlanner(Protocol):
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         """Return the next steps for either bootstrap or follow-up planning."""
 
@@ -640,6 +643,7 @@ class AdaptivePlanner(Protocol):
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         """Return the initial bootstrap steps for a run."""
 
@@ -651,6 +655,7 @@ class AdaptivePlanner(Protocol):
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         """Return proposed follow-up steps for current run context."""
 
@@ -665,6 +670,7 @@ async def request_next_steps(
     result: StepExecutionResult | None = None,
     skill_context: list[dict[str, str]] | None = None,
     kernel_context: dict[str, Any] | None = None,
+    external_tool_context: list[dict[str, Any]] | None = None,
 ) -> list[StepDefinition]:
     """Dispatch to the planner's shared next-step contract when available."""
 
@@ -678,6 +684,7 @@ async def request_next_steps(
             result=result,
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
     if completed_step is None or result is None:
         return await _call_planner_method(
@@ -686,6 +693,7 @@ async def request_next_steps(
             mode=mode,
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
     return await _call_planner_method(
         planner.propose_follow_up,
@@ -695,6 +703,7 @@ async def request_next_steps(
         existing_steps=existing_steps,
         skill_context=skill_context,
         kernel_context=kernel_context,
+        external_tool_context=external_tool_context,
     )
 
 
@@ -722,6 +731,7 @@ class RuleAdaptivePlanner:
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         _ = mode
         if completed_step is None or result is None:
@@ -749,6 +759,7 @@ class RuleAdaptivePlanner:
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -756,6 +767,7 @@ class RuleAdaptivePlanner:
             existing_steps=[],
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
 
     async def propose_follow_up(
@@ -766,6 +778,7 @@ class RuleAdaptivePlanner:
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -775,6 +788,7 @@ class RuleAdaptivePlanner:
             result=result,
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
 
 
@@ -791,6 +805,7 @@ class CompositeAdaptivePlanner:
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         fallback_reason = ""
         for planner in self.planners:
@@ -804,6 +819,7 @@ class CompositeAdaptivePlanner:
                     result=result,
                     skill_context=skill_context,
                     kernel_context=kernel_context,
+                    external_tool_context=external_tool_context,
                 )
             except Exception as exc:
                 log.warning("Adaptive planner failed (%s): %s", type(planner).__name__, exc)
@@ -825,6 +841,7 @@ class CompositeAdaptivePlanner:
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -832,6 +849,7 @@ class CompositeAdaptivePlanner:
             existing_steps=[],
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
 
     async def propose_follow_up(
@@ -842,6 +860,7 @@ class CompositeAdaptivePlanner:
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -851,6 +870,7 @@ class CompositeAdaptivePlanner:
             result=result,
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
 
 

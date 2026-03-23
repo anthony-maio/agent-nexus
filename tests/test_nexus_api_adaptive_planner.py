@@ -120,6 +120,14 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
             }
         ],
         kernel_context={"strategy": "workflow", "tactic": "observe"},
+        external_tool_context=[
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+                "tags": ["memory", "retrieval"],
+            }
+        ],
     )
 
     assert steps
@@ -130,6 +138,7 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     assert "search_web" in allowed_actions
     assert "fetch_url" in allowed_actions
     assert "call_api" in allowed_actions
+    assert "external_tool" in allowed_actions
     assert "generate_report" in allowed_actions
     assert "generate_chart" in allowed_actions
     assert "generate_image" in allowed_actions
@@ -138,12 +147,15 @@ async def test_openrouter_follow_up_request_includes_actions_and_evidence_contex
     assert "For edit_file use instruction payload" in request_body["messages"][0]["content"]
     assert "For execute_code use instruction payload" in request_body["messages"][0]["content"]
     assert "For call_api use instruction payload" in request_body["messages"][0]["content"]
+    assert "For external_tool use instruction payload" in request_body["messages"][0]["content"]
     assert "For generate_report use instruction payload" in request_body["messages"][0]["content"]
     assert "For generate_chart use instruction payload" in request_body["messages"][0]["content"]
     assert "For generate_image use instruction payload" in request_body["messages"][0]["content"]
     completed_payload = payload["completed_step"]
     assert payload["resolved_skills"][0]["name"] == "browser-agent"
     assert payload["resolved_skills"][0]["path"] == "/skills/browser-agent/SKILL.md"
+    assert payload["available_external_tools"][0]["name"] == "mnemos.retrieve"
+    assert payload["available_external_tools"][0]["source"] == "mcp://mnemos"
     assert payload["kernel_context"]["strategy"] == "workflow"
     assert payload["kernel_context"]["tactic"] == "observe"
     assert completed_payload["citations"][0]["url"] == "https://docs.example.org/start"

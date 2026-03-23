@@ -38,6 +38,18 @@ def test_workspace_mutation_actions_are_high_risk(action_type: str) -> None:
     assert is_high_risk_action(action_type)
 
 
+def test_external_tool_actions_default_to_high_risk() -> None:
+    instruction = json.dumps(
+        {
+            "tool_name": "mnemos.retrieve",
+            "arguments": {"query": "recent payment retries"},
+        }
+    )
+
+    assert risk_tier_for_action("external_tool", instruction) == RiskTier.HIGH
+    assert is_high_risk_action("external_tool", instruction)
+
+
 def test_execute_code_test_commands_are_low_risk() -> None:
     instruction = json.dumps({"command": ["python", "-m", "pytest", "-q"]})
 

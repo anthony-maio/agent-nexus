@@ -47,6 +47,7 @@ class ChatCompletionsAdaptivePlanner:
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         if not self.model:
             return []
@@ -76,6 +77,8 @@ class ChatCompletionsAdaptivePlanner:
                 payload["resolved_skills"] = skill_context
             if kernel_context:
                 payload["kernel_context"] = kernel_context
+            if external_tool_context:
+                payload["available_external_tools"] = external_tool_context
             parsed = await self._request_plan(
                 prompt=(
                     "Return strict JSON with shape "
@@ -133,6 +136,7 @@ class ChatCompletionsAdaptivePlanner:
                     "inspect",
                     "scroll",
                     "extract",
+                    "external_tool",
                     "read",
                     "click",
                     "type",
@@ -151,6 +155,8 @@ class ChatCompletionsAdaptivePlanner:
             payload["resolved_skills"] = skill_context
         if kernel_context:
             payload["kernel_context"] = kernel_context
+        if external_tool_context:
+            payload["available_external_tools"] = external_tool_context
         parsed = await self._request_plan(
             prompt=(
                 "Return strict JSON with shape "
@@ -162,6 +168,7 @@ class ChatCompletionsAdaptivePlanner:
                 'For edit_file use instruction payload {"path":"...","old":"...","new":"..."} or {"path":"...","content":"..."}. '
                 'For execute_code use instruction payload {"command":["cmd","arg"]}. '
                 'For call_api use instruction payload {"url":"https://...","method":"GET","headers":{"Accept":"application/json"}}. '
+                'For external_tool use instruction payload {"tool_name":"...","arguments":{...}} and choose only from available_external_tools when provided. '
                 'For generate_report use instruction payload {"path":"reports/...md","title":"...","sources":[...]}. '
                 'For generate_chart use instruction payload {"path":"charts/...html","chart_type":"bar","title":"...","x_key":"...","y_key":"...","data":[...]}. '
                 'For generate_image use instruction payload {"path":"images/...svg","title":"...","prompt":"...","sources":[...]}. '
@@ -186,6 +193,7 @@ class ChatCompletionsAdaptivePlanner:
         mode: RunMode,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -193,6 +201,7 @@ class ChatCompletionsAdaptivePlanner:
             existing_steps=[],
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
 
     async def propose_follow_up(
@@ -203,6 +212,7 @@ class ChatCompletionsAdaptivePlanner:
         existing_steps: list[dict[str, Any]],
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         return await self.plan_next_steps(
             objective=objective,
@@ -212,6 +222,7 @@ class ChatCompletionsAdaptivePlanner:
             result=result,
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
 
     async def _request_plan(
@@ -311,6 +322,7 @@ class RuleFallbackAdaptivePlanner:
         result: StepExecutionResult | None = None,
         skill_context: list[dict[str, str]] | None = None,
         kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
     ) -> list[StepDefinition]:
         return await request_next_steps(
             self.planner,
@@ -321,6 +333,7 @@ class RuleFallbackAdaptivePlanner:
             result=result,
             skill_context=skill_context,
             kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
         )
 
     async def plan_initial_steps(
