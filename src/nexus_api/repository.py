@@ -581,6 +581,11 @@ class SqlRunRepository:
                 if isinstance(metadata, dict)
                 else ""
             )
+            kernel_decision_reason = (
+                str(metadata.get("kernel_decision_reason", "")).strip()
+                if isinstance(metadata, dict)
+                else ""
+            )
             verification_result = (
                 str(metadata.get("verification_result", "")).strip()
                 if isinstance(metadata, dict)
@@ -598,6 +603,8 @@ class SqlRunRepository:
                 }
                 if kernel_decision:
                     kernel_event["kernel_decision"] = kernel_decision
+                if kernel_decision_reason:
+                    kernel_event["reason"] = kernel_decision_reason
                 if verification_result:
                     kernel_event["verification_result"] = verification_result
                 if isinstance(retryable, bool):

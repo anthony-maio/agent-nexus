@@ -228,6 +228,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
             max_step_retries=ctx.settings.APP_KERNEL_MAX_STEP_RETRIES,
             max_identical_step_streak=ctx.settings.APP_KERNEL_MAX_IDENTICAL_STEP_STREAK,
+            max_completion_recovery_attempts=ctx.settings.APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS,
         )
         run = await engine.create_run(
             objective=request.objective,
@@ -333,6 +334,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
             max_step_retries=ctx.settings.APP_KERNEL_MAX_STEP_RETRIES,
             max_identical_step_streak=ctx.settings.APP_KERNEL_MAX_IDENTICAL_STEP_STREAK,
+            max_completion_recovery_attempts=ctx.settings.APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS,
         )
         run = await engine.decide_approval(
             run_id=run_id,
@@ -367,6 +369,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
             max_step_retries=ctx.settings.APP_KERNEL_MAX_STEP_RETRIES,
             max_identical_step_streak=ctx.settings.APP_KERNEL_MAX_IDENTICAL_STEP_STREAK,
+            max_completion_recovery_attempts=ctx.settings.APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS,
         )
         return await engine.resume_run(run_id=run_id)
 
@@ -394,6 +397,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
             max_step_retries=ctx.settings.APP_KERNEL_MAX_STEP_RETRIES,
             max_identical_step_streak=ctx.settings.APP_KERNEL_MAX_IDENTICAL_STEP_STREAK,
+            max_completion_recovery_attempts=ctx.settings.APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS,
         )
         return await engine.retry_run(run_id=run_id)
 
@@ -428,6 +432,7 @@ def create_app(context: ApiContext | None = None) -> FastAPI:
             max_autonomous_steps=ctx.settings.APP_KERNEL_MAX_AUTONOMOUS_STEPS,
             max_step_retries=ctx.settings.APP_KERNEL_MAX_STEP_RETRIES,
             max_identical_step_streak=ctx.settings.APP_KERNEL_MAX_IDENTICAL_STEP_STREAK,
+            max_completion_recovery_attempts=ctx.settings.APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS,
         )
         return await engine.promote_artifact(
             run_id=run_id,

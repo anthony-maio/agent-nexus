@@ -149,6 +149,7 @@ class RunEngine:
         max_autonomous_steps: int = 24,
         max_step_retries: int = 0,
         max_identical_step_streak: int = 0,
+        max_completion_recovery_attempts: int = 1,
     ) -> None:
         self.repo = repository
         self.execution = execution
@@ -167,6 +168,7 @@ class RunEngine:
         self.max_autonomous_steps = max(int(max_autonomous_steps), 1)
         self.max_step_retries = max(int(max_step_retries), 0)
         self.max_identical_step_streak = max(int(max_identical_step_streak), 0)
+        self.max_completion_recovery_attempts = max(int(max_completion_recovery_attempts), 0)
         self.canonical_workspace.mkdir(parents=True, exist_ok=True)
 
     async def create_run(
@@ -812,9 +814,11 @@ class RunEngine:
         if run is None:
             return
         verification = self._evaluate_run_completion(run)
-        self.repo.merge_run_metadata(run_id, {"run_verification": verification.model_dump()})
-        await self._publish(run_id, "run.verification", verification.model_dump())
         if verification.result == "blocked":
+            if await self._attempt_completion_recovery(run, verification):
+                return
+            self.repo.merge_run_metadata(run_id, {"run_verification": verification.model_dump()})
+            await self._publish(run_id, "run.verification", verification.model_dump())
             self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
             await self._update_run_kernel_state(
                 run_id,
@@ -833,6 +837,8 @@ class RunEngine:
             )
             return
 
+        self.repo.merge_run_metadata(run_id, {"run_verification": verification.model_dump()})
+        await self._publish(run_id, "run.verification", verification.model_dump())
         self.repo.mark_run_status(run_id, RunStatus.COMPLETED.value)
         await self._update_run_kernel_state(run_id, phase="completed")
         message = (
@@ -858,6 +864,54 @@ class RunEngine:
             citations=citations,
             artifacts=artifacts,
         )
+
+    async def _attempt_completion_recovery(
+        self,
+        run: dict[str, Any],
+        verification: RunVerificationRecord,
+    ) -> bool:
+        if verification.result != "blocked" or self.max_completion_recovery_attempts <= 0:
+            return False
+        metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+        recovery_count = int(metadata.get("completion_recovery_attempt_count", 0) or 0)
+        if recovery_count >= self.max_completion_recovery_attempts:
+            return False
+        recovery_steps = self._completion_recovery_steps(run, verification)
+        if not recovery_steps:
+            return False
+        last_completed = self._latest_completed_step(run)
+        if last_completed is None:
+            return False
+        resolved_skills = self._resolved_skills_for_objective(str(run.get("objective", "")))
+        planned_steps = self._annotate_skill_context(
+            recovery_steps,
+            resolved_skills,
+        )
+        self.repo.insert_steps_after(str(last_completed.get("id", "")), planned_steps)
+        self.repo.merge_run_metadata(
+            str(run.get("id", "")),
+            {"completion_recovery_attempt_count": recovery_count + 1},
+        )
+        await self._record_kernel_decision(
+            str(run.get("id", "")),
+            last_completed,
+            "continue",
+            reason="completion_recovery",
+        )
+        await self._publish(
+            str(run.get("id", "")),
+            "run.replanned",
+            {
+                "after_step_id": str(last_completed.get("id", "")),
+                "inserted_steps": [step.model_dump() for step in planned_steps],
+                "recovery": True,
+                "verification_reason": verification.reason,
+            },
+        )
+        self.repo.mark_run_status(str(run.get("id", "")), RunStatus.RUNNING.value)
+        await self._update_run_kernel_state(str(run.get("id", "")), phase="running")
+        await self._execute_until_gate(str(run.get("id", "")))
+        return True
 
     async def _resolve_capability_context(
         self,
@@ -1089,6 +1143,7 @@ class RunEngine:
             external_tools = metadata.get("external_tools")
             verification_result = str(metadata.get("verification_result", "")).strip()
             kernel_decision = str(metadata.get("kernel_decision", "")).strip()
+            kernel_decision_reason = str(metadata.get("kernel_decision_reason", "")).strip()
             retryable = metadata.get("retryable")
             retry_count = metadata.get("retry_count")
             if skill_source:
@@ -1105,6 +1160,8 @@ class RunEngine:
                 payload["verification_result"] = verification_result
             if kernel_decision:
                 payload["kernel_decision"] = kernel_decision
+            if kernel_decision_reason:
+                payload["kernel_decision_reason"] = kernel_decision_reason
             if isinstance(retryable, bool):
                 payload["retryable"] = retryable
             if isinstance(retry_count, int):
@@ -1123,6 +1180,51 @@ class RunEngine:
         if result.citations or result.artifacts or str(result.output_text or "").strip():
             return "passed"
         return "unknown"
+
+    @staticmethod
+    def _latest_completed_step(run: dict[str, Any]) -> dict[str, Any] | None:
+        steps = run.get("steps")
+        if not isinstance(steps, list):
+            return None
+        for step in reversed(steps):
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("status", "")).strip().lower() != StepStatus.COMPLETED.value:
+                continue
+            return step
+        return None
+
+    @staticmethod
+    def _completion_recovery_steps(
+        run: dict[str, Any],
+        verification: RunVerificationRecord,
+    ) -> list[StepDefinition]:
+        objective = str(run.get("objective", "")).strip()
+        signals = verification.signals if isinstance(verification.signals, dict) else {}
+        completed_actions = {
+            str(item).strip().lower()
+            for item in (signals.get("completed_actions") or [])
+            if str(item).strip()
+        }
+        citation_count = int(signals.get("citation_count", 0) or 0)
+        terminal_artifact_actions = {"export", "generate_report", "generate_chart", "generate_image"}
+        if (
+            verification.strategy == "research"
+            and citation_count > 0
+            and not (completed_actions & terminal_artifact_actions)
+            and "generate_report" not in completed_actions
+        ):
+            return annotate_planner_steps(
+                [
+                    StepDefinition(
+                        action_type="generate_report",
+                        instruction=f"Generate a grounded research report for: {objective}",
+                    )
+                ],
+                planner_source="kernel",
+                planner_phase="completion_recovery",
+            )
+        return []
 
     def _resolved_skills_for_objective(self, objective: str) -> list[SkillManifest]:
         if self.capability_resolver is None:

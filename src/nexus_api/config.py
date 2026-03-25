@@ -38,6 +38,7 @@ class ApiSettings(BaseSettings):
     APP_KERNEL_MAX_AUTONOMOUS_STEPS: int = Field(default=24)
     APP_KERNEL_MAX_STEP_RETRIES: int = Field(default=0)
     APP_KERNEL_MAX_IDENTICAL_STEP_STREAK: int = Field(default=0)
+    APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS: int = Field(default=1)
     APP_MODEL_REPLANNER_PROVIDER: str = Field(default="openrouter")
     APP_MODEL_REPLANNER_API_KEY: str = Field(default="")
     APP_MODEL_REPLANNER_BASE_URL: str = Field(default="")

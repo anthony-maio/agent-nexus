@@ -43,7 +43,7 @@ class FakeExecutionAdapter:
             )
         ]
         artifacts = []
-        if action_type in {"extract", "export", "write"}:
+        if action_type in {"extract", "export", "write", "generate_report"}:
             name = f"{step_id}-{action_type}.txt"
             path = run_dir / name
             path.write_text(f"{action_type} output", encoding="utf-8")
@@ -2929,7 +2929,11 @@ def test_run_adapts_when_extract_returns_no_citations(tmp_path: Path) -> None:
 
 
 def test_research_run_without_terminal_output_is_blocked_by_completion_verifier(tmp_path: Path) -> None:
-    client = _client_with_planner(tmp_path, adaptive_planner=NoFollowUpPlanner())
+    client = _client_with_planner(
+        tmp_path,
+        adaptive_planner=NoFollowUpPlanner(),
+        settings_overrides={"APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS": 0},
+    )
     headers = _auth_header(client)
 
     create = client.post(
@@ -2961,6 +2965,52 @@ def test_research_run_without_terminal_output_is_blocked_by_completion_verifier(
     ]
     assert verification_events
     assert verification_events[-1]["result"] == "blocked"
+
+
+def test_kernel_completion_recovery_adds_terminal_output_for_research_runs(tmp_path: Path) -> None:
+    client = _client_with_planner(
+        tmp_path,
+        adaptive_planner=NoFollowUpPlanner(),
+        settings_overrides={"APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS": 1},
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Research competitor pricing pages",
+            "mode": "manual",
+            "steps": [
+                {"action_type": "search_web", "instruction": "find competitor pricing pages"},
+                {"action_type": "fetch_url", "instruction": "open the grounded pricing result"},
+                {"action_type": "extract", "instruction": "extract grounded pricing evidence"},
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "completed"
+    assert [step["action_type"] for step in run["steps"]] == [
+        "search_web",
+        "fetch_url",
+        "extract",
+        "generate_report",
+    ]
+    verification = run["metadata"]["run_verification"]
+    assert verification["result"] == "verified"
+    assert verification["signals"]["artifact_count"] >= 1
+    assert verification["signals"]["citation_count"] >= 1
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    recovery_events = [
+        item
+        for item in timeline.json()["timeline"]
+        if item["type"] == "kernel.decision" and item.get("reason") == "completion_recovery"
+    ]
+    assert recovery_events
 
 
 def test_research_run_with_terminal_output_is_verified_by_completion_layer(tmp_path: Path) -> None:
