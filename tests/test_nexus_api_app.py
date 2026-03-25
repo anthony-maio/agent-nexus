@@ -3013,6 +3013,50 @@ def test_kernel_completion_recovery_adds_terminal_output_for_research_runs(tmp_p
     assert recovery_events
 
 
+def test_kernel_completion_recovery_adds_code_verification_for_coding_runs(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        settings_overrides={"APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS": 1},
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Implement retry backoff in the repo",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "write_file",
+                    "instruction": json.dumps(
+                        {"path": "src/retry.py", "content": "def retry_backoff():\n    return 2"}
+                    ),
+                }
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "completed"
+    assert run["steps"][0]["action_type"] == "write_file"
+    assert run["steps"][1]["action_type"] == "execute_code"
+    verification = run["metadata"]["run_verification"]
+    assert verification["result"] == "verified"
+    assert verification["signals"]["mutating_code_action_count"] == 1
+    assert verification["signals"]["successful_execute_code_count"] == 1
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    recovery_events = [
+        item
+        for item in timeline.json()["timeline"]
+        if item["type"] == "kernel.decision" and item.get("reason") == "completion_recovery"
+    ]
+    assert recovery_events
+
+
 def test_research_run_with_terminal_output_is_verified_by_completion_layer(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

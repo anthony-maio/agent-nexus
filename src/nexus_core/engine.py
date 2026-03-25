@@ -814,9 +814,10 @@ class RunEngine:
         if run is None:
             return
         verification = self._evaluate_run_completion(run)
-        if verification.result == "blocked":
+        if verification.result in {"blocked", "provisional"}:
             if await self._attempt_completion_recovery(run, verification):
                 return
+        if verification.result == "blocked":
             self.repo.merge_run_metadata(run_id, {"run_verification": verification.model_dump()})
             await self._publish(run_id, "run.verification", verification.model_dump())
             self.repo.mark_run_status(run_id, RunStatus.FAILED.value)
@@ -870,9 +871,11 @@ class RunEngine:
         run: dict[str, Any],
         verification: RunVerificationRecord,
     ) -> bool:
-        if verification.result != "blocked" or self.max_completion_recovery_attempts <= 0:
+        if verification.result == "verified" or self.max_completion_recovery_attempts <= 0:
             return False
         metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+        if run.get("parent_run_id") or run.get("delegation"):
+            return False
         recovery_count = int(metadata.get("completion_recovery_attempt_count", 0) or 0)
         if recovery_count >= self.max_completion_recovery_attempts:
             return False
@@ -1219,6 +1222,27 @@ class RunEngine:
                     StepDefinition(
                         action_type="generate_report",
                         instruction=f"Generate a grounded research report for: {objective}",
+                    )
+                ],
+                planner_source="kernel",
+                planner_phase="completion_recovery",
+            )
+        successful_execute_code_count = int(signals.get("successful_execute_code_count", 0) or 0)
+        mutating_code_action_count = int(signals.get("mutating_code_action_count", 0) or 0)
+        if (
+            verification.strategy == "coding"
+            and mutating_code_action_count > 0
+            and successful_execute_code_count <= 0
+            and "execute_code" not in completed_actions
+        ):
+            return annotate_planner_steps(
+                [
+                    StepDefinition(
+                        action_type="execute_code",
+                        instruction=(
+                            "Run the most relevant verification or test command for: "
+                            f"{objective}"
+                        ),
                     )
                 ],
                 planner_source="kernel",
