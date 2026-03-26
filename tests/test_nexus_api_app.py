@@ -585,6 +585,30 @@ def _write_skill(
     return skill_dir / "SKILL.md"
 
 
+def _write_synthesis_sidecar(
+    root: Path,
+    folder: str,
+    *,
+    trust_level: str = "untrusted",
+    source_type: str = "local",
+    lifecycle_stage: str = "draft",
+    capability_family: str = "",
+    repo: str = "",
+) -> None:
+    skill_dir = root / folder
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "trust_level": trust_level,
+        "source_type": source_type,
+        "lifecycle_stage": lifecycle_stage,
+    }
+    if capability_family:
+        payload["capability_family"] = capability_family
+    if repo:
+        payload["repo"] = repo
+    (skill_dir / ".synthesis.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _write_fake_synthesis_project(root: Path) -> None:
     package_dir = root / "synthesis"
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -891,6 +915,40 @@ def test_list_skills_returns_discovered_runtime_skill_manifests(tmp_path: Path) 
     assert payload["items"][0]["description"] == "Generate charts from tabular data."
 
 
+def test_list_skills_includes_synthesis_governance_metadata(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        skill_root,
+        "chart-maker",
+        trust_level="probation",
+        source_type="canonical",
+        lifecycle_stage="challenger",
+        capability_family="artifact_generation",
+        repo="anthony-maio/synthesis-skills",
+    )
+    client = _client(
+        tmp_path,
+        settings_overrides={"APP_SKILL_PATHS": str(skill_root)},
+    )
+    headers = _auth_header(client)
+
+    response = client.get("/skills", headers=headers)
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["trust_level"] == "probation"
+    assert item["source_type"] == "canonical"
+    assert item["lifecycle_stage"] == "challenger"
+    assert item["capability_family"] == "artifact_generation"
+    assert item["source_repo"] == "anthony-maio/synthesis-skills"
+
+
 def test_list_tools_returns_registered_external_tools(tmp_path: Path) -> None:
     client = _client(
         tmp_path,
@@ -1173,6 +1231,48 @@ def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:
     ]
     assert capability_events[-1]["skill_names"] == ["chart-maker"]
     assert capability_events[-1]["verification_signals"] == ["artifact", "citations"]
+
+
+def test_run_capability_state_preserves_synthesis_governance_metadata(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        skill_root,
+        "chart-maker",
+        trust_level="probation",
+        source_type="canonical",
+        lifecycle_stage="challenger",
+        capability_family="artifact_generation",
+        repo="anthony-maio/synthesis-skills",
+    )
+    client = _client(
+        tmp_path,
+        settings_overrides={"APP_SKILL_PATHS": str(skill_root)},
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Generate a chart from CSV sales data and summarize it",
+            "mode": "manual",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    resolved = run["metadata"]["capability_state"]["resolved_skills"][0]
+    assert resolved["trust_level"] == "probation"
+    assert resolved["source_type"] == "canonical"
+    assert resolved["lifecycle_stage"] == "challenger"
+    assert resolved["capability_family"] == "artifact_generation"
+    assert resolved["source_repo"] == "anthony-maio/synthesis-skills"
 
 
 def test_skill_preferred_initial_actions_bias_rule_bootstrap(tmp_path: Path) -> None:
@@ -3055,7 +3155,6 @@ def test_kernel_completion_recovery_adds_code_verification_for_coding_runs(tmp_p
         if item["type"] == "kernel.decision" and item.get("reason") == "completion_recovery"
     ]
     assert recovery_events
-
 
 def test_research_run_with_terminal_output_is_verified_by_completion_layer(tmp_path: Path) -> None:
     client = _client(tmp_path)

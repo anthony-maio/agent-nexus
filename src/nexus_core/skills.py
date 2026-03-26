@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -49,6 +50,11 @@ class SkillManifest:
     description: str
     path: str
     guidance: str = ""
+    trust_level: str = ""
+    source_type: str = ""
+    lifecycle_stage: str = ""
+    capability_family: str = ""
+    source_repo: str = ""
     preferred_initial_actions: tuple[str, ...] = ()
     preferred_follow_up_actions: tuple[str, ...] = ()
     external_tools: tuple[str, ...] = ()
@@ -66,6 +72,16 @@ class SkillManifest:
             "description": self.description,
             "path": self.path,
         }
+        if self.trust_level:
+            payload["trust_level"] = self.trust_level
+        if self.source_type:
+            payload["source_type"] = self.source_type
+        if self.lifecycle_stage:
+            payload["lifecycle_stage"] = self.lifecycle_stage
+        if self.capability_family:
+            payload["capability_family"] = self.capability_family
+        if self.source_repo:
+            payload["source_repo"] = self.source_repo
         if self.preferred_initial_actions:
             payload["preferred_initial_actions"] = list(self.preferred_initial_actions)
         if self.preferred_follow_up_actions:
@@ -202,11 +218,17 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
     guidance = body.strip()
     if not name:
         return None
+    synthesis_metadata = _read_synthesis_sidecar(path.parent)
     return SkillManifest(
         name=name,
         description=description,
         path=str(path),
         guidance=guidance,
+        trust_level=_normalized_sidecar_value(synthesis_metadata.get("trust_level")),
+        source_type=_normalized_sidecar_value(synthesis_metadata.get("source_type")),
+        lifecycle_stage=_normalized_sidecar_value(synthesis_metadata.get("lifecycle_stage")),
+        capability_family=_normalized_sidecar_value(synthesis_metadata.get("capability_family")),
+        source_repo=_normalized_sidecar_value(synthesis_metadata.get("repo")),
         preferred_initial_actions=_parse_action_list(
             str(frontmatter.get("preferred_initial_actions", ""))
         ),
@@ -250,6 +272,19 @@ def _split_frontmatter(raw: str) -> tuple[dict[str, str], str]:
         return {}, raw
     body = "\n".join(lines[end_idx + 1 :]).strip()
     return frontmatter, body
+
+
+def _read_synthesis_sidecar(skill_dir: Path) -> dict[str, Any]:
+    sidecar_path = skill_dir / ".synthesis.json"
+    try:
+        raw = sidecar_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _heading_name(body: str) -> str:
@@ -326,3 +361,9 @@ def _parse_identifier_list(raw: str, *, replace_spaces: bool = False) -> tuple[s
         seen.add(action)
         actions.append(action)
     return tuple(actions)
+
+
+def _normalized_sidecar_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()

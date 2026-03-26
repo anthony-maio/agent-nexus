@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from nexus_core.skills import CapabilityResolver, SkillRegistry
@@ -49,6 +50,30 @@ def _write_skill(
         encoding="utf-8",
     )
     return skill_dir / "SKILL.md"
+
+
+def _write_synthesis_sidecar(
+    root: Path,
+    folder: str,
+    *,
+    trust_level: str = "untrusted",
+    source_type: str = "local",
+    lifecycle_stage: str = "draft",
+    capability_family: str = "",
+    repo: str = "",
+) -> None:
+    skill_dir = root / folder
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "trust_level": trust_level,
+        "source_type": source_type,
+        "lifecycle_stage": lifecycle_stage,
+    }
+    if capability_family:
+        payload["capability_family"] = capability_family
+    if repo:
+        payload["repo"] = repo
+    (skill_dir / ".synthesis.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_skill_registry_discovers_manifests_and_resolves_relevant_skills(tmp_path: Path) -> None:
@@ -151,3 +176,32 @@ def test_skill_registry_parses_verification_requirements(tmp_path: Path) -> None
     assert manifests[0].required_artifact_kinds == ("chart", "report")
     assert manifests[0].to_dict()["verification_signals"] == ["citations", "artifact"]
     assert manifests[0].to_dict()["required_artifact_kinds"] == ["chart", "report"]
+
+
+def test_skill_registry_reads_synthesis_sidecar_metadata(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "chart-maker",
+        trust_level="probation",
+        source_type="canonical",
+        lifecycle_stage="challenger",
+        capability_family="artifact_generation",
+        repo="anthony-maio/synthesis-skills",
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].trust_level == "probation"
+    assert manifests[0].source_type == "canonical"
+    assert manifests[0].lifecycle_stage == "challenger"
+    assert manifests[0].capability_family == "artifact_generation"
+    assert manifests[0].source_repo == "anthony-maio/synthesis-skills"
+    assert manifests[0].to_dict()["trust_level"] == "probation"
+    assert manifests[0].to_dict()["source_type"] == "canonical"
