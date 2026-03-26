@@ -236,7 +236,11 @@ class RunEngine:
             return self._annotate_skill_context(
                 annotate_planner_fallback(
                     annotate_planner_steps(
-                        plan_steps_for_objective(objective),
+                        plan_steps_for_objective(
+                            objective,
+                            skill_context=skill_context,
+                            external_tool_context=external_tool_context,
+                        ),
                         planner_source="rule",
                         planner_phase="initial",
                     ),

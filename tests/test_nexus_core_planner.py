@@ -73,6 +73,30 @@ def test_plan_steps_for_objective_uses_skill_preferred_initial_action() -> None:
     assert [step.action_type for step in steps] == ["list_files"]
 
 
+def test_plan_steps_for_objective_uses_skill_declared_external_tool() -> None:
+    steps = plan_steps_for_objective(
+        "Retrieve payment retry memory for the current objective",
+        skill_context=[
+            {
+                "name": "memory-helper",
+                "description": "Retrieve scoped memory and repo maps from external tools.",
+                "path": "skills/memory-helper/SKILL.md",
+                "external_tools": ["mnemos.retrieve"],
+            }
+        ],
+        external_tool_context=[
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+            }
+        ],
+    )
+
+    assert [step.action_type for step in steps] == ["external_tool"]
+    assert '"tool_name": "mnemos.retrieve"' in steps[0].instruction
+
+
 def test_plan_follow_up_steps_uses_skill_preferred_follow_up_action() -> None:
     steps = plan_follow_up_steps(
         objective="Review payments API findings and package the result",
@@ -94,6 +118,21 @@ def test_plan_follow_up_steps_uses_skill_preferred_follow_up_action() -> None:
 
     assert [step.action_type for step in steps] == ["generate_report"]
     assert '"path": "reports/' in steps[0].instruction
+
+
+def test_plan_follow_up_steps_external_tool_advances_to_extract() -> None:
+    steps = plan_follow_up_steps(
+        objective="Retrieve payment retry memory for the current objective",
+        completed_step=_step(1, "external_tool"),
+        result=StepExecutionResult(
+            output_text="Retrieved scoped memory entries.",
+            citations=[CitationRecord(url="mcp://mnemos", title="mnemos.retrieve", snippet="ok")],
+        ),
+        existing_steps=[_step(0, "external_tool"), _step(1, "external_tool")],
+    )
+
+    assert [step.action_type for step in steps] == ["extract"]
+    assert "external tool result" in steps[0].instruction.lower()
 
 
 def test_plan_follow_up_steps_uses_kernel_strategy_for_ambiguous_workflow_context() -> None:

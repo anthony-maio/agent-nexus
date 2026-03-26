@@ -203,6 +203,7 @@ def annotate_planner_fallback(
 def plan_steps_for_objective(
     objective: str,
     skill_context: list[dict[str, Any]] | None = None,
+    external_tool_context: list[dict[str, Any]] | None = None,
 ) -> list[StepDefinition]:
     """Return bootstrap steps for an autonomous tool loop."""
     cleaned = " ".join(objective.split())
@@ -213,6 +214,22 @@ def plan_steps_for_objective(
                 StepDefinition(
                     action_type="read_file",
                     instruction=_workspace_instruction(workspace_path),
+                )
+            ]
+        preferred_external_tool = _preferred_external_tool_from_skills(
+            skill_context,
+            external_tool_context,
+        )
+        if preferred_external_tool:
+            return [
+                StepDefinition(
+                    action_type="external_tool",
+                    instruction=json.dumps(
+                        {
+                            "tool_name": preferred_external_tool,
+                            "arguments": {"objective": cleaned},
+                        }
+                    ),
                 )
             ]
         if _looks_like_code_task(cleaned):
@@ -297,6 +314,16 @@ def plan_follow_up_steps(
             StepDefinition(
                 action_type="read_file",
                 instruction=_workspace_instruction(next_path),
+            )
+        ]
+
+    if action == "external_tool":
+        if _has_action_after(existing_steps, step_index, "extract"):
+            return []
+        return [
+            StepDefinition(
+                action_type="extract",
+                instruction=f"Summarize the external tool result and grounded evidence for: {objective}",
             )
         ]
 
@@ -736,7 +763,11 @@ class RuleAdaptivePlanner:
         _ = mode
         if completed_step is None or result is None:
             return annotate_planner_steps(
-                plan_steps_for_objective(objective, skill_context=skill_context),
+                plan_steps_for_objective(
+                    objective,
+                    skill_context=skill_context,
+                    external_tool_context=external_tool_context,
+                ),
                 planner_source="rule",
                 planner_phase="initial",
             )
@@ -1013,6 +1044,33 @@ def _preferred_initial_action_from_skills(
             action = str(raw_action).strip().lower()
             if action in _ALLOWED_INITIAL_ACTIONS:
                 return action
+    return ""
+
+
+def _preferred_external_tool_from_skills(
+    skill_context: list[dict[str, Any]] | None,
+    external_tool_context: list[dict[str, Any]] | None,
+) -> str:
+    if not isinstance(skill_context, list) or not isinstance(external_tool_context, list):
+        return ""
+    available_tools = {
+        str(tool.get("name", "")).strip().lower()
+        for tool in external_tool_context
+        if isinstance(tool, dict) and str(tool.get("name", "")).strip()
+    }
+    if not available_tools:
+        return ""
+    for skill in skill_context:
+        if not isinstance(skill, dict):
+            continue
+        raw_tools = skill.get("external_tools")
+        if not isinstance(raw_tools, list):
+            continue
+        for raw_tool in raw_tools:
+            tool_name = str(raw_tool).strip()
+            normalized = tool_name.lower()
+            if normalized and normalized in available_tools:
+                return tool_name
     return ""
 
 

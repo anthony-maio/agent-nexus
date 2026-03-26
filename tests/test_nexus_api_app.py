@@ -553,6 +553,7 @@ def _write_skill(
     description: str,
     preferred_initial_actions: str = "",
     preferred_follow_up_actions: str = "",
+    external_tools: str = "",
     verification_signals: str = "",
     required_artifact_kinds: str = "",
 ) -> Path:
@@ -567,6 +568,8 @@ def _write_skill(
         frontmatter.append(f"preferred_initial_actions: {preferred_initial_actions}")
     if preferred_follow_up_actions:
         frontmatter.append(f"preferred_follow_up_actions: {preferred_follow_up_actions}")
+    if external_tools:
+        frontmatter.append(f"external_tools: {external_tools}")
     if verification_signals:
         frontmatter.append(f"verification_signals: {verification_signals}")
     if required_artifact_kinds:
@@ -1088,6 +1091,59 @@ def test_manual_run_executes_registered_stdio_external_tool(tmp_path: Path) -> N
     payload = details.json()
     assert payload["citations"][0]["url"] == "mcp://continuity-core"
     assert payload["steps"][0]["metadata"]["external_tool"]["name"] == "c2.status"
+
+
+def test_skill_declared_external_tool_bootstraps_run(tmp_path: Path) -> None:
+    script_path = _write_fake_stdio_mcp_server(tmp_path)
+    tool_config = json.dumps(
+        [
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+                "transport": {
+                    "kind": "stdio",
+                    "command": [sys.executable, str(script_path)],
+                },
+            }
+        ]
+    )
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "memory-helper",
+        name="memory-helper",
+        description="Retrieve scoped memory and repo maps from external tools.",
+        external_tools="mnemos.retrieve",
+    )
+    client = _client(
+        tmp_path,
+        execution_adapter=ExternalToolDispatchExecutionAdapter(
+            base_adapter=FakeExecutionAdapter(tmp_path),
+            tool_registry=parse_external_tool_config(tool_config),
+            tool_invoker=StdioExternalToolInvoker(timeout_sec=10.0),
+        ),
+        settings_overrides={
+            "APP_EXTERNAL_TOOL_CONFIG": tool_config,
+            "APP_SKILL_PATHS": str(skill_root),
+        },
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Retrieve payment retry memory for the current objective",
+            "mode": "manual",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    assert run["steps"][0]["action_type"] == "external_tool"
+    assert run["steps"][0]["status"] == "completed"
+    assert run["metadata"]["capability_state"]["external_tools"] == ["mnemos.retrieve"]
 
 
 def test_list_skills_includes_synthesis_host_and_canonical_roots(tmp_path: Path) -> None:
