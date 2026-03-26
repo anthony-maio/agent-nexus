@@ -205,3 +205,44 @@ def test_skill_registry_reads_synthesis_sidecar_metadata(tmp_path: Path) -> None
     assert manifests[0].source_repo == "anthony-maio/synthesis-skills"
     assert manifests[0].to_dict()["trust_level"] == "probation"
     assert manifests[0].to_dict()["source_type"] == "canonical"
+
+
+def test_capability_resolver_prefers_canonical_trusted_skill_on_equal_match(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "chart-maker-local",
+        name="csv-sales-chart-generator",
+        description="Generate CSV sales charts and plots from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "chart-maker-local",
+        trust_level="untrusted",
+        source_type="local",
+        lifecycle_stage="draft",
+    )
+    _write_skill(
+        tmp_path,
+        "chart-maker-canonical",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "chart-maker-canonical",
+        trust_level="trusted",
+        source_type="canonical",
+        lifecycle_stage="stable",
+        repo="anthony-maio/synthesis-skills",
+    )
+
+    registry = SkillRegistry([tmp_path])
+    resolver = CapabilityResolver(registry, max_matches=2)
+
+    matches = resolver.resolve_matches("Generate a chart from CSV sales data")
+
+    assert len(matches) == 2
+    assert matches[0].manifest.source_type == "canonical"
+    assert matches[0].manifest.trust_level == "trusted"
+    assert matches[1].manifest.source_type == "local"
+    assert matches[1].manifest.trust_level == "untrusted"

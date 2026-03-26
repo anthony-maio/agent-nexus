@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import weakref
 import sys
@@ -949,6 +950,55 @@ def test_list_skills_includes_synthesis_governance_metadata(tmp_path: Path) -> N
     assert item["source_repo"] == "anthony-maio/synthesis-skills"
 
 
+def test_resolve_skills_prefers_canonical_trusted_capability(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "chart-maker-local",
+        name="csv-sales-chart-generator",
+        description="Generate CSV sales charts and plots from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        skill_root,
+        "chart-maker-local",
+        trust_level="untrusted",
+        source_type="local",
+        lifecycle_stage="draft",
+    )
+    _write_skill(
+        skill_root,
+        "chart-maker-canonical",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        skill_root,
+        "chart-maker-canonical",
+        trust_level="trusted",
+        source_type="canonical",
+        lifecycle_stage="stable",
+        repo="anthony-maio/synthesis-skills",
+    )
+    client = _client(
+        tmp_path,
+        settings_overrides={"APP_SKILL_PATHS": str(skill_root)},
+    )
+    headers = _auth_header(client)
+
+    response = client.get(
+        "/skills/resolve",
+        params={"objective": "Generate a chart from CSV sales data"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["source_type"] == "canonical"
+    assert payload["items"][0]["trust_level"] == "trusted"
+    assert payload["items"][1]["source_type"] == "local"
+    assert payload["items"][1]["trust_level"] == "untrusted"
+
+
 def test_list_tools_returns_registered_external_tools(tmp_path: Path) -> None:
     client = _client(
         tmp_path,
@@ -1182,6 +1232,54 @@ def test_run_auto_acquires_skill_from_synthesis_when_no_local_match_exists(tmp_p
     assert listed.status_code == 200
     names = {item["name"] for item in listed.json()["items"]}
     assert "synthesized-skill" in names
+
+
+def test_run_auto_acquires_skill_when_only_untrusted_local_matches_exist(tmp_path: Path) -> None:
+    synthesis_root = tmp_path / "synthesis-project"
+    host_root = tmp_path / "installed-skills"
+    skill_root = tmp_path / "draft-skills"
+    _write_fake_synthesis_project(synthesis_root)
+    _write_skill(
+        skill_root,
+        "csv-helper",
+        name="csv-helper",
+        description="Parse csv files into workflows.",
+    )
+    _write_synthesis_sidecar(
+        skill_root,
+        "csv-helper",
+        trust_level="untrusted",
+        source_type="local",
+        lifecycle_stage="draft",
+    )
+    client = _client(
+        tmp_path,
+        settings_overrides={
+            "APP_ENABLE_SYNTHESIS": True,
+            "APP_SYNTHESIS_ROOT": str(synthesis_root),
+            "APP_SYNTHESIS_HOST_ROOT": str(host_root),
+            "APP_SYNTHESIS_PROVIDER_TYPE": "mock",
+            "APP_AUTO_ACQUIRE_SKILLS": True,
+            "APP_SKILL_PATHS": os.pathsep.join([str(skill_root), str(host_root)]),
+        },
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Parse csv files into a reusable skill-backed workflow",
+            "mode": "manual",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    capability_state = run["metadata"]["capability_state"]
+    assert capability_state["skill_source"] == "synthesis_acquisition"
+    assert "synthesized-skill" in capability_state["skill_names"]
+    assert capability_state["skill_acquisition"]["success"] is True
 
 
 def test_run_planning_annotates_resolved_skill_context(tmp_path: Path) -> None:

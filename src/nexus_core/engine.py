@@ -926,7 +926,7 @@ class RunEngine:
         acquisition: dict[str, Any] = {}
         source = "capability_resolver"
         if (
-            not resolved_skills
+            self._should_attempt_skill_acquisition(resolved_skills)
             and allow_acquire
             and self.auto_acquire_skills
             and self.skill_acquirer is not None
@@ -944,6 +944,22 @@ class RunEngine:
             source=source,
             acquisition=acquisition,
         )
+
+    @staticmethod
+    def _should_attempt_skill_acquisition(resolved_skills: list[SkillManifest]) -> bool:
+        if not resolved_skills:
+            return True
+        for skill in resolved_skills:
+            trust_level = skill.trust_level.strip().lower()
+            source_type = skill.source_type.strip().lower()
+            lifecycle_stage = skill.lifecycle_stage.strip().lower()
+            if trust_level in {"trusted", "probation"}:
+                return False
+            if source_type in {"canonical", "installed"}:
+                return False
+            if lifecycle_stage in {"stable", "challenger"}:
+                return False
+        return True
 
     async def _acquire_skill_for_objective(self, objective: str) -> dict[str, Any]:
         if self.skill_acquirer is None:

@@ -320,6 +320,7 @@ def _score_manifest(manifest: SkillManifest, objective_tokens: set[str], objecti
         score += 4
     if manifest.description and manifest.description.lower() in lowered_objective:
         score += 2
+    score += _governance_bonus(manifest)
     return score
 
 
@@ -367,3 +368,26 @@ def _normalized_sidecar_value(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _governance_bonus(manifest: SkillManifest) -> int:
+    trust_bonus = {
+        "trusted": 10,
+        "probation": 4,
+        "untrusted": 0,
+    }
+    source_bonus = {
+        "canonical": 6,
+        "installed": 2,
+        "local": 0,
+    }
+    lifecycle_bonus = {
+        "stable": 4,
+        "challenger": 1,
+        "draft": 0,
+    }
+    return (
+        trust_bonus.get(manifest.trust_level.lower(), 0)
+        + source_bonus.get(manifest.source_type.lower(), 0)
+        + lifecycle_bonus.get(manifest.lifecycle_stage.lower(), 0)
+    )
