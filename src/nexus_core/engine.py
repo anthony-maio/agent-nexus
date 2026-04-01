@@ -1255,6 +1255,36 @@ class RunEngine:
                     planner_source="kernel",
                     planner_phase="completion_recovery",
                 )
+        successful_execute_code_count = int(signals.get("successful_execute_code_count", 0) or 0)
+        mutating_code_action_count = int(signals.get("mutating_code_action_count", 0) or 0)
+        if (
+            verification.strategy == "coding"
+            and mutating_code_action_count <= 0
+            and successful_execute_code_count <= 0
+            and not self._run_used_repo_tool(run)
+        ):
+            repo_tool = self._find_repo_tool_name()
+            if repo_tool:
+                return annotate_planner_steps(
+                    [
+                        StepDefinition(
+                            action_type="external_tool",
+                            instruction=json.dumps(
+                                {
+                                    "tool_name": repo_tool,
+                                    "arguments": {
+                                        "objective": objective,
+                                        "scope": "repo",
+                                        "reason": verification.reason,
+                                        "strategy": verification.strategy,
+                                    },
+                                }
+                            ),
+                        )
+                    ],
+                    planner_source="kernel",
+                    planner_phase="completion_recovery",
+                )
         citation_count = int(signals.get("citation_count", 0) or 0)
         terminal_artifact_actions = {"export", "generate_report", "generate_chart", "generate_image"}
         if (
@@ -1273,8 +1303,6 @@ class RunEngine:
                 planner_source="kernel",
                 planner_phase="completion_recovery",
             )
-        successful_execute_code_count = int(signals.get("successful_execute_code_count", 0) or 0)
-        mutating_code_action_count = int(signals.get("mutating_code_action_count", 0) or 0)
         if (
             verification.strategy == "coding"
             and mutating_code_action_count > 0
@@ -1332,6 +1360,26 @@ class RunEngine:
                 return name
         return ""
 
+    def _find_repo_tool_name(self) -> str:
+        for tool in self._external_tool_context():
+            if not isinstance(tool, dict):
+                continue
+            name = str(tool.get("name", "")).strip()
+            lowered = name.lower()
+            raw_tags = tool.get("tags")
+            tags = (
+                {
+                    str(tag).strip().lower()
+                    for tag in raw_tags
+                    if str(tag).strip()
+                }
+                if isinstance(raw_tags, list)
+                else set()
+            )
+            if lowered.startswith("cartographer.") or "repo" in tags or "context" in tags:
+                return name
+        return ""
+
     @staticmethod
     def _run_used_memory_tool(run: dict[str, Any]) -> bool:
         steps = run.get("steps")
@@ -1358,6 +1406,35 @@ class RunEngine:
                 else set()
             )
             if name.startswith("mnemos.") or "memory" in tags or "retrieval" in tags:
+                return True
+        return False
+
+    @staticmethod
+    def _run_used_repo_tool(run: dict[str, Any]) -> bool:
+        steps = run.get("steps")
+        if not isinstance(steps, list):
+            return False
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            metadata = step.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            external_tool = metadata.get("external_tool")
+            if not isinstance(external_tool, dict):
+                continue
+            name = str(external_tool.get("name", "")).strip().lower()
+            raw_tags = external_tool.get("tags")
+            tags = (
+                {
+                    str(tag).strip().lower()
+                    for tag in raw_tags
+                    if str(tag).strip()
+                }
+                if isinstance(raw_tags, list)
+                else set()
+            )
+            if name.startswith("cartographer.") or "repo" in tags or "context" in tags:
                 return True
         return False
 
