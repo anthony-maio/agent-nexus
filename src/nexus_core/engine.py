@@ -1482,6 +1482,14 @@ class RunEngine:
                     if skill.external_tool_arguments
                     else {}
                 ),
+                "external_tool_follow_up_actions": (
+                    {
+                        key: list(value)
+                        for key, value in skill.external_tool_follow_up_actions.items()
+                    }
+                    if skill.external_tool_follow_up_actions
+                    else {}
+                ),
                 "verification_signals": list(skill.verification_signals),
                 "required_artifact_kinds": list(skill.required_artifact_kinds),
             }

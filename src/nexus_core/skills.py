@@ -59,6 +59,7 @@ class SkillManifest:
     preferred_follow_up_actions: tuple[str, ...] = ()
     external_tools: tuple[str, ...] = ()
     external_tool_arguments: dict[str, dict[str, Any]] | None = None
+    external_tool_follow_up_actions: dict[str, tuple[str, ...]] | None = None
     verification_signals: tuple[str, ...] = ()
     required_artifact_kinds: tuple[str, ...] = ()
 
@@ -92,6 +93,10 @@ class SkillManifest:
         if self.external_tool_arguments:
             payload["external_tool_arguments"] = {
                 key: dict(value) for key, value in self.external_tool_arguments.items()
+            }
+        if self.external_tool_follow_up_actions:
+            payload["external_tool_follow_up_actions"] = {
+                key: list(value) for key, value in self.external_tool_follow_up_actions.items()
             }
         if self.verification_signals:
             payload["verification_signals"] = list(self.verification_signals)
@@ -247,6 +252,10 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
             synthesis_metadata.get("external_tool_arguments")
             or synthesis_metadata.get("tool_arguments")
         ),
+        external_tool_follow_up_actions=_normalize_external_tool_follow_up_actions(
+            synthesis_metadata.get("external_tool_follow_up_actions")
+            or synthesis_metadata.get("tool_follow_up_actions")
+        ),
         verification_signals=_parse_identifier_list(
             str(frontmatter.get("verification_signals", ""))
         ),
@@ -390,6 +399,32 @@ def _normalize_external_tool_arguments(
         if not tool_name or not isinstance(value, dict):
             continue
         normalized[tool_name] = dict(value)
+    return normalized or None
+
+
+def _normalize_external_tool_follow_up_actions(
+    raw: Any,
+) -> dict[str, tuple[str, ...]] | None:
+    if not isinstance(raw, dict):
+        return None
+    normalized: dict[str, tuple[str, ...]] = {}
+    for key, value in raw.items():
+        tool_name = str(key or "").strip()
+        if not tool_name:
+            continue
+        actions: list[str] = []
+        if isinstance(value, list):
+            for item in value:
+                action = str(item or "").strip().lower()
+                if action:
+                    actions.append(action)
+        elif isinstance(value, str):
+            for item in value.split(","):
+                action = str(item or "").strip().lower()
+                if action:
+                    actions.append(action)
+        if actions:
+            normalized[tool_name] = tuple(actions)
     return normalized or None
 
 

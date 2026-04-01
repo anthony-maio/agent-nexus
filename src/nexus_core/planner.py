@@ -347,10 +347,39 @@ def plan_follow_up_steps(
 
     if action == "external_tool":
         external_tool = _step_external_tool(completed_step)
+        preferred_tool_follow_up = _preferred_follow_up_action_for_external_tool(
+            skill_context,
+            tool_name=str(external_tool.get("name", "")).strip(),
+            allowed={"read_file", "list_files", "execute_code", "search_web", "extract"},
+        )
         if (
             (_looks_like_code_task(objective) or _looks_like_repo_resume_objective(objective))
             and _is_repo_or_memory_tool(external_tool)
         ):
+            command = _external_tool_command(result)
+            if (
+                command
+                and preferred_tool_follow_up == "execute_code"
+                and not _has_action_after(existing_steps, step_index, "execute_code")
+            ):
+                return [
+                    StepDefinition(
+                        action_type="execute_code",
+                        instruction=json.dumps({"command": command}),
+                    )
+                ]
+            target_path = _external_tool_workspace_path(objective, result)
+            if (
+                target_path
+                and preferred_tool_follow_up != "list_files"
+                and not _has_action_after(existing_steps, step_index, "read_file")
+            ):
+                return [
+                    StepDefinition(
+                        action_type="read_file",
+                        instruction=_workspace_instruction(target_path),
+                    )
+                ]
             if _has_action_after(existing_steps, step_index, "list_files"):
                 return []
             return [
@@ -360,6 +389,14 @@ def plan_follow_up_steps(
                 )
             ]
         if _is_memory_tool(external_tool):
+            target_path = _external_tool_workspace_path(objective, result)
+            if target_path and not _has_action_after(existing_steps, step_index, "read_file"):
+                return [
+                    StepDefinition(
+                        action_type="read_file",
+                        instruction=_workspace_instruction(target_path),
+                    )
+                ]
             if _has_action_after(existing_steps, step_index, "search_web"):
                 return []
             return [
@@ -1231,6 +1268,35 @@ def _preferred_follow_up_action_from_skills(
     return ""
 
 
+def _preferred_follow_up_action_for_external_tool(
+    skill_context: list[dict[str, Any]] | None,
+    *,
+    tool_name: str,
+    allowed: set[str] | frozenset[str] | None = None,
+) -> str:
+    if not tool_name or not isinstance(skill_context, list):
+        return ""
+    normalized_allowed = {item.strip().lower() for item in (allowed or set()) if item}
+    normalized_tool = tool_name.strip().lower()
+    for skill in skill_context:
+        if not isinstance(skill, dict):
+            continue
+        raw_mapping = skill.get("external_tool_follow_up_actions")
+        if not isinstance(raw_mapping, dict):
+            continue
+        raw_actions = raw_mapping.get(tool_name) or raw_mapping.get(normalized_tool)
+        if not isinstance(raw_actions, list):
+            continue
+        for raw_action in raw_actions:
+            action = str(raw_action).strip().lower()
+            if not action:
+                continue
+            if normalized_allowed and action not in normalized_allowed:
+                continue
+            return action
+    return ""
+
+
 def _preferred_follow_up_action_from_kernel(
     kernel_context: dict[str, Any] | None,
     *,
@@ -1595,6 +1661,65 @@ def _diagnostic_workspace_path(result: StepExecutionResult) -> str:
         if not lowered.startswith("tests/") and not lowered.startswith("test_"):
             return candidate
     return candidates[0]
+
+
+def _external_tool_workspace_path(objective: str, result: StepExecutionResult) -> str:
+    objective_path = _workspace_path_from_objective(objective)
+    if objective_path:
+        return objective_path
+    preferred = _preferred_workspace_path(objective, result, metadata_key="file_path")
+    if preferred:
+        return preferred
+    candidates: list[str] = []
+    raw_tool_result = result.metadata.get("tool_result")
+    _collect_workspace_paths(raw_tool_result, candidates)
+    _collect_workspace_paths(result.output_text, candidates)
+    if not candidates:
+        return ""
+    if _looks_like_code_task(objective) or _looks_like_repo_resume_objective(objective):
+        return _preferred_code_workspace_path(candidates)
+    return candidates[0]
+
+
+def _external_tool_command(result: StepExecutionResult) -> list[str]:
+    raw_tool_result = result.metadata.get("tool_result")
+    return _extract_command_from_value(raw_tool_result)
+
+
+def _extract_command_from_value(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        for key in ("command", "test_command", "verify_command"):
+            raw = value.get(key)
+            if isinstance(raw, list):
+                command = [str(item).strip() for item in raw if str(item).strip()]
+                if command:
+                    return command
+        for child in value.values():
+            command = _extract_command_from_value(child)
+            if command:
+                return command
+    if isinstance(value, list):
+        for item in value:
+            command = _extract_command_from_value(item)
+            if command:
+                return command
+    return []
+
+
+def _collect_workspace_paths(value: Any, candidates: list[str]) -> None:
+    if isinstance(value, str):
+        for match in _WORKSPACE_PATH_RE.finditer(value):
+            normalized = _normalize_workspace_path(match.group("path"))
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+        return
+    if isinstance(value, dict):
+        for child in value.values():
+            _collect_workspace_paths(child, candidates)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_workspace_paths(item, candidates)
 
 
 def _looks_like_code_task(objective: str) -> bool:

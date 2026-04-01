@@ -256,6 +256,107 @@ def test_plan_follow_up_steps_mnemos_result_advances_to_list_files_for_coding_re
     assert [step.action_type for step in steps] == ["list_files"]
 
 
+def test_plan_follow_up_steps_repo_tool_reads_targeted_file_when_tool_result_has_path() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement retry backoff in the repo",
+        completed_step=_step(
+            1,
+            "external_tool",
+            metadata={
+                "external_tool": {
+                    "name": "cartographer.map_repo",
+                    "tags": ["repo", "context"],
+                    "source": "mcp://cartographer",
+                }
+            },
+        ),
+        result=StepExecutionResult(
+            output_text="Focus src/retry.py for the next change.",
+            metadata={
+                "tool_result": {
+                    "focus": {
+                        "file_path": "src/retry.py",
+                    }
+                }
+            },
+        ),
+        existing_steps=[_step(0, "external_tool"), _step(1, "external_tool")],
+    )
+
+    assert [step.action_type for step in steps] == ["read_file"]
+    assert '"path": "src/retry.py"' in steps[0].instruction
+
+
+def test_plan_follow_up_steps_memory_tool_reads_targeted_file_when_memory_mentions_path() -> None:
+    steps = plan_follow_up_steps(
+        objective="Resume prior work on payment retry handling in the repo",
+        completed_step=_step(
+            1,
+            "external_tool",
+            metadata={
+                "external_tool": {
+                    "name": "mnemos.retrieve",
+                    "tags": ["memory", "retrieval"],
+                    "source": "mcp://mnemos",
+                }
+            },
+        ),
+        result=StepExecutionResult(
+            output_text="Recovered context for src/retry.py and related tests.",
+            citations=[CitationRecord(url="mcp://mnemos", title="mnemos.retrieve", snippet="ok")],
+            metadata={
+                "tool_result": {
+                    "recalled_items": [
+                        {"file_path": "src/retry.py"},
+                    ]
+                }
+            },
+        ),
+        existing_steps=[_step(0, "external_tool"), _step(1, "external_tool")],
+    )
+
+    assert [step.action_type for step in steps] == ["read_file"]
+    assert '"path": "src/retry.py"' in steps[0].instruction
+
+
+def test_plan_follow_up_steps_external_tool_uses_skill_declared_follow_up_preference() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement retry backoff in the repo",
+        completed_step=_step(
+            1,
+            "external_tool",
+            metadata={
+                "external_tool": {
+                    "name": "cartographer.map_repo",
+                    "tags": ["repo", "context"],
+                    "source": "mcp://cartographer",
+                }
+            },
+        ),
+        result=StepExecutionResult(
+            output_text="Map includes src/retry.py and a focused test command.",
+            metadata={
+                "tool_result": {
+                    "focus": {"file_path": "src/retry.py"},
+                    "verify_command": ["python", "-m", "pytest", "-q", "tests/test_retry.py"],
+                }
+            },
+        ),
+        existing_steps=[_step(0, "external_tool"), _step(1, "external_tool")],
+        skill_context=[
+            {
+                "name": "repo-helper",
+                "external_tool_follow_up_actions": {
+                    "cartographer.map_repo": ["execute_code", "read_file"]
+                },
+            }
+        ],
+    )
+
+    assert [step.action_type for step in steps] == ["execute_code"]
+    assert '"command": ["python", "-m", "pytest", "-q", "tests/test_retry.py"]' in steps[0].instruction
+
+
 def test_plan_follow_up_steps_uses_kernel_strategy_for_ambiguous_workflow_context() -> None:
     steps = plan_follow_up_steps(
         objective="Continue the operator task",
