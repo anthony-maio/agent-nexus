@@ -105,6 +105,15 @@ _IMAGE_HINTS: tuple[str, ...] = (
     "cover art",
     "visual",
 )
+_MEMORY_HINTS: tuple[str, ...] = (
+    "resume",
+    "prior work",
+    "previous work",
+    "history",
+    "remember",
+    "memory",
+    "context from before",
+)
 _ALLOWED_FOLLOW_UP_ACTIONS: frozenset[str] = frozenset(
     {
         "search_web",
@@ -235,6 +244,22 @@ def plan_steps_for_objective(
                     ),
                 )
             ]
+        default_external_tool, default_external_tool_arguments = _default_external_tool_for_objective(
+            cleaned,
+            external_tool_context,
+        )
+        if default_external_tool:
+            return [
+                StepDefinition(
+                    action_type="external_tool",
+                    instruction=json.dumps(
+                        {
+                            "tool_name": default_external_tool,
+                            "arguments": default_external_tool_arguments,
+                        }
+                    ),
+                )
+            ]
         if _looks_like_code_task(cleaned):
             return [
                 StepDefinition(
@@ -321,6 +346,28 @@ def plan_follow_up_steps(
         ]
 
     if action == "external_tool":
+        external_tool = _step_external_tool(completed_step)
+        if (
+            (_looks_like_code_task(objective) or _looks_like_repo_resume_objective(objective))
+            and _is_repo_or_memory_tool(external_tool)
+        ):
+            if _has_action_after(existing_steps, step_index, "list_files"):
+                return []
+            return [
+                StepDefinition(
+                    action_type="list_files",
+                    instruction=_workspace_listing_instruction(),
+                )
+            ]
+        if _is_memory_tool(external_tool):
+            if _has_action_after(existing_steps, step_index, "search_web"):
+                return []
+            return [
+                StepDefinition(
+                    action_type="search_web",
+                    instruction=f"Search the web for the best grounded sources for: {objective}",
+                )
+            ]
         if _has_action_after(existing_steps, step_index, "extract"):
             return []
         return [
@@ -995,6 +1042,18 @@ def _wants_image_artifact(objective: str) -> bool:
     return any(hint in lowered for hint in _IMAGE_HINTS)
 
 
+def _looks_like_memory_resume_objective(objective: str) -> bool:
+    lowered = objective.lower()
+    return any(hint in lowered for hint in _MEMORY_HINTS)
+
+
+def _looks_like_repo_resume_objective(objective: str) -> bool:
+    lowered = objective.lower()
+    return _looks_like_memory_resume_objective(objective) and any(
+        hint in lowered for hint in _CODE_TARGET_HINTS
+    )
+
+
 def _extract_url(objective: str) -> str:
     match = _URL_RE.search(objective)
     return match.group(0) if match else ""
@@ -1087,6 +1146,23 @@ def _preferred_external_tool_from_skills(
     return "", {}
 
 
+def _default_external_tool_for_objective(
+    objective: str,
+    external_tool_context: list[dict[str, Any]] | None,
+) -> tuple[str, dict[str, Any]]:
+    if not isinstance(external_tool_context, list):
+        return "", {}
+    if _looks_like_memory_resume_objective(objective):
+        memory_tool = _find_external_tool(external_tool_context, predicate=_is_memory_tool)
+        if memory_tool:
+            return memory_tool, {"query": objective, "scope": "task"}
+    if _looks_like_code_task(objective):
+        repo_tool = _find_external_tool(external_tool_context, predicate=_is_repo_tool)
+        if repo_tool:
+            return repo_tool, {"objective": objective, "scope": "repo"}
+    return "", {}
+
+
 def _render_external_tool_arguments(
     raw_arguments: Any,
     *,
@@ -1116,6 +1192,19 @@ def _render_external_tool_argument_value(value: Any, *, objective: str) -> Any:
             for item in value
         ]
     return value
+
+
+def _find_external_tool(
+    external_tool_context: list[dict[str, Any]],
+    *,
+    predicate: Any,
+) -> str:
+    for tool in external_tool_context:
+        if not isinstance(tool, dict):
+            continue
+        if predicate(tool):
+            return str(tool.get("name", "")).strip()
+    return ""
 
 
 def _preferred_follow_up_action_from_skills(
@@ -1518,6 +1607,37 @@ def _looks_like_code_task(objective: str) -> bool:
 def _step_metadata(step: dict[str, Any]) -> dict[str, Any]:
     raw = step.get("metadata")
     return raw if isinstance(raw, dict) else {}
+
+
+def _step_external_tool(step: dict[str, Any]) -> dict[str, Any]:
+    raw = _step_metadata(step).get("external_tool")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _is_memory_tool(tool: dict[str, Any]) -> bool:
+    name = str(tool.get("name", "")).strip().lower()
+    raw_tags = tool.get("tags")
+    tags = {
+        str(tag).strip().lower()
+        for tag in raw_tags
+        if str(tag).strip()
+    } if isinstance(raw_tags, list) else set()
+    return name.startswith("mnemos.") or "memory" in tags or "retrieval" in tags
+
+
+def _is_repo_tool(tool: dict[str, Any]) -> bool:
+    name = str(tool.get("name", "")).strip().lower()
+    raw_tags = tool.get("tags")
+    tags = {
+        str(tag).strip().lower()
+        for tag in raw_tags
+        if str(tag).strip()
+    } if isinstance(raw_tags, list) else set()
+    return name.startswith("cartographer.") or "repo" in tags or "context" in tags
+
+
+def _is_repo_or_memory_tool(tool: dict[str, Any]) -> bool:
+    return _is_repo_tool(tool) or _is_memory_tool(tool)
 
 
 def _preferred_code_execution_command(

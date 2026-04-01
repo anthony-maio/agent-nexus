@@ -130,6 +130,46 @@ def test_plan_steps_for_objective_applies_skill_external_tool_arguments() -> Non
     assert payload["arguments"]["scope"] == "task"
 
 
+def test_plan_steps_for_objective_defaults_to_cartograph_for_coding_tasks() -> None:
+    steps = plan_steps_for_objective(
+        "Implement a fix in the repo for payment retry handling",
+        external_tool_context=[
+            {
+                "name": "cartographer.map_repo",
+                "description": "Build a scoped repository map.",
+                "source": "mcp://cartographer",
+                "tags": ["repo", "context"],
+            }
+        ],
+    )
+
+    payload = json.loads(steps[0].instruction)
+    assert [step.action_type for step in steps] == ["external_tool"]
+    assert payload["tool_name"] == "cartographer.map_repo"
+    assert payload["arguments"]["objective"] == "Implement a fix in the repo for payment retry handling"
+    assert payload["arguments"]["scope"] == "repo"
+
+
+def test_plan_steps_for_objective_defaults_to_mnemos_for_resume_tasks() -> None:
+    steps = plan_steps_for_objective(
+        "Resume prior work on payment retry handling",
+        external_tool_context=[
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+                "tags": ["memory", "retrieval"],
+            }
+        ],
+    )
+
+    payload = json.loads(steps[0].instruction)
+    assert [step.action_type for step in steps] == ["external_tool"]
+    assert payload["tool_name"] == "mnemos.retrieve"
+    assert payload["arguments"]["query"] == "Resume prior work on payment retry handling"
+    assert payload["arguments"]["scope"] == "task"
+
+
 def test_plan_follow_up_steps_uses_skill_preferred_follow_up_action() -> None:
     steps = plan_follow_up_steps(
         objective="Review payments API findings and package the result",
@@ -166,6 +206,54 @@ def test_plan_follow_up_steps_external_tool_advances_to_extract() -> None:
 
     assert [step.action_type for step in steps] == ["extract"]
     assert "external tool result" in steps[0].instruction.lower()
+
+
+def test_plan_follow_up_steps_cartograph_result_advances_to_list_files() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement a fix in the repo for payment retry handling",
+        completed_step=_step(
+            1,
+            "external_tool",
+            metadata={
+                "external_tool": {
+                    "name": "cartographer.map_repo",
+                    "tags": ["repo", "context"],
+                    "source": "mcp://cartographer",
+                }
+            },
+        ),
+        result=StepExecutionResult(
+            output_text="Repository map generated.",
+            citations=[CitationRecord(url="mcp://cartographer", title="cartographer.map_repo", snippet="ok")],
+        ),
+        existing_steps=[_step(0, "external_tool"), _step(1, "external_tool")],
+    )
+
+    assert [step.action_type for step in steps] == ["list_files"]
+
+
+def test_plan_follow_up_steps_mnemos_result_advances_to_list_files_for_coding_resume() -> None:
+    steps = plan_follow_up_steps(
+        objective="Resume prior work on payment retry handling in the repo",
+        completed_step=_step(
+            1,
+            "external_tool",
+            metadata={
+                "external_tool": {
+                    "name": "mnemos.retrieve",
+                    "tags": ["memory", "retrieval"],
+                    "source": "mcp://mnemos",
+                }
+            },
+        ),
+        result=StepExecutionResult(
+            output_text="Retrieved prior work items.",
+            citations=[CitationRecord(url="mcp://mnemos", title="mnemos.retrieve", snippet="ok")],
+        ),
+        existing_steps=[_step(0, "external_tool"), _step(1, "external_tool")],
+    )
+
+    assert [step.action_type for step in steps] == ["list_files"]
 
 
 def test_plan_follow_up_steps_uses_kernel_strategy_for_ambiguous_workflow_context() -> None:

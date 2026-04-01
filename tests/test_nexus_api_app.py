@@ -1217,6 +1217,88 @@ def test_skill_declared_external_tool_uses_synthesis_argument_defaults(tmp_path:
     assert first_step["metadata"]["tool_result"]["echo"]["scope"] == "task"
 
 
+def test_coding_run_defaults_to_cartograph_external_tool_when_available(tmp_path: Path) -> None:
+    script_path = _write_fake_stdio_mcp_server(tmp_path)
+    tool_config = json.dumps(
+        [
+            {
+                "name": "cartographer.map_repo",
+                "description": "Build a scoped repository map.",
+                "source": "mcp://cartographer",
+                "tags": ["repo", "context"],
+                "transport": {
+                    "kind": "stdio",
+                    "command": [sys.executable, str(script_path)],
+                },
+            }
+        ]
+    )
+    client = _client(
+        tmp_path,
+        execution_adapter=ExternalToolDispatchExecutionAdapter(
+            base_adapter=FakeExecutionAdapter(tmp_path),
+            tool_registry=parse_external_tool_config(tool_config),
+            tool_invoker=StdioExternalToolInvoker(timeout_sec=10.0),
+        ),
+        settings_overrides={"APP_EXTERNAL_TOOL_CONFIG": tool_config},
+    )
+    headers = _auth_header(client)
+    objective = "Implement a fix in the repo for payment retry handling"
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={"objective": objective, "mode": "manual"},
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    assert run["steps"][0]["action_type"] == "external_tool"
+    assert run["steps"][0]["metadata"]["external_tool"]["name"] == "cartographer.map_repo"
+    assert run["steps"][0]["metadata"]["tool_result"]["echo"]["objective"] == objective
+
+
+def test_resume_run_defaults_to_mnemos_external_tool_when_available(tmp_path: Path) -> None:
+    script_path = _write_fake_stdio_mcp_server(tmp_path)
+    tool_config = json.dumps(
+        [
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+                "tags": ["memory", "retrieval"],
+                "transport": {
+                    "kind": "stdio",
+                    "command": [sys.executable, str(script_path)],
+                },
+            }
+        ]
+    )
+    client = _client(
+        tmp_path,
+        execution_adapter=ExternalToolDispatchExecutionAdapter(
+            base_adapter=FakeExecutionAdapter(tmp_path),
+            tool_registry=parse_external_tool_config(tool_config),
+            tool_invoker=StdioExternalToolInvoker(timeout_sec=10.0),
+        ),
+        settings_overrides={"APP_EXTERNAL_TOOL_CONFIG": tool_config},
+    )
+    headers = _auth_header(client)
+    objective = "Resume prior work on payment retry handling"
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={"objective": objective, "mode": "manual"},
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    assert run["steps"][0]["action_type"] == "external_tool"
+    assert run["steps"][0]["metadata"]["external_tool"]["name"] == "mnemos.retrieve"
+    assert run["steps"][0]["metadata"]["tool_result"]["echo"]["query"] == objective
+
+
 def test_list_skills_includes_synthesis_host_and_canonical_roots(tmp_path: Path) -> None:
     synthesis_root = tmp_path / "synthesis-project"
     host_root = tmp_path / "installed-skills"
