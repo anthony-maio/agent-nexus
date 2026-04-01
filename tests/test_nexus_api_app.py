@@ -3463,6 +3463,77 @@ def test_kernel_completion_recovery_adds_code_verification_for_coding_runs(tmp_p
     ]
     assert recovery_events
 
+
+def test_kernel_completion_recovery_uses_mnemos_for_resume_runs(tmp_path: Path) -> None:
+    script_path = _write_fake_stdio_mcp_server(tmp_path)
+    tool_config = json.dumps(
+        [
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+                "tags": ["memory", "retrieval"],
+                "transport": {
+                    "kind": "stdio",
+                    "command": [sys.executable, str(script_path)],
+                },
+            }
+        ]
+    )
+    client = _client_with_planner(
+        tmp_path,
+        adaptive_planner=NoFollowUpPlanner(),
+        execution_adapter=ExternalToolDispatchExecutionAdapter(
+            base_adapter=FakeExecutionAdapter(tmp_path),
+            tool_registry=parse_external_tool_config(tool_config),
+            tool_invoker=StdioExternalToolInvoker(timeout_sec=10.0),
+        ),
+        settings_overrides={
+            "APP_EXTERNAL_TOOL_CONFIG": tool_config,
+            "APP_KERNEL_MAX_COMPLETION_RECOVERY_ATTEMPTS": 1,
+        },
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Resume prior work on payment retry handling",
+            "mode": "manual",
+            "steps": [
+                {
+                    "action_type": "read_file",
+                    "instruction": json.dumps({"path": "notes/status.md"}),
+                }
+            ],
+        },
+    )
+    assert create.status_code == 200
+    run = create.json()
+
+    assert run["status"] == "completed"
+    action_types = [step["action_type"] for step in run["steps"]]
+    assert action_types.count("external_tool") == 1
+    memory_step = next(
+        step for step in run["steps"] if step["action_type"] == "external_tool"
+    )
+    assert memory_step["metadata"]["external_tool"]["name"] == "mnemos.retrieve"
+    assert memory_step["metadata"]["tool_result"]["echo"]["query"] == (
+        "Resume prior work on payment retry handling"
+    )
+    verification = run["metadata"]["run_verification"]
+    assert verification["result"] == "provisional"
+
+    timeline = client.get(f"/runs/{run['id']}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    recovery_events = [
+        item
+        for item in timeline.json()["timeline"]
+        if item["type"] == "kernel.decision" and item.get("reason") == "completion_recovery"
+    ]
+    assert recovery_events
+
 def test_research_run_with_terminal_output_is_verified_by_completion_layer(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _auth_header(client)

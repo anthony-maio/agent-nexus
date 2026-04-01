@@ -1217,8 +1217,8 @@ class RunEngine:
             return step
         return None
 
-    @staticmethod
     def _completion_recovery_steps(
+        self,
         run: dict[str, Any],
         verification: RunVerificationRecord,
     ) -> list[StepDefinition]:
@@ -1229,6 +1229,32 @@ class RunEngine:
             for item in (signals.get("completed_actions") or [])
             if str(item).strip()
         }
+        if (
+            self._looks_like_memory_resume_objective(objective)
+            and not self._run_used_memory_tool(run)
+        ):
+            memory_tool = self._find_memory_tool_name()
+            if memory_tool:
+                return annotate_planner_steps(
+                    [
+                        StepDefinition(
+                            action_type="external_tool",
+                            instruction=json.dumps(
+                                {
+                                    "tool_name": memory_tool,
+                                    "arguments": {
+                                        "query": objective,
+                                        "scope": "task",
+                                        "reason": verification.reason,
+                                        "strategy": verification.strategy,
+                                    },
+                                }
+                            ),
+                        )
+                    ],
+                    planner_source="kernel",
+                    planner_phase="completion_recovery",
+                )
         citation_count = int(signals.get("citation_count", 0) or 0)
         terminal_artifact_actions = {"export", "generate_report", "generate_chart", "generate_image"}
         if (
@@ -1269,6 +1295,71 @@ class RunEngine:
                 planner_phase="completion_recovery",
             )
         return []
+
+    @staticmethod
+    def _looks_like_memory_resume_objective(objective: str) -> bool:
+        lowered = objective.lower()
+        return any(
+            hint in lowered
+            for hint in (
+                "resume",
+                "prior work",
+                "previous work",
+                "history",
+                "remember",
+                "memory",
+                "context from before",
+            )
+        )
+
+    def _find_memory_tool_name(self) -> str:
+        for tool in self._external_tool_context():
+            if not isinstance(tool, dict):
+                continue
+            name = str(tool.get("name", "")).strip()
+            lowered = name.lower()
+            raw_tags = tool.get("tags")
+            tags = (
+                {
+                    str(tag).strip().lower()
+                    for tag in raw_tags
+                    if str(tag).strip()
+                }
+                if isinstance(raw_tags, list)
+                else set()
+            )
+            if lowered.startswith("mnemos.") or "memory" in tags or "retrieval" in tags:
+                return name
+        return ""
+
+    @staticmethod
+    def _run_used_memory_tool(run: dict[str, Any]) -> bool:
+        steps = run.get("steps")
+        if not isinstance(steps, list):
+            return False
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            metadata = step.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            external_tool = metadata.get("external_tool")
+            if not isinstance(external_tool, dict):
+                continue
+            name = str(external_tool.get("name", "")).strip().lower()
+            raw_tags = external_tool.get("tags")
+            tags = (
+                {
+                    str(tag).strip().lower()
+                    for tag in raw_tags
+                    if str(tag).strip()
+                }
+                if isinstance(raw_tags, list)
+                else set()
+            )
+            if name.startswith("mnemos.") or "memory" in tags or "retrieval" in tags:
+                return True
+        return False
 
     def _resolved_skills_for_objective(self, objective: str) -> list[SkillManifest]:
         if self.capability_resolver is None:
