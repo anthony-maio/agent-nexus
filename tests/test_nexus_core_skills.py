@@ -63,6 +63,7 @@ def _write_synthesis_sidecar(
     repo: str = "",
     external_tool_arguments: dict[str, object] | None = None,
     external_tool_follow_up_actions: dict[str, object] | None = None,
+    external_tool_follow_up_sequences: dict[str, object] | None = None,
 ) -> None:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -79,6 +80,8 @@ def _write_synthesis_sidecar(
         payload["external_tool_arguments"] = external_tool_arguments
     if external_tool_follow_up_actions:
         payload["external_tool_follow_up_actions"] = external_tool_follow_up_actions
+    if external_tool_follow_up_sequences:
+        payload["external_tool_follow_up_sequences"] = external_tool_follow_up_sequences
     (skill_dir / ".synthesis.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -264,6 +267,33 @@ def test_skill_registry_reads_synthesis_external_tool_follow_up_actions(tmp_path
         "cartographer.map_repo": ("read_file", "execute_code")
     }
     assert manifests[0].to_dict()["external_tool_follow_up_actions"][
+        "cartographer.map_repo"
+    ] == ["read_file", "execute_code"]
+
+
+def test_skill_registry_reads_synthesis_external_tool_follow_up_sequences(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "repo-helper",
+        name="repo-helper",
+        description="Map repos and suggest next coding actions.",
+        external_tools="cartographer.map_repo",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "repo-helper",
+        external_tool_follow_up_sequences={
+            "cartographer.map_repo": ["read_file", "execute_code"]
+        },
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].external_tool_follow_up_sequences == {
+        "cartographer.map_repo": ("read_file", "execute_code")
+    }
+    assert manifests[0].to_dict()["external_tool_follow_up_sequences"][
         "cartographer.map_repo"
     ] == ["read_file", "execute_code"]
 

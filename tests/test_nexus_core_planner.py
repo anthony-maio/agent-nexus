@@ -357,6 +357,67 @@ def test_plan_follow_up_steps_external_tool_uses_skill_declared_follow_up_prefer
     assert '"command": ["python", "-m", "pytest", "-q", "tests/test_retry.py"]' in steps[0].instruction
 
 
+def test_plan_follow_up_steps_external_tool_starts_skill_declared_sequence() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement retry backoff in the repo",
+        completed_step=_step(
+            1,
+            "external_tool",
+            metadata={
+                "external_tool": {
+                    "name": "cartographer.map_repo",
+                    "tags": ["repo", "context"],
+                    "source": "mcp://cartographer",
+                }
+            },
+        ),
+        result=StepExecutionResult(
+            output_text="Map includes src/retry.py and a focused test command.",
+            metadata={
+                "tool_result": {
+                    "focus": {"file_path": "src/retry.py"},
+                    "verify_command": ["python", "-m", "pytest", "-q", "tests/test_retry.py"],
+                }
+            },
+        ),
+        existing_steps=[_step(0, "external_tool"), _step(1, "external_tool")],
+        skill_context=[
+            {
+                "name": "repo-helper",
+                "external_tool_follow_up_sequences": {
+                    "cartographer.map_repo": ["read_file", "execute_code"]
+                },
+            }
+        ],
+    )
+
+    assert [step.action_type for step in steps] == ["read_file"]
+    assert steps[0].metadata["tool_follow_up_sequence_remaining"] == ["execute_code"]
+
+
+def test_plan_follow_up_steps_continues_skill_declared_sequence_after_read_file() -> None:
+    steps = plan_follow_up_steps(
+        objective="Implement retry backoff in the repo",
+        completed_step=_step(
+            2,
+            "read_file",
+            metadata={"tool_follow_up_sequence_remaining": ["execute_code"]},
+        ),
+        result=StepExecutionResult(
+            output_text="def retry_backoff():\n    return 2",
+            metadata={
+                "tool_result": {
+                    "verify_command": ["python", "-m", "pytest", "-q", "tests/test_retry.py"],
+                }
+            },
+        ),
+        existing_steps=[_step(0, "external_tool"), _step(1, "read_file"), _step(2, "read_file")],
+    )
+
+    assert [step.action_type for step in steps] == ["execute_code"]
+    assert '"command": ["python", "-m", "pytest", "-q", "tests/test_retry.py"]' in steps[0].instruction
+
+
 def test_plan_follow_up_steps_uses_kernel_strategy_for_ambiguous_workflow_context() -> None:
     steps = plan_follow_up_steps(
         objective="Continue the operator task",

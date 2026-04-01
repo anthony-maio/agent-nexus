@@ -60,6 +60,7 @@ class SkillManifest:
     external_tools: tuple[str, ...] = ()
     external_tool_arguments: dict[str, dict[str, Any]] | None = None
     external_tool_follow_up_actions: dict[str, tuple[str, ...]] | None = None
+    external_tool_follow_up_sequences: dict[str, tuple[str, ...]] | None = None
     verification_signals: tuple[str, ...] = ()
     required_artifact_kinds: tuple[str, ...] = ()
 
@@ -97,6 +98,10 @@ class SkillManifest:
         if self.external_tool_follow_up_actions:
             payload["external_tool_follow_up_actions"] = {
                 key: list(value) for key, value in self.external_tool_follow_up_actions.items()
+            }
+        if self.external_tool_follow_up_sequences:
+            payload["external_tool_follow_up_sequences"] = {
+                key: list(value) for key, value in self.external_tool_follow_up_sequences.items()
             }
         if self.verification_signals:
             payload["verification_signals"] = list(self.verification_signals)
@@ -255,6 +260,10 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
         external_tool_follow_up_actions=_normalize_external_tool_follow_up_actions(
             synthesis_metadata.get("external_tool_follow_up_actions")
             or synthesis_metadata.get("tool_follow_up_actions")
+        ),
+        external_tool_follow_up_sequences=_normalize_external_tool_follow_up_actions(
+            synthesis_metadata.get("external_tool_follow_up_sequences")
+            or synthesis_metadata.get("tool_follow_up_sequences")
         ),
         verification_signals=_parse_identifier_list(
             str(frontmatter.get("verification_signals", ""))

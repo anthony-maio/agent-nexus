@@ -347,11 +347,26 @@ def plan_follow_up_steps(
 
     if action == "external_tool":
         external_tool = _step_external_tool(completed_step)
+        follow_up_sequence = _follow_up_sequence_for_external_tool(
+            skill_context,
+            tool_name=str(external_tool.get("name", "")).strip(),
+        )
         preferred_tool_follow_up = _preferred_follow_up_action_for_external_tool(
             skill_context,
             tool_name=str(external_tool.get("name", "")).strip(),
             allowed={"read_file", "list_files", "execute_code", "search_web", "extract"},
         )
+        if follow_up_sequence:
+            sequenced = _step_for_follow_up_sequence_action(
+                action_type=follow_up_sequence[0],
+                remaining_actions=follow_up_sequence[1:],
+                objective=objective,
+                result=result,
+                existing_steps=existing_steps,
+                step_index=step_index,
+            )
+            if sequenced:
+                return [sequenced]
         if (
             (_looks_like_code_task(objective) or _looks_like_repo_resume_objective(objective))
             and _is_repo_or_memory_tool(external_tool)
@@ -413,6 +428,16 @@ def plan_follow_up_steps(
                 instruction=f"Summarize the external tool result and grounded evidence for: {objective}",
             )
         ]
+
+    sequenced_follow_up = _step_for_completed_sequence_action(
+        completed_step=completed_step,
+        objective=objective,
+        result=result,
+        existing_steps=existing_steps,
+        step_index=step_index,
+    )
+    if sequenced_follow_up is not None:
+        return [sequenced_follow_up] if sequenced_follow_up else []
 
     if action == "read_file":
         if _looks_like_code_task(objective):
@@ -1295,6 +1320,126 @@ def _preferred_follow_up_action_for_external_tool(
                 continue
             return action
     return ""
+
+
+def _follow_up_sequence_for_external_tool(
+    skill_context: list[dict[str, Any]] | None,
+    *,
+    tool_name: str,
+) -> tuple[str, ...]:
+    if not tool_name or not isinstance(skill_context, list):
+        return ()
+    normalized_tool = tool_name.strip().lower()
+    for skill in skill_context:
+        if not isinstance(skill, dict):
+            continue
+        raw_mapping = skill.get("external_tool_follow_up_sequences")
+        if not isinstance(raw_mapping, dict):
+            continue
+        raw_actions = raw_mapping.get(tool_name) or raw_mapping.get(normalized_tool)
+        if not isinstance(raw_actions, list):
+            continue
+        actions = tuple(
+            str(raw_action).strip().lower()
+            for raw_action in raw_actions
+            if str(raw_action).strip()
+        )
+        if actions:
+            return actions
+    return ()
+
+
+def _step_for_follow_up_sequence_action(
+    *,
+    action_type: str,
+    remaining_actions: tuple[str, ...] | list[str],
+    objective: str,
+    result: StepExecutionResult,
+    existing_steps: list[dict[str, Any]],
+    step_index: int,
+) -> StepDefinition | None:
+    action = action_type.strip().lower()
+    remaining = [str(item).strip().lower() for item in remaining_actions if str(item).strip()]
+    metadata = (
+        {"tool_follow_up_sequence_remaining": remaining}
+        if remaining
+        else {}
+    )
+    if action == "read_file":
+        target_path = _external_tool_workspace_path(objective, result)
+        if not target_path or _has_action_after(existing_steps, step_index, "read_file"):
+            return None
+        return StepDefinition(
+            action_type="read_file",
+            instruction=_workspace_instruction(target_path),
+            metadata=metadata,
+        )
+    if action == "execute_code":
+        command = _external_tool_command(result) or _preferred_code_execution_command(
+            result,
+            objective=objective,
+        )
+        if not command or _has_action_after(existing_steps, step_index, "execute_code"):
+            return None
+        return StepDefinition(
+            action_type="execute_code",
+            instruction=json.dumps({"command": command}),
+            metadata=metadata,
+        )
+    if action == "list_files":
+        if _has_action_after(existing_steps, step_index, "list_files"):
+            return None
+        return StepDefinition(
+            action_type="list_files",
+            instruction=_workspace_listing_instruction(),
+            metadata=metadata,
+        )
+    if action == "search_web":
+        if _has_action_after(existing_steps, step_index, "search_web"):
+            return None
+        return StepDefinition(
+            action_type="search_web",
+            instruction=f"Search the web for the best grounded sources for: {objective}",
+            metadata=metadata,
+        )
+    if action == "extract":
+        if _has_action_after(existing_steps, step_index, "extract"):
+            return None
+        return StepDefinition(
+            action_type="extract",
+            instruction=f"Summarize the relevant evidence for: {objective}",
+            metadata=metadata,
+        )
+    return None
+
+
+def _step_for_completed_sequence_action(
+    *,
+    completed_step: dict[str, Any],
+    objective: str,
+    result: StepExecutionResult,
+    existing_steps: list[dict[str, Any]],
+    step_index: int,
+) -> StepDefinition | None | bool:
+    metadata = _step_metadata(completed_step)
+    raw_remaining = metadata.get("tool_follow_up_sequence_remaining")
+    if not isinstance(raw_remaining, list):
+        return None
+    remaining_actions = [
+        str(item).strip().lower()
+        for item in raw_remaining
+        if str(item).strip()
+    ]
+    if not remaining_actions:
+        return False
+    return _step_for_follow_up_sequence_action(
+        action_type=remaining_actions[0],
+        remaining_actions=remaining_actions[1:],
+        objective=objective,
+        result=result,
+        existing_steps=existing_steps,
+        step_index=step_index,
+    ) or False
 
 
 def _preferred_follow_up_action_from_kernel(
