@@ -61,6 +61,7 @@ def _write_synthesis_sidecar(
     lifecycle_stage: str = "draft",
     capability_family: str = "",
     repo: str = "",
+    external_tool_arguments: dict[str, object] | None = None,
 ) -> None:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -73,6 +74,8 @@ def _write_synthesis_sidecar(
         payload["capability_family"] = capability_family
     if repo:
         payload["repo"] = repo
+    if external_tool_arguments:
+        payload["external_tool_arguments"] = external_tool_arguments
     (skill_dir / ".synthesis.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -205,6 +208,34 @@ def test_skill_registry_reads_synthesis_sidecar_metadata(tmp_path: Path) -> None
     assert manifests[0].source_repo == "anthony-maio/synthesis-skills"
     assert manifests[0].to_dict()["trust_level"] == "probation"
     assert manifests[0].to_dict()["source_type"] == "canonical"
+
+
+def test_skill_registry_reads_synthesis_external_tool_arguments(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "memory-helper",
+        name="memory-helper",
+        description="Retrieve scoped memory from external tools.",
+        external_tools="mnemos.retrieve",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "memory-helper",
+        external_tool_arguments={
+            "mnemos.retrieve": {
+                "query": "{objective}",
+                "scope": "task",
+            }
+        },
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].external_tool_arguments == {
+        "mnemos.retrieve": {"query": "{objective}", "scope": "task"}
+    }
+    assert manifests[0].to_dict()["external_tool_arguments"]["mnemos.retrieve"]["scope"] == "task"
 
 
 def test_capability_resolver_prefers_canonical_trusted_skill_on_equal_match(tmp_path: Path) -> None:

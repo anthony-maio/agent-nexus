@@ -58,6 +58,7 @@ class SkillManifest:
     preferred_initial_actions: tuple[str, ...] = ()
     preferred_follow_up_actions: tuple[str, ...] = ()
     external_tools: tuple[str, ...] = ()
+    external_tool_arguments: dict[str, dict[str, Any]] | None = None
     verification_signals: tuple[str, ...] = ()
     required_artifact_kinds: tuple[str, ...] = ()
 
@@ -88,6 +89,10 @@ class SkillManifest:
             payload["preferred_follow_up_actions"] = list(self.preferred_follow_up_actions)
         if self.external_tools:
             payload["external_tools"] = list(self.external_tools)
+        if self.external_tool_arguments:
+            payload["external_tool_arguments"] = {
+                key: dict(value) for key, value in self.external_tool_arguments.items()
+            }
         if self.verification_signals:
             payload["verification_signals"] = list(self.verification_signals)
         if self.required_artifact_kinds:
@@ -238,6 +243,10 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
         external_tools=_parse_identifier_list(
             str(frontmatter.get("external_tools", ""))
         ),
+        external_tool_arguments=_normalize_external_tool_arguments(
+            synthesis_metadata.get("external_tool_arguments")
+            or synthesis_metadata.get("tool_arguments")
+        ),
         verification_signals=_parse_identifier_list(
             str(frontmatter.get("verification_signals", ""))
         ),
@@ -368,6 +377,20 @@ def _normalized_sidecar_value(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _normalize_external_tool_arguments(
+    raw: Any,
+) -> dict[str, dict[str, Any]] | None:
+    if not isinstance(raw, dict):
+        return None
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, value in raw.items():
+        tool_name = str(key or "").strip()
+        if not tool_name or not isinstance(value, dict):
+            continue
+        normalized[tool_name] = dict(value)
+    return normalized or None
 
 
 def _governance_bonus(manifest: SkillManifest) -> int:

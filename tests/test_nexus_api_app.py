@@ -598,6 +598,7 @@ def _write_synthesis_sidecar(
     lifecycle_stage: str = "draft",
     capability_family: str = "",
     repo: str = "",
+    external_tool_arguments: dict[str, object] | None = None,
 ) -> None:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -610,6 +611,8 @@ def _write_synthesis_sidecar(
         payload["capability_family"] = capability_family
     if repo:
         payload["repo"] = repo
+    if external_tool_arguments:
+        payload["external_tool_arguments"] = external_tool_arguments
     (skill_dir / ".synthesis.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -1144,6 +1147,74 @@ def test_skill_declared_external_tool_bootstraps_run(tmp_path: Path) -> None:
     assert run["steps"][0]["action_type"] == "external_tool"
     assert run["steps"][0]["status"] == "completed"
     assert run["metadata"]["capability_state"]["external_tools"] == ["mnemos.retrieve"]
+
+
+def test_skill_declared_external_tool_uses_synthesis_argument_defaults(tmp_path: Path) -> None:
+    script_path = _write_fake_stdio_mcp_server(tmp_path)
+    tool_config = json.dumps(
+        [
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+                "transport": {
+                    "kind": "stdio",
+                    "command": [sys.executable, str(script_path)],
+                },
+            }
+        ]
+    )
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "memory-helper",
+        name="memory-helper",
+        description="Retrieve scoped memory and repo maps from external tools.",
+        external_tools="mnemos.retrieve",
+    )
+    _write_synthesis_sidecar(
+        skill_root,
+        "memory-helper",
+        source_type="canonical",
+        trust_level="trusted",
+        lifecycle_stage="stable",
+        external_tool_arguments={
+            "mnemos.retrieve": {
+                "query": "{objective}",
+                "scope": "task",
+            }
+        },
+    )
+    client = _client(
+        tmp_path,
+        execution_adapter=ExternalToolDispatchExecutionAdapter(
+            base_adapter=FakeExecutionAdapter(tmp_path),
+            tool_registry=parse_external_tool_config(tool_config),
+            tool_invoker=StdioExternalToolInvoker(timeout_sec=10.0),
+        ),
+        settings_overrides={
+            "APP_EXTERNAL_TOOL_CONFIG": tool_config,
+            "APP_SKILL_PATHS": str(skill_root),
+        },
+    )
+    headers = _auth_header(client)
+    objective = "Retrieve payment retry memory for the current objective"
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": objective,
+            "mode": "manual",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    first_step = run["steps"][0]
+    assert first_step["action_type"] == "external_tool"
+    assert first_step["metadata"]["tool_result"]["echo"]["query"] == objective
+    assert first_step["metadata"]["tool_result"]["echo"]["scope"] == "task"
 
 
 def test_list_skills_includes_synthesis_host_and_canonical_roots(tmp_path: Path) -> None:

@@ -216,9 +216,10 @@ def plan_steps_for_objective(
                     instruction=_workspace_instruction(workspace_path),
                 )
             ]
-        preferred_external_tool = _preferred_external_tool_from_skills(
+        preferred_external_tool, preferred_external_tool_arguments = _preferred_external_tool_from_skills(
             skill_context,
             external_tool_context,
+            objective=cleaned,
         )
         if preferred_external_tool:
             return [
@@ -227,7 +228,9 @@ def plan_steps_for_objective(
                     instruction=json.dumps(
                         {
                             "tool_name": preferred_external_tool,
-                            "arguments": {"objective": cleaned},
+                            "arguments": (
+                                preferred_external_tool_arguments or {"objective": cleaned}
+                            ),
                         }
                     ),
                 )
@@ -1050,28 +1053,69 @@ def _preferred_initial_action_from_skills(
 def _preferred_external_tool_from_skills(
     skill_context: list[dict[str, Any]] | None,
     external_tool_context: list[dict[str, Any]] | None,
-) -> str:
+    *,
+    objective: str,
+) -> tuple[str, dict[str, Any]]:
     if not isinstance(skill_context, list) or not isinstance(external_tool_context, list):
-        return ""
+        return "", {}
     available_tools = {
         str(tool.get("name", "")).strip().lower()
         for tool in external_tool_context
         if isinstance(tool, dict) and str(tool.get("name", "")).strip()
     }
     if not available_tools:
-        return ""
+        return "", {}
     for skill in skill_context:
         if not isinstance(skill, dict):
             continue
         raw_tools = skill.get("external_tools")
         if not isinstance(raw_tools, list):
             continue
+        raw_tool_arguments = skill.get("external_tool_arguments")
+        tool_arguments = (
+            raw_tool_arguments if isinstance(raw_tool_arguments, dict) else {}
+        )
         for raw_tool in raw_tools:
             tool_name = str(raw_tool).strip()
             normalized = tool_name.lower()
             if normalized and normalized in available_tools:
-                return tool_name
-    return ""
+                return tool_name, _render_external_tool_arguments(
+                    tool_arguments.get(tool_name)
+                    or tool_arguments.get(normalized),
+                    objective=objective,
+                )
+    return "", {}
+
+
+def _render_external_tool_arguments(
+    raw_arguments: Any,
+    *,
+    objective: str,
+) -> dict[str, Any]:
+    if not isinstance(raw_arguments, dict):
+        return {}
+    return {
+        str(key): _render_external_tool_argument_value(value, objective=objective)
+        for key, value in raw_arguments.items()
+        if str(key).strip()
+    }
+
+
+def _render_external_tool_argument_value(value: Any, *, objective: str) -> Any:
+    if isinstance(value, str):
+        return value.replace("{objective}", objective)
+    if isinstance(value, dict):
+        return {
+            str(key): _render_external_tool_argument_value(child, objective=objective)
+            for key, child in value.items()
+            if str(key).strip()
+        }
+    if isinstance(value, list):
+        return [
+            _render_external_tool_argument_value(item, objective=objective)
+            for item in value
+        ]
+    return value
 
 
 def _preferred_follow_up_action_from_skills(

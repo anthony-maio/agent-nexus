@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -95,6 +96,38 @@ def test_plan_steps_for_objective_uses_skill_declared_external_tool() -> None:
 
     assert [step.action_type for step in steps] == ["external_tool"]
     assert '"tool_name": "mnemos.retrieve"' in steps[0].instruction
+
+
+def test_plan_steps_for_objective_applies_skill_external_tool_arguments() -> None:
+    steps = plan_steps_for_objective(
+        "Retrieve payment retry memory for the current objective",
+        skill_context=[
+            {
+                "name": "memory-helper",
+                "description": "Retrieve scoped memory and repo maps from external tools.",
+                "path": "skills/memory-helper/SKILL.md",
+                "external_tools": ["mnemos.retrieve"],
+                "external_tool_arguments": {
+                    "mnemos.retrieve": {
+                        "query": "{objective}",
+                        "scope": "task",
+                    }
+                },
+            }
+        ],
+        external_tool_context=[
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+            }
+        ],
+    )
+
+    payload = json.loads(steps[0].instruction)
+    assert payload["tool_name"] == "mnemos.retrieve"
+    assert payload["arguments"]["query"] == "Retrieve payment retry memory for the current objective"
+    assert payload["arguments"]["scope"] == "task"
 
 
 def test_plan_follow_up_steps_uses_skill_preferred_follow_up_action() -> None:

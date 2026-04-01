@@ -1309,6 +1309,11 @@ class RunEngine:
                 "preferred_initial_actions": list(skill.preferred_initial_actions),
                 "preferred_follow_up_actions": list(skill.preferred_follow_up_actions),
                 "external_tools": list(skill.external_tools),
+                "external_tool_arguments": (
+                    {key: dict(value) for key, value in skill.external_tool_arguments.items()}
+                    if skill.external_tool_arguments
+                    else {}
+                ),
                 "verification_signals": list(skill.verification_signals),
                 "required_artifact_kinds": list(skill.required_artifact_kinds),
             }
