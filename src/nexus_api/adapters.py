@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -40,6 +41,86 @@ class WebInteractionAdapter:
 
     async def deliver_status(self, run_id: str, status: str, detail: str) -> None:
         log.info("run-status run=%s status=%s detail=%s", run_id, status, detail)
+
+
+class ToolAugmentedInteractionAdapter:
+    """Interaction adapter that mirrors runtime events to a registered tool."""
+
+    def __init__(
+        self,
+        *,
+        base_adapter: Any,
+        tool_registry: ExternalToolRegistry,
+        tool_invoker: ExternalToolInvoker | None = None,
+    ) -> None:
+        self.base_adapter = base_adapter
+        self.tool_registry = tool_registry
+        self.tool_invoker = tool_invoker
+
+    async def emit_message(self, channel: str, content: str) -> None:
+        await self.base_adapter.emit_message(channel, content)
+
+    async def request_approval(
+        self, run_id: str, step_id: str, summary: str, action_type: str
+    ) -> None:
+        await self.base_adapter.request_approval(run_id, step_id, summary, action_type)
+        await self._notify_tool(
+            event="approval_needed",
+            run_id=run_id,
+            step_id=step_id,
+            payload={
+                "summary": summary,
+                "action_type": action_type,
+            },
+        )
+
+    async def deliver_status(self, run_id: str, status: str, detail: str) -> None:
+        await self.base_adapter.deliver_status(run_id, status, detail)
+        if status.strip().lower() not in {"failed", "pending_approval", "completed"}:
+            return
+        await self._notify_tool(
+            event="run_status",
+            run_id=run_id,
+            step_id="",
+            payload={
+                "status": status,
+                "detail": detail,
+            },
+        )
+
+    async def _notify_tool(
+        self,
+        *,
+        event: str,
+        run_id: str,
+        step_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        if self.tool_invoker is None:
+            return
+        tool_spec = _find_notification_tool(self.tool_registry)
+        if tool_spec is None:
+            return
+        instruction = {
+            "tool_name": tool_spec.name,
+            "arguments": {
+                "event": event,
+                "run_id": run_id,
+                **({"step_id": step_id} if step_id else {}),
+                **payload,
+            },
+        }
+        try:
+            await self.tool_invoker.invoke_tool(
+                run_id=run_id,
+                step_id=step_id or f"status:{run_id}",
+                tool_name=tool_spec.name,
+                arguments=instruction["arguments"],
+                instruction=json.dumps(instruction),
+                tool_spec=tool_spec,
+            )
+        except Exception:
+            log.warning("Interaction notification tool failed for run=%s event=%s", run_id, event, exc_info=True)
 
 
 class SandboxExecutionAdapter:
@@ -139,3 +220,12 @@ class ExternalToolDispatchExecutionAdapter:
             artifacts=result.artifacts,
             metadata=metadata,
         )
+
+
+def _find_notification_tool(tool_registry: ExternalToolRegistry) -> Any | None:
+    for tool in tool_registry.list_tools():
+        name = tool.name.strip().lower()
+        tags = {str(tag).strip().lower() for tag in tool.tags if str(tag).strip()}
+        if name.startswith("halobot.") or "notification" in tags or "approval" in tags:
+            return tool
+    return None

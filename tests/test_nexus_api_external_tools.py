@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from nexus_api.adapters import ExternalToolDispatchExecutionAdapter
+from nexus_api.adapters import ExternalToolDispatchExecutionAdapter, ToolAugmentedInteractionAdapter
 from nexus_api.external_tools import (
     ExternalToolRegistry,
     ExternalToolSpec,
@@ -169,6 +169,103 @@ async def test_external_tool_dispatch_adapter_delegates_non_tool_actions() -> No
 
     assert result.output_text == "base:search_web"
     assert result.metadata["step_id"] == "step-789"
+
+
+@pytest.mark.asyncio
+async def test_tool_augmented_interaction_adapter_notifies_halobot_for_approval() -> None:
+    registry = ExternalToolRegistry(
+        [
+            ExternalToolSpec(
+                name="halobot.notify",
+                description="Send approval notifications to HaloBot.",
+                source="mcp://halobot",
+                tags=("notification", "approval"),
+            )
+        ]
+    )
+    invoker = _FakeExternalToolInvoker()
+    class _BaseInteraction:
+        def __init__(self) -> None:
+            self.approvals: list[dict[str, str]] = []
+
+        async def emit_message(self, channel: str, content: str) -> None:
+            _ = channel, content
+
+        async def request_approval(
+            self, run_id: str, step_id: str, summary: str, action_type: str
+        ) -> None:
+            self.approvals.append(
+                {
+                    "run_id": run_id,
+                    "step_id": step_id,
+                    "summary": summary,
+                    "action_type": action_type,
+                }
+            )
+
+        async def deliver_status(self, run_id: str, status: str, detail: str) -> None:
+            _ = run_id, status, detail
+
+    base = _BaseInteraction()
+    adapter = ToolAugmentedInteractionAdapter(
+        base_adapter=base,
+        tool_registry=registry,
+        tool_invoker=invoker,
+    )
+
+    await adapter.request_approval(
+        run_id="run-123",
+        step_id="step-456",
+        summary="submit payment workflow",
+        action_type="submit",
+    )
+
+    assert base.approvals[0]["step_id"] == "step-456"
+    assert invoker.calls[0]["tool_name"] == "halobot.notify"
+    assert invoker.calls[0]["arguments"]["event"] == "approval_needed"
+    assert invoker.calls[0]["arguments"]["action_type"] == "submit"
+
+
+@pytest.mark.asyncio
+async def test_tool_augmented_interaction_adapter_notifies_halobot_for_failed_status() -> None:
+    registry = ExternalToolRegistry(
+        [
+            ExternalToolSpec(
+                name="halobot.notify",
+                description="Send runtime notifications to HaloBot.",
+                source="mcp://halobot",
+                tags=("notification",),
+            )
+        ]
+    )
+    invoker = _FakeExternalToolInvoker()
+
+    class _BaseInteraction:
+        def __init__(self) -> None:
+            self.statuses: list[dict[str, str]] = []
+
+        async def emit_message(self, channel: str, content: str) -> None:
+            _ = channel, content
+
+        async def request_approval(self, run_id: str, step_id: str, summary: str, action_type: str) -> None:
+            _ = run_id, step_id, summary, action_type
+
+        async def deliver_status(self, run_id: str, status: str, detail: str) -> None:
+            self.statuses.append({"run_id": run_id, "status": status, "detail": detail})
+
+    base = _BaseInteraction()
+    adapter = ToolAugmentedInteractionAdapter(
+        base_adapter=base,
+        tool_registry=registry,
+        tool_invoker=invoker,
+    )
+
+    await adapter.deliver_status("run-123", "failed", "verification blocked")
+
+    assert base.statuses[0]["status"] == "failed"
+    assert invoker.calls[0]["tool_name"] == "halobot.notify"
+    assert invoker.calls[0]["arguments"]["event"] == "run_status"
+    assert invoker.calls[0]["arguments"]["status"] == "failed"
 
 
 def test_parse_external_tool_config_preserves_stdio_transport_details(tmp_path: Any) -> None:

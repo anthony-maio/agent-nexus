@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from nexus_api.adapters import (
     ExternalToolDispatchExecutionAdapter,
     SandboxExecutionAdapter,
+    ToolAugmentedInteractionAdapter,
     WebInteractionAdapter,
 )
 from nexus_api.adaptive_planner import ChatCompletionsAdaptivePlanner, OpenRouterAdaptivePlanner
@@ -166,7 +167,13 @@ def build_context(settings: ApiSettings | None = None) -> ApiContext:
         tool_registry=external_tool_registry,
         tool_invoker=external_tool_invoker,
     )
-    interaction_adapter = WebInteractionAdapter()
+    interaction_adapter: Any = WebInteractionAdapter()
+    if external_tool_invoker is not None:
+        interaction_adapter = ToolAugmentedInteractionAdapter(
+            base_adapter=interaction_adapter,
+            tool_registry=external_tool_registry,
+            tool_invoker=external_tool_invoker,
+        )
     rule_planner = RuleAdaptivePlanner()
     adaptive_planner: Any = rule_planner
     if settings.APP_ENABLE_MODEL_REPLANNER:

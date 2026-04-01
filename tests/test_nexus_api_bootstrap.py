@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from nexus_api.adapters import ToolAugmentedInteractionAdapter
 from nexus_api.app import create_app
 from nexus_api.config import ApiSettings
 from nexus_api.service import build_context
@@ -78,3 +80,31 @@ def test_bootstrap_configure_writes_app_first_env_and_blocks_repeat(tmp_path: Pa
         repeat = client.post("/bootstrap/configure", json=payload)
         assert repeat.status_code == 409
         assert "already configured" in repeat.json()["detail"]
+
+
+def test_build_context_wraps_interaction_adapter_for_halobot_tools(tmp_path: Path) -> None:
+    settings = ApiSettings(
+        APP_DATABASE_URL=f"sqlite:///{tmp_path / 'bootstrap.db'}",
+        APP_CANONICAL_WORKSPACE=str(tmp_path / "workspace"),
+        APP_SANDBOX_ARTIFACT_ROOT=str(tmp_path / "sandbox"),
+        APP_CONFIG_PATH=str(tmp_path / "config" / ".env"),
+        APP_BOOTSTRAP_EXIT_AFTER_CONFIGURE=False,
+        APP_EXTERNAL_TOOL_CONFIG=json.dumps(
+            [
+                {
+                    "name": "halobot.notify",
+                    "description": "Send approval notifications to HaloBot.",
+                    "source": "mcp://halobot",
+                    "tags": ["notification", "approval"],
+                    "transport": {
+                        "kind": "stdio",
+                        "command": ["python", "-c", "pass"],
+                    },
+                }
+            ]
+        ),
+    )
+
+    ctx = build_context(settings)
+
+    assert isinstance(ctx.interaction_adapter, ToolAugmentedInteractionAdapter)
