@@ -64,6 +64,7 @@ def _write_synthesis_sidecar(
     external_tool_arguments: dict[str, object] | None = None,
     external_tool_follow_up_actions: dict[str, object] | None = None,
     external_tool_follow_up_sequences: dict[str, object] | None = None,
+    setup_steps: list[dict[str, object]] | None = None,
 ) -> None:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +83,8 @@ def _write_synthesis_sidecar(
         payload["external_tool_follow_up_actions"] = external_tool_follow_up_actions
     if external_tool_follow_up_sequences:
         payload["external_tool_follow_up_sequences"] = external_tool_follow_up_sequences
+    if setup_steps:
+        payload["setup_steps"] = setup_steps
     (skill_dir / ".synthesis.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -296,6 +299,45 @@ def test_skill_registry_reads_synthesis_external_tool_follow_up_sequences(tmp_pa
     assert manifests[0].to_dict()["external_tool_follow_up_sequences"][
         "cartographer.map_repo"
     ] == ["read_file", "execute_code"]
+
+
+def test_skill_registry_reads_synthesis_setup_steps(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "memory-helper",
+        name="memory-helper",
+        description="Retrieve scoped memory before continuing a task.",
+        external_tools="mnemos.retrieve",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "memory-helper",
+        setup_steps=[
+            {
+                "action_type": "external_tool",
+                "instruction": {
+                    "tool_name": "mnemos.retrieve",
+                    "arguments": {"query": "{objective}", "scope": "task"},
+                },
+                "metadata": {"setup_kind": "memory_restore"},
+            }
+        ],
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].setup_steps == (
+        {
+            "action_type": "external_tool",
+            "instruction": {
+                "tool_name": "mnemos.retrieve",
+                "arguments": {"query": "{objective}", "scope": "task"},
+            },
+            "metadata": {"setup_kind": "memory_restore"},
+        },
+    )
+    assert manifests[0].to_dict()["setup_steps"][0]["metadata"]["setup_kind"] == "memory_restore"
 
 
 def test_capability_resolver_prefers_canonical_trusted_skill_on_equal_match(tmp_path: Path) -> None:

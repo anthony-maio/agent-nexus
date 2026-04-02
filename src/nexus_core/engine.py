@@ -185,12 +185,19 @@ class RunEngine:
             objective,
             allow_acquire=True,
         )
-        planned_steps = steps or await self._plan_next_steps(
-            objective=objective,
-            mode=mode,
-            existing_steps=[],
-            resolved_skills=resolved_skills,
-        )
+        if steps:
+            planned_steps = steps
+        else:
+            setup_steps = self._setup_steps_for_resolved_skills(
+                objective=objective,
+                resolved_skills=resolved_skills,
+            )
+            planned_steps = setup_steps or await self._plan_next_steps(
+                objective=objective,
+                mode=mode,
+                existing_steps=[],
+                resolved_skills=resolved_skills,
+            )
         run = self.repo.create_run(
             objective=objective,
             mode=mode.value,
@@ -1512,6 +1519,7 @@ class RunEngine:
             resolved_skills,
             attribute="external_tools",
         )
+        setup_steps = RunEngine._merged_skill_setup_steps(resolved_skills)
         resolved_payload = [
             {
                 "name": skill.name,
@@ -1546,6 +1554,15 @@ class RunEngine:
                     if skill.external_tool_follow_up_sequences
                     else {}
                 ),
+                "setup_steps": [
+                    {
+                        **step,
+                        "metadata": dict(step.get("metadata", {}))
+                        if isinstance(step.get("metadata"), dict)
+                        else {},
+                    }
+                    for step in skill.setup_steps
+                ],
                 "verification_signals": list(skill.verification_signals),
                 "required_artifact_kinds": list(skill.required_artifact_kinds),
             }
@@ -1563,6 +1580,8 @@ class RunEngine:
             capability_state["required_artifact_kinds"] = required_artifact_kinds
         if external_tools:
             capability_state["external_tools"] = external_tools
+        if setup_steps:
+            capability_state["setup_steps"] = setup_steps
         if isinstance(acquisition, dict) and acquisition:
             capability_state["skill_acquisition"] = {
                 "success": bool(acquisition.get("success")),
@@ -1590,6 +1609,26 @@ class RunEngine:
                     continue
                 seen.add(value)
                 merged.append(value)
+        return merged
+
+    @staticmethod
+    def _merged_skill_setup_steps(resolved_skills: list[SkillManifest]) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for skill in resolved_skills:
+            for step in skill.setup_steps:
+                fingerprint = json.dumps(step, sort_keys=True, default=str)
+                if fingerprint in seen:
+                    continue
+                seen.add(fingerprint)
+                merged.append(
+                    {
+                        **step,
+                        "metadata": dict(step.get("metadata", {}))
+                        if isinstance(step.get("metadata"), dict)
+                        else {},
+                    }
+                )
         return merged
 
     def _external_tool_context(self) -> list[dict[str, Any]]:
@@ -1916,6 +1955,86 @@ class RunEngine:
                 )
             )
         return annotated
+
+    @staticmethod
+    def _setup_steps_for_resolved_skills(
+        *,
+        objective: str,
+        resolved_skills: list[SkillManifest],
+    ) -> list[StepDefinition]:
+        if not resolved_skills:
+            return []
+        rendered: list[StepDefinition] = []
+        seen: set[str] = set()
+        for skill in resolved_skills:
+            for raw_step in skill.setup_steps:
+                action_type = str(raw_step.get("action_type", "")).strip().lower()
+                if not action_type:
+                    continue
+                instruction_value = RunEngine._render_setup_value(
+                    raw_step.get("instruction", ""),
+                    objective=objective,
+                    skill=skill,
+                )
+                instruction = (
+                    instruction_value
+                    if isinstance(instruction_value, str)
+                    else json.dumps(instruction_value)
+                )
+                metadata = raw_step.get("metadata")
+                rendered_metadata = RunEngine._render_setup_value(
+                    metadata if isinstance(metadata, dict) else {},
+                    objective=objective,
+                    skill=skill,
+                )
+                step_metadata = dict(rendered_metadata) if isinstance(rendered_metadata, dict) else {}
+                step_metadata.setdefault("planner_source", "skill")
+                step_metadata.setdefault("planner_phase", "setup")
+                step_metadata.setdefault("skill_setup", True)
+                step_metadata.setdefault("skill_setup_source", skill.name)
+                fingerprint = json.dumps(
+                    {
+                        "action_type": action_type,
+                        "instruction": instruction,
+                        "metadata": step_metadata,
+                    },
+                    sort_keys=True,
+                )
+                if fingerprint in seen:
+                    continue
+                seen.add(fingerprint)
+                rendered.append(
+                    StepDefinition(
+                        action_type=action_type,
+                        instruction=instruction,
+                        metadata=step_metadata,
+                    )
+                )
+        return rendered
+
+    @staticmethod
+    def _render_setup_value(value: Any, *, objective: str, skill: SkillManifest) -> Any:
+        replacements = {
+            "objective": objective,
+            "skill_name": skill.name,
+            "skill_path": skill.path,
+        }
+        if isinstance(value, str):
+            rendered = value
+            for key, replacement in replacements.items():
+                rendered = rendered.replace(f"{{{key}}}", replacement)
+            return rendered
+        if isinstance(value, list):
+            return [
+                RunEngine._render_setup_value(item, objective=objective, skill=skill)
+                for item in value
+            ]
+        if isinstance(value, dict):
+            return {
+                str(key): RunEngine._render_setup_value(item, objective=objective, skill=skill)
+                for key, item in value.items()
+            }
+        return value
 
     @staticmethod
     def _parse_delegate_payload(instruction: str) -> DelegationStepPayload:

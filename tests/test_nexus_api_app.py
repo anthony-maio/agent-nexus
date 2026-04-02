@@ -599,6 +599,7 @@ def _write_synthesis_sidecar(
     capability_family: str = "",
     repo: str = "",
     external_tool_arguments: dict[str, object] | None = None,
+    setup_steps: list[dict[str, object]] | None = None,
 ) -> None:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -613,6 +614,8 @@ def _write_synthesis_sidecar(
         payload["repo"] = repo
     if external_tool_arguments:
         payload["external_tool_arguments"] = external_tool_arguments
+    if setup_steps:
+        payload["setup_steps"] = setup_steps
     (skill_dir / ".synthesis.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -1617,6 +1620,81 @@ def test_skill_preferred_initial_actions_bias_rule_bootstrap(tmp_path: Path) -> 
     ]
     assert run["steps"][0]["metadata"]["skill_names"] == ["chart-maker"]
     assert run["metadata"]["capability_state"]["skill_names"] == ["chart-maker"]
+
+
+def test_skill_setup_steps_seed_run_with_rendered_external_tool_preflight(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "memory-helper",
+        name="memory-helper",
+        description="Retrieve prior task memory before continuing resume work.",
+        external_tools="mnemos.retrieve",
+    )
+    _write_synthesis_sidecar(
+        skill_root,
+        "memory-helper",
+        setup_steps=[
+            {
+                "action_type": "external_tool",
+                "instruction": {
+                    "tool_name": "mnemos.retrieve",
+                    "arguments": {"query": "{objective}", "scope": "task"},
+                },
+                "metadata": {"setup_kind": "memory_restore"},
+            }
+        ],
+    )
+    script_path = _write_fake_stdio_mcp_server(tmp_path)
+    tool_config = json.dumps(
+        [
+            {
+                "name": "mnemos.retrieve",
+                "description": "Retrieve scoped memory from Mnemos.",
+                "source": "mcp://mnemos",
+                "tags": ["memory", "retrieval"],
+                "transport": {
+                    "kind": "stdio",
+                    "command": [sys.executable, str(script_path)],
+                },
+            }
+        ]
+    )
+    client = _client(
+        tmp_path,
+        execution_adapter=ExternalToolDispatchExecutionAdapter(
+            base_adapter=FakeExecutionAdapter(tmp_path),
+            tool_registry=parse_external_tool_config(tool_config),
+            tool_invoker=StdioExternalToolInvoker(timeout_sec=10.0),
+        ),
+        settings_overrides={
+            "APP_SKILL_PATHS": str(skill_root),
+            "APP_EXTERNAL_TOOL_CONFIG": tool_config,
+        },
+    )
+    headers = _auth_header(client)
+    objective = "Resume prior work on payment retry handling"
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={"objective": objective, "mode": "manual"},
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    first_step = run["steps"][0]
+    assert first_step["action_type"] == "external_tool"
+    assert first_step["metadata"]["planner_source"] == "skill"
+    assert first_step["metadata"]["planner_phase"] == "setup"
+    assert first_step["metadata"]["skill_setup"] is True
+    assert first_step["metadata"]["skill_setup_source"] == "memory-helper"
+    assert first_step["metadata"]["tool_result"]["echo"]["query"] == objective
+    assert run["metadata"]["capability_state"]["setup_steps"][0]["action_type"] == "external_tool"
+    assert (
+        run["metadata"]["capability_state"]["resolved_skills"][0]["setup_steps"][0]["metadata"]["setup_kind"]
+        == "memory_restore"
+    )
 
 
 def test_run_lifecycle_with_approval_and_promotion(tmp_path: Path) -> None:

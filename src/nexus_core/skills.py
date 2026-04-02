@@ -61,6 +61,7 @@ class SkillManifest:
     external_tool_arguments: dict[str, dict[str, Any]] | None = None
     external_tool_follow_up_actions: dict[str, tuple[str, ...]] | None = None
     external_tool_follow_up_sequences: dict[str, tuple[str, ...]] | None = None
+    setup_steps: tuple[dict[str, Any], ...] = ()
     verification_signals: tuple[str, ...] = ()
     required_artifact_kinds: tuple[str, ...] = ()
 
@@ -103,6 +104,16 @@ class SkillManifest:
             payload["external_tool_follow_up_sequences"] = {
                 key: list(value) for key, value in self.external_tool_follow_up_sequences.items()
             }
+        if self.setup_steps:
+            payload["setup_steps"] = [
+                {
+                    **step,
+                    "metadata": dict(step.get("metadata", {}))
+                    if isinstance(step.get("metadata"), dict)
+                    else {},
+                }
+                for step in self.setup_steps
+            ]
         if self.verification_signals:
             payload["verification_signals"] = list(self.verification_signals)
         if self.required_artifact_kinds:
@@ -265,6 +276,10 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
             synthesis_metadata.get("external_tool_follow_up_sequences")
             or synthesis_metadata.get("tool_follow_up_sequences")
         ),
+        setup_steps=_normalize_setup_steps(
+            synthesis_metadata.get("setup_steps")
+            or synthesis_metadata.get("preflight_steps")
+        ),
         verification_signals=_parse_identifier_list(
             str(frontmatter.get("verification_signals", ""))
         ),
@@ -409,6 +424,28 @@ def _normalize_external_tool_arguments(
             continue
         normalized[tool_name] = dict(value)
     return normalized or None
+
+
+def _normalize_setup_steps(raw: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(raw, list):
+        return ()
+    normalized: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        action_type = str(item.get("action_type", "")).strip().lower()
+        if not action_type:
+            continue
+        instruction = item.get("instruction", "")
+        metadata = item.get("metadata")
+        normalized.append(
+            {
+                "action_type": action_type,
+                "instruction": instruction,
+                "metadata": dict(metadata) if isinstance(metadata, dict) else {},
+            }
+        )
+    return tuple(normalized)
 
 
 def _normalize_external_tool_follow_up_actions(
