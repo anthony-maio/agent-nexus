@@ -595,6 +595,37 @@ class RunEngine:
                 self.repo.mark_run_status(run_id, RunStatus.PENDING_APPROVAL.value)
                 return result
             verification_result = self._verification_result(result)
+            setup_failure_reason = self._setup_verification_failure_reason(
+                step=step,
+                result=result,
+                verification_result=verification_result,
+            )
+            if setup_failure_reason:
+                self.repo.merge_step_metadata(
+                    step_id,
+                    {
+                        **result.metadata,
+                        "verification_result": "failed",
+                        "setup_verification_result": "failed",
+                    },
+                )
+                self.repo.mark_step_status(
+                    step_id,
+                    StepStatus.FAILED.value,
+                    error_text=setup_failure_reason,
+                )
+                await self._update_capability_setup_state(
+                    run_id,
+                    status="failed",
+                    reason=setup_failure_reason,
+                    step_id=step_id,
+                )
+                await self._publish(
+                    run_id,
+                    "step.failed",
+                    self._step_event_payload(step, step_id=step_id, error=setup_failure_reason),
+                )
+                return None
             self.repo.mark_step_status(
                 step_id,
                 StepStatus.COMPLETED.value,
@@ -605,8 +636,15 @@ class RunEngine:
                 {
                     **result.metadata,
                     "verification_result": verification_result,
+                    **(
+                        {"setup_verification_result": "passed"}
+                        if self._is_skill_setup_step(step)
+                        else {}
+                    ),
                 },
             )
+            if self._is_skill_setup_step(step):
+                await self._refresh_capability_setup_state(run_id)
             self.repo.add_citations(
                 run_id=run_id,
                 step_id=step_id,
@@ -645,6 +683,13 @@ class RunEngine:
                 StepStatus.FAILED.value,
                 error_text=str(exc),
             )
+            if self._is_skill_setup_step(step):
+                await self._update_capability_setup_state(
+                    run_id,
+                    status="failed",
+                    reason=str(exc),
+                    step_id=step_id,
+                )
             await self._publish(
                 run_id,
                 "step.failed",
@@ -1582,6 +1627,7 @@ class RunEngine:
             capability_state["external_tools"] = external_tools
         if setup_steps:
             capability_state["setup_steps"] = setup_steps
+            capability_state["setup_status"] = "pending"
         if isinstance(acquisition, dict) and acquisition:
             capability_state["skill_acquisition"] = {
                 "success": bool(acquisition.get("success")),
@@ -1648,6 +1694,68 @@ class RunEngine:
                     serialized.append(payload)
         return serialized
 
+    async def _update_capability_setup_state(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        reason: str = "",
+        step_id: str = "",
+    ) -> None:
+        run = self.repo.get_run(run_id)
+        if run is None:
+            return
+        metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+        capability_state = (
+            dict(metadata.get("capability_state"))
+            if isinstance(metadata.get("capability_state"), dict)
+            else {}
+        )
+        if not capability_state:
+            return
+        capability_state["setup_status"] = status.strip().lower()
+        if reason.strip():
+            capability_state["setup_failure_reason"] = reason.strip()
+        else:
+            capability_state.pop("setup_failure_reason", None)
+        if step_id.strip():
+            capability_state["setup_status_step_id"] = step_id.strip()
+        self.repo.merge_run_metadata(run_id, {"capability_state": capability_state})
+        await self._publish(run_id, "run.capability", capability_state)
+
+    async def _refresh_capability_setup_state(self, run_id: str) -> None:
+        run = self.repo.get_run(run_id)
+        if run is None:
+            return
+        steps = run.get("steps") if isinstance(run.get("steps"), list) else []
+        setup_steps = [step for step in steps if self._is_skill_setup_step(step)]
+        if not setup_steps:
+            return
+        if any(str(step.get("status", "")).strip().lower() == StepStatus.FAILED.value for step in setup_steps):
+            failed_step = next(
+                (
+                    step
+                    for step in reversed(setup_steps)
+                    if str(step.get("status", "")).strip().lower() == StepStatus.FAILED.value
+                ),
+                None,
+            )
+            await self._update_capability_setup_state(
+                run_id,
+                status="failed",
+                reason=str((failed_step or {}).get("error_text", "")).strip(),
+                step_id=str((failed_step or {}).get("id", "")),
+            )
+            return
+        if any(
+            str(step.get("status", "")).strip().lower()
+            in {StepStatus.PENDING.value, StepStatus.RUNNING.value, StepStatus.PENDING_APPROVAL.value}
+            for step in setup_steps
+        ):
+            await self._update_capability_setup_state(run_id, status="pending")
+            return
+        await self._update_capability_setup_state(run_id, status="ready")
+
     async def _record_kernel_decision(
         self,
         run_id: str,
@@ -1667,6 +1775,50 @@ class RunEngine:
         if reason.strip():
             payload["reason"] = reason.strip()
         await self._publish(run_id, "kernel.decision", payload)
+
+    @staticmethod
+    def _is_skill_setup_step(step: dict[str, Any]) -> bool:
+        metadata = step.get("metadata")
+        return isinstance(metadata, dict) and metadata.get("skill_setup") is True
+
+    def _setup_verification_failure_reason(
+        self,
+        *,
+        step: dict[str, Any],
+        result: StepExecutionResult,
+        verification_result: str,
+    ) -> str:
+        metadata = step.get("metadata")
+        if not isinstance(metadata, dict):
+            return ""
+        raw_expectations = metadata.get("setup_expectations")
+        if isinstance(raw_expectations, str):
+            expectations = [item.strip().lower() for item in raw_expectations.split(",") if item.strip()]
+        elif isinstance(raw_expectations, list):
+            expectations = [str(item).strip().lower() for item in raw_expectations if str(item).strip()]
+        else:
+            expectations = []
+        if not expectations:
+            return ""
+        result_metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        for expectation in expectations:
+            if expectation == "output" and str(result.output_text or "").strip():
+                continue
+            if expectation in {"citation", "citations"} and result.citations:
+                continue
+            if expectation in {"artifact", "artifacts"} and result.artifacts:
+                continue
+            if expectation == "tool_result" and isinstance(result_metadata.get("tool_result"), dict):
+                continue
+            if expectation == "page_context" and any(
+                result_metadata.get(key)
+                for key in ("current_url", "page_title", "page_excerpt", "page_affordances")
+            ):
+                continue
+            if expectation in {"command_success", "verification_passed"} and verification_result == "passed":
+                continue
+            return f"Skill setup step did not satisfy required readiness signal `{expectation}`."
+        return ""
 
     @staticmethod
     def _kernel_strategy_snapshot(
