@@ -429,7 +429,7 @@ def plan_follow_up_steps(
             )
         ]
 
-    sequenced_follow_up = _step_for_completed_sequence_action(
+    sequenced_follow_up = continue_tool_follow_up_sequence(
         completed_step=completed_step,
         objective=objective,
         result=result,
@@ -437,7 +437,12 @@ def plan_follow_up_steps(
         step_index=step_index,
     )
     if sequenced_follow_up is not None:
-        return [sequenced_follow_up] if sequenced_follow_up else []
+        return [sequenced_follow_up]
+    raw_remaining = _step_metadata(completed_step).get("tool_follow_up_sequence_remaining")
+    if isinstance(raw_remaining, list):
+        remaining = [str(item).strip().lower() for item in raw_remaining if str(item).strip()]
+        if not remaining:
+            return []
 
     if action == "read_file":
         if _looks_like_code_task(objective):
@@ -1440,6 +1445,36 @@ def _step_for_completed_sequence_action(
         existing_steps=existing_steps,
         step_index=step_index,
     ) or False
+
+
+def continue_tool_follow_up_sequence(
+    *,
+    completed_step: dict[str, Any],
+    objective: str,
+    result: StepExecutionResult,
+    existing_steps: list[dict[str, Any]],
+    step_index: int | None = None,
+) -> StepDefinition | None:
+    """Continue a capability-declared external-tool follow-up sequence when present."""
+
+    resolved_index = step_index
+    if resolved_index is None:
+        try:
+            resolved_index = max(
+                index
+                for index, step in enumerate(existing_steps)
+                if str(step.get("id", "")) == str(completed_step.get("id", ""))
+            )
+        except ValueError:
+            resolved_index = max(len(existing_steps) - 1, 0)
+    continuation = _step_for_completed_sequence_action(
+        completed_step=completed_step,
+        objective=objective,
+        result=result,
+        existing_steps=existing_steps,
+        step_index=resolved_index,
+    )
+    return continuation if isinstance(continuation, StepDefinition) else None
 
 
 def _preferred_follow_up_action_from_kernel(

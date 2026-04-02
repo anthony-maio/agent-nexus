@@ -34,6 +34,7 @@ from nexus_core.planner import (
     annotate_planner_steps,
     apply_follow_up_policy,
     apply_initial_plan_policy,
+    continue_tool_follow_up_sequence,
     plan_follow_up_steps,
     plan_steps_for_objective,
     request_next_steps,
@@ -1224,6 +1225,17 @@ class RunEngine:
     ) -> list[StepDefinition]:
         objective = str(run.get("objective", "")).strip()
         signals = verification.signals if isinstance(verification.signals, dict) else {}
+        last_completed = self._latest_completed_step(run)
+        sequence_step = self._completion_recovery_step_for_tool_sequence(
+            run=run,
+            completed_step=last_completed,
+        )
+        if sequence_step is not None:
+            return annotate_planner_steps(
+                [sequence_step],
+                planner_source="kernel",
+                planner_phase="completion_recovery",
+            )
         completed_actions = {
             str(item).strip().lower()
             for item in (signals.get("completed_actions") or [])
@@ -1323,6 +1335,42 @@ class RunEngine:
                 planner_phase="completion_recovery",
             )
         return []
+
+    def _completion_recovery_step_for_tool_sequence(
+        self,
+        *,
+        run: dict[str, Any],
+        completed_step: dict[str, Any] | None,
+    ) -> StepDefinition | None:
+        if completed_step is None:
+            return None
+        metadata = (
+            completed_step.get("metadata")
+            if isinstance(completed_step.get("metadata"), dict)
+            else {}
+        )
+        raw_remaining = metadata.get("tool_follow_up_sequence_remaining")
+        if not isinstance(raw_remaining, list):
+            return None
+        remaining = [str(item).strip().lower() for item in raw_remaining if str(item).strip()]
+        if not remaining:
+            return None
+        existing_steps = run.get("steps") if isinstance(run.get("steps"), list) else []
+        step_result = self._step_result_from_record(completed_step)
+        return continue_tool_follow_up_sequence(
+            completed_step=completed_step,
+            objective=str(run.get("objective", "")),
+            result=step_result,
+            existing_steps=existing_steps,
+        )
+
+    @staticmethod
+    def _step_result_from_record(step: dict[str, Any]) -> StepExecutionResult:
+        metadata = step.get("metadata")
+        return StepExecutionResult(
+            output_text=str(step.get("output_text", "") or ""),
+            metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        )
 
     @staticmethod
     def _looks_like_memory_resume_objective(objective: str) -> bool:
@@ -1625,11 +1673,25 @@ class RunEngine:
                 if isinstance(last_completed_step.get("metadata"), dict)
                 else {}
             )
+            raw_remaining = last_metadata.get("tool_follow_up_sequence_remaining")
+            remaining_actions = (
+                [str(item).strip().lower() for item in raw_remaining if str(item).strip()]
+                if isinstance(raw_remaining, list)
+                else []
+            )
             decision = str(last_metadata.get("kernel_decision", "")).strip().lower()
-            tactic = RunEngine._tactic_after_decision(last_action, decision)
-            if decision:
+            if remaining_actions:
+                tactic = "sequence_follow_up"
+                tactic_reason = (
+                    "Capability-declared tool follow-up sequence still has pending actions: "
+                    + ", ".join(remaining_actions)
+                    + "."
+                )
+            else:
+                tactic = RunEngine._tactic_after_decision(last_action, decision)
+            if decision and not remaining_actions:
                 tactic_reason = f"Last completed step decided to {decision.replace('_', ' ')}."
-            elif last_action:
+            elif last_action and not remaining_actions:
                 tactic_reason = f"Last completed step was {last_action}."
         if phase == "awaiting_approval":
             tactic = "approval"

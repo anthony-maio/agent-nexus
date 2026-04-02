@@ -46,6 +46,7 @@ def evaluate_run_completion(
         for step in completed_steps
         if str(step.get("action_type", "")).strip()
     }
+    pending_tool_sequence = _pending_tool_follow_up_sequence(completed_steps)
     child_runs = run.get("child_runs")
     child_statuses = [
         str(child.get("status", "")).strip().lower()
@@ -93,6 +94,8 @@ def evaluate_run_completion(
         "successful_execute_code_count": successful_execute_code_count,
         "mutating_code_action_count": sum(action in _CODING_MUTATION_ACTIONS for action in completed_actions),
     }
+    if pending_tool_sequence:
+        signals["pending_tool_follow_up_sequence"] = pending_tool_sequence
     if required_signals:
         signals["required_verification_signals"] = list(required_signals)
     if required_artifact_kinds:
@@ -103,6 +106,19 @@ def evaluate_run_completion(
             strategy=strategy,
             result="blocked",
             reason="Run ended without completing any steps.",
+            signals=signals,
+        )
+
+    if pending_tool_sequence:
+        remaining_actions = pending_tool_sequence.get("remaining_actions") or []
+        readable_remaining = ", ".join(str(item) for item in remaining_actions) or "follow-up work"
+        return RunVerificationRecord(
+            strategy=strategy,
+            result="blocked",
+            reason=(
+                "Run ended before completing the capability-declared tool follow-up "
+                f"sequence: {readable_remaining}."
+            ),
             signals=signals,
         )
 
@@ -229,6 +245,30 @@ def evaluate_run_completion(
         reason="Run finished without a strategy-specific terminal verifier.",
         signals=signals,
     )
+
+
+def _pending_tool_follow_up_sequence(completed_steps: list[dict[str, Any]]) -> dict[str, Any]:
+    for step in reversed(completed_steps):
+        metadata = step.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        raw_remaining = metadata.get("tool_follow_up_sequence_remaining")
+        if not isinstance(raw_remaining, list):
+            continue
+        remaining_actions = [str(item).strip().lower() for item in raw_remaining if str(item).strip()]
+        if not remaining_actions:
+            continue
+        payload = {
+            "step_action": str(step.get("action_type", "")).strip().lower(),
+            "remaining_actions": remaining_actions,
+        }
+        external_tool = metadata.get("external_tool")
+        if isinstance(external_tool, dict):
+            tool_name = str(external_tool.get("name", "")).strip()
+            if tool_name:
+                payload["tool_name"] = tool_name
+        return payload
+    return {}
 
 
 def _missing_capability_requirements(

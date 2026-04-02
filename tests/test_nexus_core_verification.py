@@ -70,3 +70,29 @@ def test_skill_defined_artifact_requirements_verify_matching_output() -> None:
     assert verification.result == "verified"
     assert "skill-defined" in verification.reason
     assert verification.signals["artifact_kinds"] == ["chart"]
+
+
+def test_pending_tool_follow_up_sequence_blocks_completion() -> None:
+    run = {
+        "objective": "Implement retry backoff in the repository",
+        "steps": [
+            _completed_step(
+                "read_file",
+                metadata={"tool_follow_up_sequence_remaining": ["execute_code"]},
+            ),
+        ],
+        "metadata": {},
+    }
+
+    verification = evaluate_run_completion(
+        strategy="coding",
+        run=run,
+        citations=[],
+        artifacts=[],
+    )
+
+    assert verification.result == "blocked"
+    assert "follow-up sequence" in verification.reason
+    assert verification.signals["pending_tool_follow_up_sequence"]["remaining_actions"] == [
+        "execute_code"
+    ]
