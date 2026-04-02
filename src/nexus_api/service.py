@@ -14,7 +14,11 @@ from nexus_api.adapters import (
     ToolAugmentedInteractionAdapter,
     WebInteractionAdapter,
 )
-from nexus_api.adaptive_planner import ChatCompletionsAdaptivePlanner, OpenRouterAdaptivePlanner
+from nexus_api.adaptive_planner import (
+    ChatCompletionsAdaptivePlanner,
+    OpenRouterAdaptivePlanner,
+    RoleRoutedAdaptivePlanner,
+)
 from nexus_api.config import ApiSettings
 from nexus_api.db import build_engine, build_session_factory
 from nexus_api.external_tools import (
@@ -51,22 +55,35 @@ class ApiContext:
 
 
 def build_model_adaptive_planner(settings: ApiSettings) -> Any | None:
-    routed_profiles = parse_model_router_config(settings.APP_MODEL_ROUTER_CONFIG).profiles_for_role(
-        "planning"
-    )
-    if routed_profiles:
-        model_planners = [
-            planner
-            for planner in (
-                _build_planner_from_profile(profile, settings) for profile in routed_profiles
+    router_config = parse_model_router_config(settings.APP_MODEL_ROUTER_CONFIG)
+    planning_profiles = [
+        profile
+        for profile in router_config.profiles
+        if profile.role.strip().lower().startswith("planning")
+    ]
+    if planning_profiles:
+        grouped_profiles: dict[str, list[ModelProfile]] = {}
+        for profile in planning_profiles:
+            grouped_profiles.setdefault(profile.role.strip().lower(), []).append(profile)
+        built_role_planners: dict[str, Any] = {}
+        for role, profiles in grouped_profiles.items():
+            model_planners = [
+                planner
+                for planner in (_build_planner_from_profile(profile, settings) for profile in profiles)
+                if planner is not None
+            ]
+            if not model_planners:
+                continue
+            built_role_planners[role] = (
+                model_planners[0]
+                if len(model_planners) == 1
+                else CompositeAdaptivePlanner(model_planners)
             )
-            if planner is not None
-        ]
-        if not model_planners:
+        if not built_role_planners:
             return None
-        if len(model_planners) == 1:
-            return model_planners[0]
-        return CompositeAdaptivePlanner(model_planners)
+        if set(built_role_planners) == {"planning"}:
+            return built_role_planners["planning"]
+        return RoleRoutedAdaptivePlanner(built_role_planners)
 
     provider = settings.APP_MODEL_REPLANNER_PROVIDER.strip().lower() or "openrouter"
 

@@ -7,10 +7,14 @@ from typing import Any
 
 import pytest
 
-from nexus_api.adaptive_planner import ChatCompletionsAdaptivePlanner, OpenRouterAdaptivePlanner
+from nexus_api.adaptive_planner import (
+    ChatCompletionsAdaptivePlanner,
+    OpenRouterAdaptivePlanner,
+    RoleRoutedAdaptivePlanner,
+)
 from nexus_api.config import ApiSettings
 from nexus_api.service import build_model_adaptive_planner
-from nexus_core.models import CitationRecord, RunMode, StepExecutionResult
+from nexus_core.models import CitationRecord, RunMode, StepDefinition, StepExecutionResult
 from nexus_core.planner import CompositeAdaptivePlanner
 
 
@@ -645,3 +649,85 @@ def test_build_model_adaptive_planner_supports_routed_model_profiles() -> None:
     assert isinstance(planner.planners[1], ChatCompletionsAdaptivePlanner)
     assert planner.planners[1].base_url == "http://localhost:11434/v1"
     assert planner.planners[1].route_label == "planning-local"
+
+
+@pytest.mark.asyncio
+async def test_role_routed_adaptive_planner_prefers_strategy_specific_role() -> None:
+    class _Planner:
+        def __init__(self, action_type: str) -> None:
+            self.action_type = action_type
+
+        async def plan_next_steps(
+            self,
+            objective: str,
+            mode: RunMode,
+            existing_steps: list[dict[str, Any]],
+            completed_step: dict[str, Any] | None = None,
+            result: StepExecutionResult | None = None,
+            skill_context: list[dict[str, str]] | None = None,
+            kernel_context: dict[str, Any] | None = None,
+            external_tool_context: list[dict[str, Any]] | None = None,
+        ) -> list[Any]:
+            _ = objective, mode, existing_steps, completed_step, result, skill_context, kernel_context, external_tool_context
+            return [
+                StepDefinition(
+                    action_type=self.action_type,
+                    instruction=f"{self.action_type} from routed planner",
+                )
+            ]
+
+    planner = RoleRoutedAdaptivePlanner(
+        {
+            "planning": _Planner("search_web"),
+            "planning.coding": _Planner("read_file"),
+        }
+    )
+
+    steps = await planner.plan_initial_steps(
+        objective="Implement retry backoff in the repo",
+        mode=RunMode.MANUAL,
+        kernel_context={"strategy": "coding"},
+    )
+
+    assert [step.action_type for step in steps] == ["read_file"]
+
+
+def test_build_model_adaptive_planner_supports_role_specific_routed_profiles() -> None:
+    settings = ApiSettings(
+        APP_DATABASE_URL="sqlite:///./data/app/test.db",
+        APP_MODEL_ROUTER_CONFIG=jsonlib.dumps(
+            {
+                "profiles": [
+                    {
+                        "name": "coding-local",
+                        "role": "planning.coding",
+                        "provider": "openai_compatible",
+                        "model": "local-coder",
+                        "base_url": "http://localhost:11434/v1",
+                    },
+                    {
+                        "name": "research-openrouter",
+                        "role": "planning.research",
+                        "provider": "openrouter",
+                        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+                        "api_key": "router-key",
+                    },
+                    {
+                        "name": "default-local",
+                        "role": "planning",
+                        "provider": "openai_compatible",
+                        "model": "local-default",
+                        "base_url": "http://localhost:11434/v1",
+                    },
+                ]
+            }
+        ),
+    )
+
+    planner = build_model_adaptive_planner(settings)
+
+    assert isinstance(planner, RoleRoutedAdaptivePlanner)
+    assert set(planner.role_planners) == {"planning", "planning.coding", "planning.research"}
+    assert isinstance(planner.role_planners["planning"], ChatCompletionsAdaptivePlanner)
+    assert isinstance(planner.role_planners["planning.coding"], ChatCompletionsAdaptivePlanner)
+    assert isinstance(planner.role_planners["planning.research"], OpenRouterAdaptivePlanner)

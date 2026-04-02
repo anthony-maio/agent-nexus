@@ -307,6 +307,89 @@ class OpenRouterAdaptivePlanner(ChatCompletionsAdaptivePlanner):
         )
 
 
+class RoleRoutedAdaptivePlanner:
+    """Route model planning requests across role-specific planner chains."""
+
+    def __init__(self, role_planners: dict[str, Any]) -> None:
+        self.role_planners = {
+            str(role).strip().lower(): planner
+            for role, planner in role_planners.items()
+            if str(role).strip() and planner is not None
+        }
+
+    async def plan_next_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+        existing_steps: list[dict[str, Any]],
+        completed_step: dict[str, Any] | None = None,
+        result: StepExecutionResult | None = None,
+        skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
+    ) -> list[StepDefinition]:
+        for role in _planning_role_candidates(
+            objective=objective,
+            completed_step=completed_step,
+            kernel_context=kernel_context,
+        ):
+            planner = self.role_planners.get(role)
+            if planner is None:
+                continue
+            steps = await request_next_steps(
+                planner,
+                objective=objective,
+                mode=mode,
+                existing_steps=existing_steps,
+                completed_step=completed_step,
+                result=result,
+                skill_context=skill_context,
+                kernel_context=kernel_context,
+                external_tool_context=external_tool_context,
+            )
+            if steps:
+                return steps
+        return []
+
+    async def plan_initial_steps(
+        self,
+        objective: str,
+        mode: RunMode,
+        skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
+    ) -> list[StepDefinition]:
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=mode,
+            existing_steps=[],
+            skill_context=skill_context,
+            kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
+        )
+
+    async def propose_follow_up(
+        self,
+        objective: str,
+        completed_step: dict[str, Any],
+        result: StepExecutionResult,
+        existing_steps: list[dict[str, Any]],
+        skill_context: list[dict[str, str]] | None = None,
+        kernel_context: dict[str, Any] | None = None,
+        external_tool_context: list[dict[str, Any]] | None = None,
+    ) -> list[StepDefinition]:
+        return await self.plan_next_steps(
+            objective=objective,
+            mode=RunMode.MANUAL,
+            existing_steps=existing_steps,
+            completed_step=completed_step,
+            result=result,
+            skill_context=skill_context,
+            kernel_context=kernel_context,
+            external_tool_context=external_tool_context,
+        )
+
+
 class RuleFallbackAdaptivePlanner:
     """Bridge wrapper around core rule planner for composition."""
 
@@ -406,6 +489,53 @@ def _annotate_model_route(steps: list[StepDefinition], route_label: str) -> list
             )
         )
     return annotated
+
+
+def _planning_role_candidates(
+    *,
+    objective: str,
+    completed_step: dict[str, Any] | None,
+    kernel_context: dict[str, Any] | None,
+) -> list[str]:
+    phase = "follow_up" if completed_step is not None else "initial"
+    strategy = _planning_strategy(objective=objective, kernel_context=kernel_context)
+    candidates = [
+        f"planning.{phase}.{strategy}",
+        f"planning.{strategy}",
+        f"planning.{phase}",
+        "planning",
+    ]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = candidate.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _planning_strategy(*, objective: str, kernel_context: dict[str, Any] | None) -> str:
+    if isinstance(kernel_context, dict):
+        strategy = str(kernel_context.get("strategy", "")).strip().lower()
+        if strategy:
+            return strategy
+    lowered = objective.lower()
+    if any(token in lowered for token in ("fix", "implement", "refactor", "repo", "codebase", "test")):
+        return "coding"
+    if any(token in lowered for token in ("api", "endpoint", "webhook", "http request")):
+        return "api"
+    if any(token in lowered for token in ("image", "illustration", "graphic", "poster", "hero image")):
+        return "image"
+    if any(token in lowered for token in ("chart", "graph", "plot", "report", "brief", "memo")):
+        return "artifact"
+    if "http://" in lowered or "https://" in lowered or any(
+        token in lowered
+        for token in ("submit", "fill out", "apply", "register", "book", "checkout", "form")
+    ):
+        return "workflow"
+    return "research"
 
 
 def _stringify_step_instruction(value: Any) -> str:
