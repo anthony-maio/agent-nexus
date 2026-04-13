@@ -332,6 +332,7 @@ class RoleRoutedAdaptivePlanner:
             objective=objective,
             completed_step=completed_step,
             kernel_context=kernel_context,
+            skill_context=skill_context,
         ):
             planner = self.role_planners.get(role)
             if planner is None:
@@ -496,10 +497,14 @@ def _planning_role_candidates(
     objective: str,
     completed_step: dict[str, Any] | None,
     kernel_context: dict[str, Any] | None,
+    skill_context: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     phase = "follow_up" if completed_step is not None else "initial"
+    preferred_roles = _skill_preferred_planning_roles(skill_context)
     strategy = _planning_strategy(objective=objective, kernel_context=kernel_context)
     candidates = [
+        *[f"{role}.{phase}" for role in preferred_roles if not role.endswith(f".{phase}")],
+        *preferred_roles,
         f"planning.{phase}.{strategy}",
         f"planning.{strategy}",
         f"planning.{phase}",
@@ -536,6 +541,30 @@ def _planning_strategy(*, objective: str, kernel_context: dict[str, Any] | None)
     ):
         return "workflow"
     return "research"
+
+
+def _skill_preferred_planning_roles(skill_context: list[dict[str, Any]] | None) -> list[str]:
+    if not isinstance(skill_context, list):
+        return []
+    preferred: list[str] = []
+    seen: set[str] = set()
+    for skill in skill_context:
+        if not isinstance(skill, dict):
+            continue
+        raw_roles = skill.get("preferred_planning_roles")
+        if not isinstance(raw_roles, list):
+            continue
+        for raw_role in raw_roles:
+            role = str(raw_role).strip().lower()
+            if not role:
+                continue
+            if not role.startswith("planning"):
+                role = f"planning.{role}"
+            if role in seen:
+                continue
+            seen.add(role)
+            preferred.append(role)
+    return preferred
 
 
 def _stringify_step_instruction(value: Any) -> str:

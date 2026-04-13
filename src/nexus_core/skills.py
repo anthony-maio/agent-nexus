@@ -55,6 +55,7 @@ class SkillManifest:
     lifecycle_stage: str = ""
     capability_family: str = ""
     source_repo: str = ""
+    preferred_planning_roles: tuple[str, ...] = ()
     preferred_initial_actions: tuple[str, ...] = ()
     preferred_follow_up_actions: tuple[str, ...] = ()
     external_tools: tuple[str, ...] = ()
@@ -86,6 +87,8 @@ class SkillManifest:
             payload["capability_family"] = self.capability_family
         if self.source_repo:
             payload["source_repo"] = self.source_repo
+        if self.preferred_planning_roles:
+            payload["preferred_planning_roles"] = list(self.preferred_planning_roles)
         if self.preferred_initial_actions:
             payload["preferred_initial_actions"] = list(self.preferred_initial_actions)
         if self.preferred_follow_up_actions:
@@ -255,6 +258,11 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
         lifecycle_stage=_normalized_sidecar_value(synthesis_metadata.get("lifecycle_stage")),
         capability_family=_normalized_sidecar_value(synthesis_metadata.get("capability_family")),
         source_repo=_normalized_sidecar_value(synthesis_metadata.get("repo")),
+        preferred_planning_roles=_normalize_sidecar_identifier_list(
+            synthesis_metadata.get("preferred_planning_roles")
+            or synthesis_metadata.get("planning_roles")
+            or synthesis_metadata.get("model_roles")
+        ),
         preferred_initial_actions=_parse_action_list(
             str(frontmatter.get("preferred_initial_actions", ""))
         ),
@@ -445,6 +453,26 @@ def _normalize_setup_steps(raw: Any) -> tuple[dict[str, Any], ...]:
                 "metadata": dict(metadata) if isinstance(metadata, dict) else {},
             }
         )
+    return tuple(normalized)
+
+
+def _normalize_sidecar_identifier_list(raw: Any, *, replace_spaces: bool = False) -> tuple[str, ...]:
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, str):
+        values = raw.replace("|", ",").split(",")
+    else:
+        return ()
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        value = str(item).strip().lower()
+        if replace_spaces:
+            value = value.replace(" ", "_")
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
     return tuple(normalized)
 
 

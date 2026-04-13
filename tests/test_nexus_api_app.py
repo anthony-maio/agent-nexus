@@ -598,6 +598,7 @@ def _write_synthesis_sidecar(
     lifecycle_stage: str = "draft",
     capability_family: str = "",
     repo: str = "",
+    preferred_planning_roles: list[str] | None = None,
     external_tool_arguments: dict[str, object] | None = None,
     setup_steps: list[dict[str, object]] | None = None,
 ) -> None:
@@ -612,6 +613,8 @@ def _write_synthesis_sidecar(
         payload["capability_family"] = capability_family
     if repo:
         payload["repo"] = repo
+    if preferred_planning_roles:
+        payload["preferred_planning_roles"] = preferred_planning_roles
     if external_tool_arguments:
         payload["external_tool_arguments"] = external_tool_arguments
     if setup_steps:
@@ -1583,6 +1586,47 @@ def test_run_capability_state_preserves_synthesis_governance_metadata(tmp_path: 
     assert resolved["lifecycle_stage"] == "challenger"
     assert resolved["capability_family"] == "artifact_generation"
     assert resolved["source_repo"] == "anthony-maio/synthesis-skills"
+
+
+def test_run_capability_state_preserves_skill_planning_role_preferences(tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        skill_root,
+        "chart-maker",
+        preferred_planning_roles=["planning.artifact", "planning.initial.artifact"],
+    )
+    client = _client(
+        tmp_path,
+        settings_overrides={"APP_SKILL_PATHS": str(skill_root)},
+    )
+    headers = _auth_header(client)
+
+    create = client.post(
+        "/runs",
+        headers=headers,
+        json={
+            "objective": "Generate a chart from CSV sales data and summarize it",
+            "mode": "manual",
+        },
+    )
+
+    assert create.status_code == 200
+    run = create.json()
+    resolved = run["metadata"]["capability_state"]["resolved_skills"][0]
+    assert resolved["preferred_planning_roles"] == [
+        "planning.artifact",
+        "planning.initial.artifact",
+    ]
+    assert run["metadata"]["capability_state"]["preferred_planning_roles"] == [
+        "planning.artifact",
+        "planning.initial.artifact",
+    ]
 
 
 def test_skill_preferred_initial_actions_bias_rule_bootstrap(tmp_path: Path) -> None:

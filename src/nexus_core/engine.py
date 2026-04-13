@@ -1564,6 +1564,10 @@ class RunEngine:
             resolved_skills,
             attribute="external_tools",
         )
+        preferred_planning_roles = RunEngine._merged_skill_values(
+            resolved_skills,
+            attribute="preferred_planning_roles",
+        )
         setup_steps = RunEngine._merged_skill_setup_steps(resolved_skills)
         resolved_payload = [
             {
@@ -1575,6 +1579,7 @@ class RunEngine:
                 "lifecycle_stage": skill.lifecycle_stage,
                 "capability_family": skill.capability_family,
                 "source_repo": skill.source_repo,
+                "preferred_planning_roles": list(skill.preferred_planning_roles),
                 "preferred_initial_actions": list(skill.preferred_initial_actions),
                 "preferred_follow_up_actions": list(skill.preferred_follow_up_actions),
                 "external_tools": list(skill.external_tools),
@@ -1625,6 +1630,8 @@ class RunEngine:
             capability_state["required_artifact_kinds"] = required_artifact_kinds
         if external_tools:
             capability_state["external_tools"] = external_tools
+        if preferred_planning_roles:
+            capability_state["preferred_planning_roles"] = preferred_planning_roles
         if setup_steps:
             capability_state["setup_steps"] = setup_steps
             capability_state["setup_status"] = "pending"

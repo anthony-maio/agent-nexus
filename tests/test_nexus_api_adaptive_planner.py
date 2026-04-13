@@ -692,6 +692,53 @@ async def test_role_routed_adaptive_planner_prefers_strategy_specific_role() -> 
     assert [step.action_type for step in steps] == ["read_file"]
 
 
+@pytest.mark.asyncio
+async def test_role_routed_adaptive_planner_prefers_skill_declared_roles() -> None:
+    class _Planner:
+        def __init__(self, action_type: str) -> None:
+            self.action_type = action_type
+
+        async def plan_next_steps(
+            self,
+            objective: str,
+            mode: RunMode,
+            existing_steps: list[dict[str, Any]],
+            completed_step: dict[str, Any] | None = None,
+            result: StepExecutionResult | None = None,
+            skill_context: list[dict[str, str]] | None = None,
+            kernel_context: dict[str, Any] | None = None,
+            external_tool_context: list[dict[str, Any]] | None = None,
+        ) -> list[Any]:
+            _ = objective, mode, existing_steps, completed_step, result, skill_context, kernel_context, external_tool_context
+            return [
+                StepDefinition(
+                    action_type=self.action_type,
+                    instruction=f"{self.action_type} from routed planner",
+                )
+            ]
+
+    planner = RoleRoutedAdaptivePlanner(
+        {
+            "planning": _Planner("search_web"),
+            "planning.artifact": _Planner("generate_chart"),
+        }
+    )
+
+    steps = await planner.plan_initial_steps(
+        objective="Generate a chart from local sales data",
+        mode=RunMode.MANUAL,
+        skill_context=[
+            {
+                "name": "chart-maker",
+                "preferred_planning_roles": ["planning.artifact"],
+            }
+        ],
+        kernel_context={"strategy": "research"},
+    )
+
+    assert [step.action_type for step in steps] == ["generate_chart"]
+
+
 def test_build_model_adaptive_planner_supports_role_specific_routed_profiles() -> None:
     settings = ApiSettings(
         APP_DATABASE_URL="sqlite:///./data/app/test.db",

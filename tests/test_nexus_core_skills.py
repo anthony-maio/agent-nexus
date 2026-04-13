@@ -61,6 +61,7 @@ def _write_synthesis_sidecar(
     lifecycle_stage: str = "draft",
     capability_family: str = "",
     repo: str = "",
+    preferred_planning_roles: list[str] | None = None,
     external_tool_arguments: dict[str, object] | None = None,
     external_tool_follow_up_actions: dict[str, object] | None = None,
     external_tool_follow_up_sequences: dict[str, object] | None = None,
@@ -77,6 +78,8 @@ def _write_synthesis_sidecar(
         payload["capability_family"] = capability_family
     if repo:
         payload["repo"] = repo
+    if preferred_planning_roles:
+        payload["preferred_planning_roles"] = preferred_planning_roles
     if external_tool_arguments:
         payload["external_tool_arguments"] = external_tool_arguments
     if external_tool_follow_up_actions:
@@ -217,6 +220,32 @@ def test_skill_registry_reads_synthesis_sidecar_metadata(tmp_path: Path) -> None
     assert manifests[0].source_repo == "anthony-maio/synthesis-skills"
     assert manifests[0].to_dict()["trust_level"] == "probation"
     assert manifests[0].to_dict()["source_type"] == "canonical"
+
+
+def test_skill_registry_reads_synthesis_preferred_planning_roles(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "chart-maker",
+        name="chart-maker",
+        description="Generate charts from tabular data.",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "chart-maker",
+        preferred_planning_roles=["planning.artifact", "planning.initial.artifact"],
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].preferred_planning_roles == (
+        "planning.artifact",
+        "planning.initial.artifact",
+    )
+    assert manifests[0].to_dict()["preferred_planning_roles"] == [
+        "planning.artifact",
+        "planning.initial.artifact",
+    ]
 
 
 def test_skill_registry_reads_synthesis_external_tool_arguments(tmp_path: Path) -> None:
