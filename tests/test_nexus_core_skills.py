@@ -66,6 +66,13 @@ def _write_synthesis_sidecar(
     external_tool_follow_up_actions: dict[str, object] | None = None,
     external_tool_follow_up_sequences: dict[str, object] | None = None,
     setup_steps: list[dict[str, object]] | None = None,
+    verification_signals: list[str] | None = None,
+    required_artifact_kinds: list[str] | None = None,
+    preferred_initial_actions: list[str] | None = None,
+    preferred_follow_up_actions: list[str] | None = None,
+    external_tools: list[str] | None = None,
+    nexus_extension: dict[str, object] | None = None,
+    runtime_contract: dict[str, object] | None = None,
 ) -> None:
     skill_dir = root / folder
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -88,6 +95,20 @@ def _write_synthesis_sidecar(
         payload["external_tool_follow_up_sequences"] = external_tool_follow_up_sequences
     if setup_steps:
         payload["setup_steps"] = setup_steps
+    if verification_signals:
+        payload["verification_signals"] = verification_signals
+    if required_artifact_kinds:
+        payload["required_artifact_kinds"] = required_artifact_kinds
+    if preferred_initial_actions:
+        payload["preferred_initial_actions"] = preferred_initial_actions
+    if preferred_follow_up_actions:
+        payload["preferred_follow_up_actions"] = preferred_follow_up_actions
+    if external_tools:
+        payload["external_tools"] = external_tools
+    if nexus_extension:
+        payload["extensions"] = {"nexus": nexus_extension}
+    if runtime_contract:
+        payload["runtime_contract"] = runtime_contract
     (skill_dir / ".synthesis.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -367,6 +388,119 @@ def test_skill_registry_reads_synthesis_setup_steps(tmp_path: Path) -> None:
         },
     )
     assert manifests[0].to_dict()["setup_steps"][0]["metadata"]["setup_kind"] == "memory_restore"
+
+
+def test_skill_registry_reads_namespaced_nexus_extension_block(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "repo-helper",
+        name="repo-helper",
+        description="Map repos and recover coding context.",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "repo-helper",
+        trust_level="probation",
+        source_type="canonical",
+        lifecycle_stage="challenger",
+        capability_family="coding",
+        repo="anthony-maio/synthesis-skills",
+        nexus_extension={
+            "preferred_planning_roles": [
+                "planning.coding",
+                "planning.initial.coding",
+            ],
+            "preferred_initial_actions": ["external_tool"],
+            "preferred_follow_up_actions": ["read_file", "execute_code"],
+            "external_tools": ["cartographer.map_repo", "mnemos.retrieve"],
+            "external_tool_arguments": {
+                "cartographer.map_repo": {"scope": "repo", "query": "{objective}"}
+            },
+            "external_tool_follow_up_actions": {
+                "cartographer.map_repo": ["read_file", "execute_code"]
+            },
+            "external_tool_follow_up_sequences": {
+                "mnemos.retrieve": ["read_file", "edit_file"]
+            },
+            "setup_steps": [
+                {
+                    "action_type": "external_tool",
+                    "instruction": {
+                        "tool_name": "cartographer.map_repo",
+                        "arguments": {"scope": "repo"},
+                    },
+                    "metadata": {"setup_kind": "repo_map"},
+                }
+            ],
+            "verification_signals": ["command_success", "artifact"],
+            "required_artifact_kinds": ["report"],
+        },
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].preferred_planning_roles == (
+        "planning.coding",
+        "planning.initial.coding",
+    )
+    assert manifests[0].preferred_initial_actions == ("external_tool",)
+    assert manifests[0].preferred_follow_up_actions == ("read_file", "execute_code")
+    assert manifests[0].external_tools == ("cartographer.map_repo", "mnemos.retrieve")
+    assert manifests[0].external_tool_arguments == {
+        "cartographer.map_repo": {"scope": "repo", "query": "{objective}"}
+    }
+    assert manifests[0].external_tool_follow_up_actions == {
+        "cartographer.map_repo": ("read_file", "execute_code")
+    }
+    assert manifests[0].external_tool_follow_up_sequences == {
+        "mnemos.retrieve": ("read_file", "edit_file")
+    }
+    assert manifests[0].setup_steps[0]["metadata"]["setup_kind"] == "repo_map"
+    assert manifests[0].verification_signals == ("command_success", "artifact")
+    assert manifests[0].required_artifact_kinds == ("report",)
+
+
+def test_skill_registry_prefers_namespaced_nexus_extension_over_legacy_sidecar_keys(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path,
+        "repo-helper",
+        name="repo-helper",
+        description="Map repos and recover coding context.",
+        preferred_initial_actions="list_files",
+        external_tools="mnemos.retrieve",
+    )
+    _write_synthesis_sidecar(
+        tmp_path,
+        "repo-helper",
+        preferred_planning_roles=["planning.workflow"],
+        external_tool_arguments={
+            "mnemos.retrieve": {"query": "legacy"}
+        },
+        verification_signals=["citations"],
+        nexus_extension={
+            "preferred_planning_roles": ["planning.coding"],
+            "preferred_initial_actions": ["external_tool"],
+            "external_tools": ["cartographer.map_repo"],
+            "external_tool_arguments": {
+                "cartographer.map_repo": {"scope": "repo"}
+            },
+            "verification_signals": ["command_success"],
+        },
+    )
+
+    registry = SkillRegistry([tmp_path])
+    manifests = registry.list_manifests()
+
+    assert manifests[0].preferred_planning_roles == ("planning.coding",)
+    assert manifests[0].preferred_initial_actions == ("external_tool",)
+    assert manifests[0].external_tools == ("cartographer.map_repo",)
+    assert manifests[0].external_tool_arguments == {
+        "cartographer.map_repo": {"scope": "repo"}
+    }
+    assert manifests[0].verification_signals == ("command_success",)
 
 
 def test_capability_resolver_prefers_canonical_trusted_skill_on_equal_match(tmp_path: Path) -> None:

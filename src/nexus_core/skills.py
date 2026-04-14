@@ -248,6 +248,7 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
     if not name:
         return None
     synthesis_metadata = _read_synthesis_sidecar(path.parent)
+    runtime_metadata = _read_synthesis_runtime_extension(synthesis_metadata)
     return SkillManifest(
         name=name,
         description=description,
@@ -259,40 +260,61 @@ def _parse_skill_manifest(path: Path) -> SkillManifest | None:
         capability_family=_normalized_sidecar_value(synthesis_metadata.get("capability_family")),
         source_repo=_normalized_sidecar_value(synthesis_metadata.get("repo")),
         preferred_planning_roles=_normalize_sidecar_identifier_list(
-            synthesis_metadata.get("preferred_planning_roles")
+            runtime_metadata.get("preferred_planning_roles")
+            or runtime_metadata.get("planning_roles")
+            or runtime_metadata.get("model_roles")
+            or synthesis_metadata.get("preferred_planning_roles")
             or synthesis_metadata.get("planning_roles")
             or synthesis_metadata.get("model_roles")
         ),
-        preferred_initial_actions=_parse_action_list(
-            str(frontmatter.get("preferred_initial_actions", ""))
+        preferred_initial_actions=_normalize_action_values(
+            runtime_metadata.get("preferred_initial_actions")
+            or synthesis_metadata.get("preferred_initial_actions")
+            or frontmatter.get("preferred_initial_actions", "")
         ),
-        preferred_follow_up_actions=_parse_action_list(
-            str(frontmatter.get("preferred_follow_up_actions", ""))
+        preferred_follow_up_actions=_normalize_action_values(
+            runtime_metadata.get("preferred_follow_up_actions")
+            or synthesis_metadata.get("preferred_follow_up_actions")
+            or frontmatter.get("preferred_follow_up_actions", "")
         ),
-        external_tools=_parse_identifier_list(
-            str(frontmatter.get("external_tools", ""))
+        external_tools=_normalize_identifier_values(
+            runtime_metadata.get("external_tools")
+            or synthesis_metadata.get("external_tools")
+            or frontmatter.get("external_tools", "")
         ),
         external_tool_arguments=_normalize_external_tool_arguments(
-            synthesis_metadata.get("external_tool_arguments")
+            runtime_metadata.get("external_tool_arguments")
+            or runtime_metadata.get("tool_arguments")
+            or synthesis_metadata.get("external_tool_arguments")
             or synthesis_metadata.get("tool_arguments")
         ),
         external_tool_follow_up_actions=_normalize_external_tool_follow_up_actions(
-            synthesis_metadata.get("external_tool_follow_up_actions")
+            runtime_metadata.get("external_tool_follow_up_actions")
+            or runtime_metadata.get("tool_follow_up_actions")
+            or synthesis_metadata.get("external_tool_follow_up_actions")
             or synthesis_metadata.get("tool_follow_up_actions")
         ),
         external_tool_follow_up_sequences=_normalize_external_tool_follow_up_actions(
-            synthesis_metadata.get("external_tool_follow_up_sequences")
+            runtime_metadata.get("external_tool_follow_up_sequences")
+            or runtime_metadata.get("tool_follow_up_sequences")
+            or synthesis_metadata.get("external_tool_follow_up_sequences")
             or synthesis_metadata.get("tool_follow_up_sequences")
         ),
         setup_steps=_normalize_setup_steps(
-            synthesis_metadata.get("setup_steps")
+            runtime_metadata.get("setup_steps")
+            or runtime_metadata.get("preflight_steps")
+            or synthesis_metadata.get("setup_steps")
             or synthesis_metadata.get("preflight_steps")
         ),
-        verification_signals=_parse_identifier_list(
-            str(frontmatter.get("verification_signals", ""))
+        verification_signals=_normalize_identifier_values(
+            runtime_metadata.get("verification_signals")
+            or synthesis_metadata.get("verification_signals")
+            or frontmatter.get("verification_signals", "")
         ),
-        required_artifact_kinds=_parse_identifier_list(
-            str(frontmatter.get("required_artifact_kinds", ""))
+        required_artifact_kinds=_normalize_identifier_values(
+            runtime_metadata.get("required_artifact_kinds")
+            or synthesis_metadata.get("required_artifact_kinds")
+            or frontmatter.get("required_artifact_kinds", "")
         ),
     )
 
@@ -335,6 +357,18 @@ def _read_synthesis_sidecar(skill_dir: Path) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _read_synthesis_runtime_extension(payload: dict[str, Any]) -> dict[str, Any]:
+    extensions = payload.get("extensions")
+    if isinstance(extensions, dict):
+        nexus_extension = extensions.get("nexus")
+        if isinstance(nexus_extension, dict):
+            return nexus_extension
+    runtime_contract = payload.get("runtime_contract")
+    if isinstance(runtime_contract, dict):
+        return runtime_contract
+    return {}
 
 
 def _heading_name(body: str) -> str:
@@ -396,6 +430,30 @@ def _normalize_token(token: str) -> str:
 
 def _parse_action_list(raw: str) -> tuple[str, ...]:
     return _parse_identifier_list(raw, replace_spaces=True)
+
+
+def _normalize_action_values(raw: Any) -> tuple[str, ...]:
+    return _normalize_identifier_values(raw, replace_spaces=True)
+
+
+def _normalize_identifier_values(raw: Any, *, replace_spaces: bool = False) -> tuple[str, ...]:
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, str):
+        values = raw.replace("|", ",").split(",")
+    else:
+        return ()
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        value = str(item).strip().lower()
+        if replace_spaces:
+            value = value.replace(" ", "_")
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return tuple(normalized)
 
 
 def _parse_identifier_list(raw: str, *, replace_spaces: bool = False) -> tuple[str, ...]:
